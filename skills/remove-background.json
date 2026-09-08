@@ -1,0 +1,13 @@
+{
+  "id": "remove_background",
+  "name": "Remove background",
+  "description": "Strip a near-uniform background by flood-filling from the edges.",
+  "category": "utility",
+  "model": "none",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "tolerance": { "type": "number", "minimum": 0, "default": 32 }
+    }
+  }
+}

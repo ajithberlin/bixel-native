@@ -1,0 +1,16 @@
+[package]
+name = "bixel-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-independent domain engine for Bixel Studio (document, palette, timeline, tilemap, atlas, projects, config, jobs)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

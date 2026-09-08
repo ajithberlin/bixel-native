@@ -1,0 +1,16 @@
+[package]
+name = "bixel-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "C ABI bindings for the bixel-core engine (consumed by Swift via cbindgen)."
+
+[lib]
+name = "bixel"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+bixel-core = { path = "../bixel-core" }
+bixel-ai = { path = "../bixel-ai" }
+serde_json = { workspace = true }

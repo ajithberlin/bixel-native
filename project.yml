@@ -1,0 +1,67 @@
+# XcodeGen project definition for the native Bixel Studio (macOS-first).
+#
+# Generate with:  xcodegen generate
+# Then open Bixel.xcodeproj and run.
+#
+# The Rust engine is built by scripts/build-rust.sh in a pre-build phase, which
+# stages target/release/libbixel.a and generated/bixel.h; the app links the
+# static library and imports the header through the bridging header.
+
+name: Bixel
+
+options:
+  bundleIdPrefix: com.bixel
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+  xcodeVersion: "15.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: true
+    DEAD_CODE_STRIPPING: false
+
+targets:
+  Bixel:
+    type: application
+    platform: macOS
+    sources:
+      - path: app/Bixel
+        excludes:
+          - "Info.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bixel.studio
+        PRODUCT_NAME: Bixel
+        SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
+        # -lbixel links the Rust engine (which pulls in reqwest/rustls via the
+        # goose SDK); rustls-platform-verifier needs the Security framework.
+        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation"
+        ENABLE_BITCODE: NO
+        # The Rust build phase needs to read/write target/, generated/ and the
+        # cargo/rustup homes, which the user-script sandbox blocks.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: NO
+    info:
+      path: app/Bixel/Info.plist
+      properties:
+        CFBundleName: Bixel
+        CFBundleDisplayName: Bixel Studio
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "13.0"
+        NSHighResolutionCapable: true
+        NSHumanReadableCopyright: ""
+        NSPrincipalClass: NSApplication
+    preBuildScripts:
+      - name: Build Rust engine
+        script: |
+          set -euo pipefail
+          "$SRCROOT/scripts/build-rust.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false

@@ -1,0 +1,16 @@
+{
+  "id": "spritesheet",
+  "name": "Spritesheet",
+  "description": "Generate a spritesheet grid and slice it into individual frames.",
+  "category": "generation",
+  "model": "image",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "cols": { "type": "integer", "description": "Number of columns" },
+      "rows": { "type": "integer", "description": "Number of rows" },
+      "frame_width": { "type": "integer" },
+      "frame_height": { "type": "integer" }
+    }
+  }
+}

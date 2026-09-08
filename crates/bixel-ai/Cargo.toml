@@ -1,0 +1,16 @@
+[package]
+name = "bixel-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AI assistant engine for Bixel Studio: Goose SDK over OpenRouter (text, vision, image) plus pixel-art skills (generate, spritesheets, next-frame, compress, remove background)."
+
+[dependencies]
+bixel-core = { path = "../bixel-core" }
+goose-sdk = { version = "0.1.0-alpha.8", features = ["uniffi"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+png = "0.17"

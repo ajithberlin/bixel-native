@@ -1,0 +1,13 @@
+{
+  "id": "compress",
+  "name": "Compress to bit depth",
+  "description": "Reduce an image to a target bit depth (2^bits colors) via median-cut quantization.",
+  "category": "utility",
+  "model": "none",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "bits": { "type": "integer", "minimum": 1, "maximum": 8, "default": 4 }
+    }
+  }
+}
