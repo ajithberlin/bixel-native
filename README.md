@@ -45,29 +45,50 @@ becomes **"Swift sends a command, Rust processes a whole buffer."**
 ## Quick start (TUI chatbot)
 
 The primary interface is a terminal chatbot harness (`bixel-tui`) with a
-chat + slash-command model:
+chat + slash-command model, token-by-token streaming, markdown rendering and a
+command palette:
 
 ```bash
 cp .env.example .env   # add your OPENROUTER_API_KEY
 cargo run -p bixel-tui
 ```
 
-Inside the TUI:
+Inside the TUI, type `/` to open the command palette (arrow keys + Tab to
+pick), or enter any of the commands directly:
 
 ```
 /help                          list commands
-/skills                        list skills
+/skills                        list skills (grouped by category)
 /generate <prompt>             text → pixel art (saves art_N.png)
 /spritesheet <prompt> [--cols N --rows M]   sheet + slice into frames
 /next <image.png> [prompt]     predict the next animation frame
 /compress <image.png> [--bits N]   reduce to 2^N colors
 /remove_bg <image.png> [--tol N]   strip the background
+/clear                         clear the conversation
 /quit                          exit
 ```
 
-Anything else is sent to the configured text model. Image generation uses
-OpenRouter's `/api/v1/images` endpoint (generation/editing), while chat and
-vision go through the goose SDK's chat-completions provider.
+Anything else is sent to the configured text model and streamed back as it is
+generated. The model may also call the pixel-art skills as tools mid-conversation;
+each tool call is shown inline with its result. A top status bar reports the
+provider, model, session size, token usage and elapsed time.
+
+Keyboard shortcuts:
+
+| Keys | Action |
+|------|--------|
+| `Enter` | send (or accept a palette entry) |
+| `Tab` / `Shift+Tab` | open/accept the command palette |
+| `↑` / `↓` | history (or palette navigation) |
+| `PgUp` / `PgDn` | scroll the transcript |
+| `Ctrl+L` | clear the conversation |
+| `Ctrl+U` / `Ctrl+W` / `Ctrl+K` | clear line / delete word / delete to end |
+| `Ctrl+A` / `Ctrl+E` | jump to start / end of line |
+| `Ctrl+C` | quit |
+
+Image generation uses OpenRouter's `/api/v1/images` endpoint
+(generation/editing), while chat and vision go through the goose SDK's
+chat-completions provider.
 
 ## Repository layout
 

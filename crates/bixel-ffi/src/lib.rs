@@ -608,6 +608,43 @@ pub extern "C" fn bixel_ai_chat(prompt: *const c_char, system: *const c_char) ->
     }
 }
 
+/// Stream one agent turn. JSON event strings are borrowed for the callback duration.
+/// The callback runs synchronously on the calling thread; false requests cancellation.
+/// `context` remains owned by the caller and must live until this function returns.
+#[no_mangle]
+pub extern "C" fn bixel_ai_chat_stream(
+    request_json: *const c_char,
+    callback: Option<extern "C" fn(*const c_char, *mut std::ffi::c_void) -> bool>,
+    context: *mut std::ffi::c_void,
+) -> bool {
+    use bixel_ai::engine::native_stream::{NativeEvent, NativeRequest};
+    let Some(callback) = callback else { return false; };
+    let emit = |event: NativeEvent| {
+        let json = serde_json::to_string(&event).unwrap_or_default();
+        let Ok(value) = std::ffi::CString::new(json) else { return false; };
+        callback(value.as_ptr(), context)
+    };
+    let result = (|| {
+        let request: NativeRequest = serde_json::from_str(&arg_str(request_json)).map_err(|e| e.to_string())?;
+        ai_engine()?.native_chat(request, emit).map_err(|e| e.to_string())
+    })();
+    if let Err(message) = result {
+        emit(NativeEvent::Error { message });
+        return false;
+    }
+    true
+}
+
+/// Public model labels only. Credentials never cross this boundary.
+#[no_mangle]
+pub extern "C" fn bixel_ai_model_info() -> *mut c_char {
+    let settings = bixel_ai::AiSettings::from_env_file();
+    out_cstr(serde_json::json!({
+        "text": settings.text_model, "vision": settings.vision_model,
+        "image": settings.image_model, "available": settings.has_key(),
+    }).to_string())
+}
+
 /// Forget the current chat conversation so the next `bixel_ai_chat` starts
 /// fresh with no prior context.
 #[no_mangle]

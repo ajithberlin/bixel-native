@@ -39,6 +39,6 @@ pub mod image;
 pub mod skills;
 
 pub use config::AiSettings;
-pub use engine::Engine;
+pub use engine::{Engine, StreamEvent};
 pub use error::AiError;
 pub use image::RgbaImage;

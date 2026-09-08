@@ -7,7 +7,9 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var model = EditorModel(width: 32, height: 32)
-    @State private var showAI = false
+    @State private var showAI = true
+    @State private var assistantExpanded = false
+    @StateObject private var assistant = AssistantSession()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +22,15 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(StudioTheme.canvasBackground)
 
-                RightPanel(model: model)
+                if !showAI { RightPanel(model: model) }
+
+                AIPanel(model: model, session: assistant, onClose: { showAI = false },
+                        expanded: assistantExpanded, onExpand: { assistantExpanded.toggle() })
+                    .frame(width: showAI ? (assistantExpanded ? 540 : 390) : 0)
+                    .clipped()
+                    .opacity(showAI ? 1 : 0)
+                    .allowsHitTesting(showAI)
+                    .accessibilityHidden(!showAI)
             }
 
             TimelineBar(model: model)
@@ -28,9 +38,6 @@ struct ContentView: View {
         .frame(minWidth: 920, minHeight: 620)
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showAI) {
-            AIPanel(model: model)
-                .frame(width: 640, height: 560)
-        }
+
     }
 }

@@ -1,11 +1,14 @@
 //! The goose-backed engine: a thin, synchronous facade over the goose SDK's
 //! OpenRouter provider for text, vision and image generation.
 
+pub mod native_stream;
+
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use goose_sdk::bindings::{
     self, MessageContent, MessageRole, ProviderMessage, ProviderModelConfig, ProviderTool,
+    StreamChunk,
 };
 
 use crate::config::{openrouter_provider_json, AiSettings};
@@ -15,6 +18,24 @@ use crate::skills::{SkillInput, SkillKind, SkillOutput, Skills};
 
 /// Upper bound on tool-call rounds before the agent gives up.
 const MAX_TOOL_ROUNDS: usize = 6;
+
+/// An incremental event emitted while the assistant streams a reply.
+///
+/// The TUI renders these as they arrive so the user sees the model "type"
+/// instead of waiting on a single blocking call. [`StreamEvent::Text`] carries
+/// one token's worth of output; tool events are emitted as the agent loop
+/// runs a skill and reports back its result.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// A chunk of assistant text.
+    Text { delta: String },
+    /// The model requested a tool (pixel-art skill) call.
+    ToolCall { id: String, name: String, arguments: String },
+    /// A tool finished and its result was fed back to the model.
+    ToolResult { id: String, name: String, text: String },
+    /// Token usage for the just-completed round.
+    Usage { input_tokens: i64, output_tokens: i64 },
+}
 
 /// A single chat conversation: its system prompt plus the full message history.
 ///
@@ -123,6 +144,19 @@ impl Engine {
     ) -> Result<bindings::ProviderCompletion, AiError> {
         self.provider
             .complete(self.model_config(model), system.to_string(), messages, tools)
+            .await
+            .map_err(|e| AiError::Provider(e.to_string()))
+    }
+
+    async fn stream(
+        &self,
+        model: &str,
+        system: &str,
+        messages: Vec<ProviderMessage>,
+        tools: Vec<ProviderTool>,
+    ) -> Result<Arc<bindings::ProviderStream>, AiError> {
+        self.provider
+            .stream(self.model_config(model), system.to_string(), messages, tools)
             .await
             .map_err(|e| AiError::Provider(e.to_string()))
     }
@@ -240,6 +274,125 @@ impl Engine {
                         Ok(t) => (true, t),
                         Err(e) => (false, e),
                     };
+                    tool_result(id, success, text)
+                })
+                .collect();
+            session.messages.push(ProviderMessage { role: MessageRole::Tool, content: results });
+        }
+
+        Err(AiError::Provider("assistant kept calling tools without finishing".into()))
+    }
+
+    /// Streaming variant of [`Engine::chat`]: emits [`StreamEvent`]s as tokens
+    /// and tool calls arrive instead of blocking on the full turn.
+    ///
+    /// Returns the final assistant text on success. Tool calls are still
+    /// executed inline (as in `chat`), with a `ToolCall`/`ToolResult` event
+    /// bracketing each one so the UI can render an "in progress" line.
+    pub fn stream_chat<F>(&self, prompt: &str, system: &str, mut on_event: F) -> Result<String, AiError>
+    where
+        F: FnMut(StreamEvent),
+    {
+        let tools = self.skill_tools();
+        let model = self.settings.text_model.clone();
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| AiError::Provider("session lock poisoned".into()))?;
+
+        if session.system != system {
+            session.reset(system);
+        }
+
+        session.messages.push(Self::user(vec![Self::text(prompt)]));
+
+        for _ in 0..MAX_TOOL_ROUNDS {
+            let stream = self.runtime.block_on(self.stream(
+                &model,
+                &session.system,
+                session.messages.clone(),
+                tools.clone(),
+            ))?;
+
+            let mut text_buf = String::new();
+            let mut requests: Vec<(String, String, String)> = Vec::new();
+
+            loop {
+                let chunk = self
+                    .runtime
+                    .block_on(stream.next_chunk())
+                    .map_err(|e| AiError::Provider(e.to_string()))?;
+                match chunk {
+                    None => break,
+                    Some(StreamChunk::TextChunk { text }) => {
+                        text_buf.push_str(&text);
+                        on_event(StreamEvent::Text { delta: text });
+                    }
+                    Some(StreamChunk::ToolChunk { id, name, arguments_json, .. }) => {
+                        on_event(StreamEvent::ToolCall {
+                            id: id.clone(),
+                            name: name.clone(),
+                            arguments: arguments_json.clone(),
+                        });
+                        requests.push((id, name, arguments_json));
+                    }
+                    Some(StreamChunk::EndChunk { usage }) => {
+                        if let Some(u) = usage {
+                            on_event(StreamEvent::Usage {
+                                input_tokens: u.input_tokens.unwrap_or(0) as i64,
+                                output_tokens: u.output_tokens.unwrap_or(0) as i64,
+                            });
+                        }
+                        break;
+                    }
+                    Some(StreamChunk::ErrorChunk { error }) => {
+                        return Err(AiError::Provider(error.message));
+                    }
+                    // Thinking chunks are surfaced through the provider's own
+                    // reasoning UI; the TUI has no channel for them here.
+                    Some(StreamChunk::ThinkingChunk { .. })
+                    | Some(StreamChunk::RedactedThinkingChunk { .. }) => {}
+                }
+            }
+
+            if requests.is_empty() {
+                if text_buf.trim().is_empty() {
+                    return Err(AiError::NoText);
+                }
+                session.messages.push(ProviderMessage {
+                    role: MessageRole::Assistant,
+                    content: vec![Self::text(&text_buf)],
+                });
+                return Ok(text_buf);
+            }
+
+            // Record the assistant turn: any streaming text plus its tool calls.
+            let mut content: Vec<MessageContent> = Vec::new();
+            if !text_buf.trim().is_empty() {
+                content.push(Self::text(&text_buf));
+            }
+            for (id, name, arguments_json) in &requests {
+                content.push(MessageContent::ToolRequest {
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments_json: arguments_json.clone(),
+                    provider_metadata_json: None,
+                    tool_error_json: None,
+                });
+            }
+            session.messages.push(ProviderMessage {
+                role: MessageRole::Assistant,
+                content,
+            });
+
+            let results: Vec<MessageContent> = requests
+                .into_iter()
+                .map(|(id, name, args)| {
+                    let (success, text) = match self.execute_tool(&name, &args) {
+                        Ok(t) => (true, t),
+                        Err(e) => (false, e),
+                    };
+                    on_event(StreamEvent::ToolResult { id: id.clone(), name: name.clone(), text: text.clone() });
                     tool_result(id, success, text)
                 })
                 .collect();

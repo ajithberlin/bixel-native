@@ -176,3 +176,64 @@ struct SkillRunResult: Decodable {
     let frames: [String]?
     let error: String?
 }
+
+struct AssistantEvent: Decodable {
+    let type: String
+    var id: String?
+    var parent_id: String?
+    var title: String?
+    var name: String?
+    var delta: String?
+    var arguments: String?
+    var text: String?
+    var success: Bool?
+    var message: String?
+    var png: String?
+    var width: Int?
+    var height: Int?
+    var input_tokens: Int?
+    var output_tokens: Int?
+}
+
+final class AssistantCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    var isStopped: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
+    func stop() { lock.lock(); stopped = true; lock.unlock() }
+}
+
+private final class AssistantStreamObserver {
+    let cancellation: AssistantCancellation
+    let receive: (AssistantEvent) -> Void
+    init(_ cancellation: AssistantCancellation, _ receive: @escaping (AssistantEvent) -> Void) {
+        self.cancellation = cancellation; self.receive = receive
+    }
+}
+
+extension AIService {
+    static func modelInfo() -> [String: String] {
+        guard let ptr = bixel_ai_model_info() else { return [:] }
+        defer { bixel_string_free(ptr) }
+        guard let data = String(cString: ptr).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return json.compactMapValues { $0 as? String }
+    }
+
+    /// The Rust callback lends one complete event at a time; copy/decode before returning.
+    static func streamChat(request: [String: Any], cancellation: AssistantCancellation, receive: @escaping (AssistantEvent) -> Void) {
+        guard let data = try? JSONSerialization.data(withJSONObject: request), let json = String(data: data, encoding: .utf8) else {
+            receive(AssistantEvent(type: "error", message: "Could not encode the request.")); return
+        }
+        let observer = Unmanaged.passRetained(AssistantStreamObserver(cancellation, receive))
+        defer { observer.release() }
+        _ = bixel_ai_chat_stream(json, { pointer, context in
+            guard let pointer, let context else { return false }
+            let observer = Unmanaged<AssistantStreamObserver>.fromOpaque(context).takeUnretainedValue()
+            guard !observer.cancellation.isStopped else { return false }
+            if let data = String(cString: pointer).data(using: .utf8), let event = try? JSONDecoder().decode(AssistantEvent.self, from: data) {
+                observer.receive(event)
+            }
+            return !observer.cancellation.isStopped
+        }, observer.toOpaque())
+    }
+}
