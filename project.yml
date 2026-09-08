@@ -65,3 +65,14 @@ targets:
           "$SRCROOT/scripts/build-rust.sh"
         basedOnDependencyAnalysis: false
         showEnvVars: false
+
+# Run the app with the project root as its working directory so the AI engine
+# can find `.env` (and so relative asset paths resolve during development).
+schemes:
+  Bixel:
+    build:
+      targets:
+        Bixel: all
+    run:
+      config: Debug
+      customWorkingDirectory: $(SRCROOT)

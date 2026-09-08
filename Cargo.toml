@@ -4,6 +4,7 @@ members = [
     "crates/bixel-core",
     "crates/bixel-ffi",
     "crates/bixel-ai",
+    "crates/bixel-tui",
 ]
 
 [workspace.package]

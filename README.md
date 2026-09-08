@@ -42,6 +42,33 @@ becomes **"Swift sends a command, Rust processes a whole buffer."**
   talk to **OpenRouter** (text, vision and image models) and exposes pixel-art
   *skills*.
 
+## Quick start (TUI chatbot)
+
+The primary interface is a terminal chatbot harness (`bixel-tui`) with a
+chat + slash-command model:
+
+```bash
+cp .env.example .env   # add your OPENROUTER_API_KEY
+cargo run -p bixel-tui
+```
+
+Inside the TUI:
+
+```
+/help                          list commands
+/skills                        list skills
+/generate <prompt>             text → pixel art (saves art_N.png)
+/spritesheet <prompt> [--cols N --rows M]   sheet + slice into frames
+/next <image.png> [prompt]     predict the next animation frame
+/compress <image.png> [--bits N]   reduce to 2^N colors
+/remove_bg <image.png> [--tol N]   strip the background
+/quit                          exit
+```
+
+Anything else is sent to the configured text model. Image generation uses
+OpenRouter's `/api/v1/images` endpoint (generation/editing), while chat and
+vision go through the goose SDK's chat-completions provider.
+
 ## Repository layout
 
 ```
@@ -68,10 +95,11 @@ crates/
     tests/                 # integration tests
   bixel-ai/                # goose SDK → OpenRouter + pixel-art skills
     src/
-      engine.rs            # text / vision / image completion
+      engine.rs            # text / vision / image completion + images endpoint
       config.rs            # .env settings + declarative OpenRouter provider JSON
       skills.rs            # skill registry + prompts + dispatch
       image.rs             # PNG encode/decode, quantize, background removal, slicing
+  bixel-tui/               # terminal chatbot harness (ratatui) with slash commands
   bixel-ffi/               # C ABI over bixel-core + bixel-ai
     src/lib.rs             # extern "C" functions + opaque handles
 app/

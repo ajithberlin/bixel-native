@@ -56,6 +56,14 @@ pub fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, AiError> {
     Ok(out)
 }
 
+/// Decode any supported image format (PNG/JPEG/WebP) into RGBA.
+pub fn decode_any(bytes: &[u8]) -> Result<RgbaImage, AiError> {
+    let img = image::load_from_memory(bytes).map_err(|e| AiError::Image(e.to_string()))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Ok(RgbaImage::from_rgba(w as usize, h as usize, rgba.into_raw()))
+}
+
 /// Decode a PNG byte buffer into an RGBA image.
 pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, AiError> {
     let decoder = png::Decoder::new(Cursor::new(bytes));

@@ -395,7 +395,19 @@ pub fn load_env(path: Option<&Path>, override_existing: bool) -> std::collection
             found = Some(p.to_path_buf());
         }
     } else {
-        for folder in [std::env::current_dir().ok(), Some(studio_dir())].into_iter().flatten() {
+        // Search, in order: the working directory (project root when run via
+        // Xcode with the scheme's custom working directory), the studio dir
+        // (`BIXEL_STUDIO_DIR` / cwd), and the app home (`~/.bixel-studio`).
+        let home = crate::paths::state_dir();
+        let mut folders: Vec<std::path::PathBuf> = std::env::current_dir().into_iter().collect();
+        let studio = studio_dir();
+        if !folders.contains(&studio) {
+            folders.push(studio);
+        }
+        if !folders.contains(&home) {
+            folders.push(home);
+        }
+        for folder in folders {
             for name in [".env.test", ".env"] {
                 let cand = folder.join(name);
                 if cand.is_file() {
