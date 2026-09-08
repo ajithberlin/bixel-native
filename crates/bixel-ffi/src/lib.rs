@@ -582,6 +582,32 @@ pub extern "C" fn bixel_ai_list_skills() -> *mut c_char {
     out_cstr(json)
 }
 
+const AI_SYSTEM_PROMPT: &str =
+    "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.";
+
+/// Blocking text chat with the configured text model.
+///
+/// `system` may be null/empty to use a default studio prompt. Returns a
+/// `char*` (free with [`bixel_string_free`]), or null on error.
+#[no_mangle]
+pub extern "C" fn bixel_ai_chat(prompt: *const c_char, system: *const c_char) -> *mut c_char {
+    let prompt = arg_str(prompt);
+    if prompt.trim().is_empty() {
+        return std::ptr::null_mut();
+    }
+    let system = arg_str(system);
+    let system = if system.trim().is_empty() {
+        AI_SYSTEM_PROMPT.to_string()
+    } else {
+        system
+    };
+    let Ok(engine) = ai_engine() else { return std::ptr::null_mut(); };
+    match engine.chat(&prompt, &system) {
+        Ok(text) => out_cstr(text),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 // -- buffer helpers (header-prefixed allocation, freed by bixel_ai_free_buffer)
 
 fn alloc_buffer(v: Vec<u8>) -> *mut u8 {

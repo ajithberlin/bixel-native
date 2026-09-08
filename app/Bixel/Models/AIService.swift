@@ -20,6 +20,13 @@ enum AIService {
         return (try? JSONDecoder().decode([SkillInfo].self, from: data)) ?? []
     }
 
+    /// Text chat with the configured text model. Returns the assistant's reply.
+    static func chat(prompt: String, system: String = "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.") -> String? {
+        guard let ptr = bixel_ai_chat(prompt, system) else { return nil }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
     /// Text-to-image via the configured image model. Returns PNG bytes.
     static func generateArt(prompt: String) -> Data? {
         var len: UInt64 = 0

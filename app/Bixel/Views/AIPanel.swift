@@ -13,6 +13,10 @@ struct AIPanel: View {
     @State private var running = false
     @State private var bits = 4.0
 
+    @State private var chatMessages: [ChatMessage] = []
+    @State private var chatInput = ""
+    @State private var chatBusy = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -47,7 +51,9 @@ struct AIPanel: View {
                 Text("\(Int(bits))-bit").font(.system(size: 11, design: .monospaced)).foregroundColor(StudioTheme.textSecondary)
             }
 
-            Spacer(minLength: 0)
+            Divider().overlay(StudioTheme.panelElevated)
+
+            chatSection
 
             if !status.isEmpty {
                 Text(status)
@@ -59,6 +65,54 @@ struct AIPanel: View {
         .padding(20)
         .background(StudioTheme.panel)
         .preferredColorScheme(.dark)
+    }
+
+    private var chatSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "bubble.left.and.bubble.right")
+                    .foregroundColor(StudioTheme.accent)
+                Text("Chat").font(.system(size: 12, weight: .semibold)).foregroundColor(StudioTheme.textPrimary)
+                Spacer()
+                if chatBusy { ProgressView().controlSize(.small) }
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(chatMessages) { msg in
+                        chatBubble(msg)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.canvasBackground.opacity(0.4)))
+
+            HStack(spacing: 8) {
+                TextField("Ask Bixel…", text: $chatInput)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { sendChat() }
+                Button("Send") { sendChat() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(chatInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || chatBusy)
+            }
+        }
+    }
+
+    private func chatBubble(_ msg: ChatMessage) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(msg.role == .user ? "You" : "Bixel")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(msg.role == .user ? StudioTheme.accent : StudioTheme.textSecondary)
+                .frame(width: 38, alignment: .leading)
+            Text(msg.text)
+                .font(.system(size: 12))
+                .foregroundColor(StudioTheme.textPrimary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var header: some View {
@@ -93,6 +147,21 @@ struct AIPanel: View {
             DispatchQueue.main.async {
                 status = result
                 running = false
+            }
+        }
+    }
+
+    private func sendChat() {
+        let text = chatInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !chatBusy else { return }
+        chatInput = ""
+        chatMessages.append(ChatMessage(role: .user, text: text))
+        chatBusy = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let reply = AIService.chat(prompt: text) ?? "Chat failed — check key / model."
+            DispatchQueue.main.async {
+                chatMessages.append(ChatMessage(role: .assistant, text: reply))
+                chatBusy = false
             }
         }
     }
@@ -152,6 +221,13 @@ struct AIPanel: View {
             return "Compressed to \(Int(bits))-bit (\(1 << Int(bits)) colors)."
         }
     }
+}
+
+private struct ChatMessage: Identifiable {
+    enum Role { case user, assistant }
+    let id = UUID()
+    let role: Role
+    let text: String
 }
 
 private struct SkillButton: View {

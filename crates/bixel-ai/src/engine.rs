@@ -5,12 +5,16 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use goose_sdk::bindings::{
-    self, MessageContent, MessageRole, ProviderMessage, ProviderModelConfig,
+    self, MessageContent, MessageRole, ProviderMessage, ProviderModelConfig, ProviderTool,
 };
 
 use crate::config::{openrouter_provider_json, AiSettings};
 use crate::error::AiError;
 use crate::image::{encode_png, RgbaImage};
+use crate::skills::{SkillInput, SkillKind, SkillOutput, Skills};
+
+/// Upper bound on tool-call rounds before the agent gives up.
+const MAX_TOOL_ROUNDS: usize = 6;
 
 /// A synchronous wrapper around an OpenRouter provider constructed through the
 /// goose SDK. Holds its own tokio runtime so the FFI / UI layer can call it
@@ -76,9 +80,10 @@ impl Engine {
         model: &str,
         system: &str,
         messages: Vec<ProviderMessage>,
+        tools: Vec<ProviderTool>,
     ) -> Result<bindings::ProviderCompletion, AiError> {
         self.provider
-            .complete(self.model_config(model), system.to_string(), messages, vec![])
+            .complete(self.model_config(model), system.to_string(), messages, tools)
             .await
             .map_err(|e| AiError::Provider(e.to_string()))
     }
@@ -89,7 +94,7 @@ impl Engine {
     pub fn complete_text(&self, prompt: &str, system: &str) -> Result<String, AiError> {
         let messages = vec![Self::user(vec![Self::text(prompt)])];
         let model = self.settings.text_model.clone();
-        let completion = self.runtime.block_on(self.complete(&model, system, messages))?;
+        let completion = self.runtime.block_on(self.complete(&model, system, messages, vec![]))?;
         Ok(concat_text(&completion.content))
     }
 
@@ -101,7 +106,7 @@ impl Engine {
             Self::text(prompt),
         ])];
         let model = self.settings.vision_model.clone();
-        let completion = self.runtime.block_on(self.complete(&model, prompt, messages))?;
+        let completion = self.runtime.block_on(self.complete(&model, prompt, messages, vec![]))?;
         Ok(concat_text(&completion.content))
     }
 
@@ -126,8 +131,207 @@ impl Engine {
         content.push(Self::text(prompt));
         let messages = vec![Self::user(content)];
         let model = self.settings.image_model.clone();
-        let completion = self.runtime.block_on(self.complete(&model, prompt, messages))?;
+        let completion = self.runtime.block_on(self.complete(&model, prompt, messages, vec![]))?;
         Ok(concat_text(&completion.content))
+    }
+
+    // ---------------------------------------------------------- tool agent
+
+    /// Chat with tool use: the text model may call the pixel-art skills as
+    /// tools; their results are fed back until it produces a final answer.
+    pub fn chat(&self, prompt: &str, system: &str) -> Result<String, AiError> {
+        let tools = self.skill_tools();
+        let model = self.settings.text_model.clone();
+        let mut messages = vec![Self::user(vec![Self::text(prompt)])];
+
+        for _ in 0..MAX_TOOL_ROUNDS {
+            let completion = self
+                .runtime
+                .block_on(self.complete(&model, system, messages.clone(), tools.clone()))?;
+
+            let requests: Vec<(String, String, String)> = completion
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    MessageContent::ToolRequest { id, name, arguments_json, .. } => {
+                        Some((id.clone(), name.clone(), arguments_json.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            if requests.is_empty() {
+                let text = concat_text(&completion.content);
+                if text.trim().is_empty() {
+                    return Err(AiError::NoText);
+                }
+                return Ok(text);
+            }
+
+            messages.push(ProviderMessage {
+                role: MessageRole::Assistant,
+                content: completion.content.clone(),
+            });
+
+            let results: Vec<MessageContent> = requests
+                .into_iter()
+                .map(|(id, name, args)| {
+                    let (success, text) = match self.execute_tool(&name, &args) {
+                        Ok(t) => (true, t),
+                        Err(e) => (false, e),
+                    };
+                    tool_result(id, success, text)
+                })
+                .collect();
+            messages.push(ProviderMessage { role: MessageRole::Tool, content: results });
+        }
+
+        Err(AiError::Provider("assistant kept calling tools without finishing".into()))
+    }
+
+    /// Declare the pixel-art skills as goose tools for the chat model.
+    fn skill_tools(&self) -> Vec<ProviderTool> {
+        use serde_json::json;
+        vec![
+            tool(
+                "generate_art",
+                "Generate a piece of pixel art from a text prompt and save it to a PNG file. Returns the saved filename.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "What to draw" },
+                        "style": { "type": "string", "description": "Art style hint (default: pixel art)" }
+                    },
+                    "required": ["prompt"]
+                }),
+            ),
+            tool(
+                "spritesheet",
+                "Generate a sprite sheet arranged on a uniform grid and slice it into individual animation frames, each saved as a PNG. Returns the list of saved files.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "The character / action to draw" },
+                        "cols": { "type": "integer", "description": "Columns of frames (default 4)" },
+                        "rows": { "type": "integer", "description": "Rows of frames (default 1)" }
+                    },
+                    "required": ["prompt"]
+                }),
+            ),
+            tool(
+                "next_frame",
+                "Given a current animation frame (PNG path), generate the next frame and save it as a PNG.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the current frame PNG" },
+                        "prompt": { "type": "string", "description": "What happens next (e.g. 'continue walking')" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "compress",
+                "Reduce a PNG to a target bit depth (2^bits colors) and save the result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "bits": { "type": "integer", "description": "Bit depth 1-8 (default 4)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "remove_background",
+                "Strip a near-uniform background from a PNG and save the result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "tolerance": { "type": "number", "description": "Color tolerance (default 32)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+        ]
+    }
+
+    /// Execute a skill tool call and save any produced images to disk.
+    fn execute_tool(&self, name: &str, args: &str) -> Result<String, String> {
+        let params: serde_json::Value =
+            serde_json::from_str(args).unwrap_or_else(|_| serde_json::json!({}));
+
+        let prompt = params.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let image_path = params.get("image").and_then(|v| v.as_str()).map(str::to_string);
+
+        let kind = match name {
+            "generate_art" => SkillKind::GenerateArt,
+            "spritesheet" => SkillKind::Spritesheet,
+            "next_frame" => SkillKind::NextFrame,
+            "compress" => SkillKind::Compress,
+            "remove_background" => SkillKind::RemoveBackground,
+            other => return Err(format!("unknown tool {other}")),
+        };
+
+        let image = match &image_path {
+            Some(path) => Some(load_image_file(path)?),
+            None => None,
+        };
+
+        let input = SkillInput { prompt, image, params };
+        let output = Skills::run(Some(self), kind, input).map_err(|e| e.to_string())?;
+        self.save_skill_output(kind, output, image_path.as_deref())
+    }
+
+    fn save_skill_output(
+        &self,
+        kind: SkillKind,
+        output: SkillOutput,
+        source: Option<&str>,
+    ) -> Result<String, String> {
+        let save = |img: &RgbaImage, path: &str| -> Result<String, String> {
+            let png = encode_png(img).map_err(|e| e.to_string())?;
+            std::fs::write(path, png).map_err(|e| e.to_string())?;
+            Ok(format!("{path} ({}×{})", img.width, img.height))
+        };
+
+        match kind {
+            SkillKind::Spritesheet => {
+                let mut saved = Vec::new();
+                if let Some(sheet) = &output.image {
+                    let path = format!("sheet_{}.png", counter());
+                    saved.push(save(sheet, &path)?);
+                }
+                for (i, frame) in output.frames.iter().enumerate() {
+                    let path = format!("sheet_{}_f{}.png", counter(), i);
+                    saved.push(save(frame, &path)?);
+                }
+                Ok(format!("sliced into {} frames: {}", saved.len(), saved.join(", ")))
+            }
+            SkillKind::Compress => {
+                let img = output.image.ok_or("compress produced no image")?;
+                let base = stem(source.unwrap_or("image"));
+                let path = format!("{base}_compressed.png");
+                save(&img, &path)
+            }
+            SkillKind::RemoveBackground => {
+                let img = output.image.ok_or("remove_background produced no image")?;
+                let base = stem(source.unwrap_or("image"));
+                let path = format!("{base}_nobg.png");
+                save(&img, &path)
+            }
+            SkillKind::GenerateArt => {
+                let img = output.image.ok_or("generate_art produced no image")?;
+                let path = format!("art_{}.png", counter());
+                save(&img, &path)
+            }
+            SkillKind::NextFrame => {
+                let img = output.image.ok_or("next_frame produced no image")?;
+                let path = format!("next_{}.png", counter());
+                save(&img, &path)
+            }
+        }
     }
 
     // ------------------------------------------------------ images endpoint
@@ -226,6 +430,41 @@ fn concat_text(content: &[MessageContent]) -> String {
         }
     }
     out
+}
+
+fn tool(name: &str, description: &str, schema: serde_json::Value) -> ProviderTool {
+    ProviderTool {
+        name: name.to_string(),
+        description: description.to_string(),
+        input_schema_json: schema.to_string(),
+        annotations_json: None,
+    }
+}
+
+fn tool_result(id: String, success: bool, text: String) -> MessageContent {
+    MessageContent::ToolResult {
+        id,
+        success,
+        content_json: serde_json::json!({ "type": "text", "text": text }).to_string(),
+    }
+}
+
+fn counter() -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static C: AtomicU32 = AtomicU32::new(1);
+    C.fetch_add(1, Ordering::Relaxed)
+}
+
+fn stem(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "image".to_string())
+}
+
+fn load_image_file(path: &str) -> Result<RgbaImage, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    crate::image::decode_any(&bytes).map_err(|e| e.to_string())
 }
 
 /// Decode arbitrary image bytes (PNG/JPEG/WebP) into RGBA.
