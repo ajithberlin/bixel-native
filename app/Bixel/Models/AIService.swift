@@ -20,6 +20,33 @@ enum AIService {
         return (try? JSONDecoder().decode([SkillInfo].self, from: data)) ?? []
     }
 
+    /// Run any registered skill by id. `params` is the skill's JSON params
+    /// object; `png` is an optional input image. Returns decoded output (text,
+    /// base64 image and/or frames) or nil on failure.
+    static func runSkill(id: String, params: [String: Any] = [:], png: Data? = nil) -> SkillRunResult? {
+        let paramsJSON = (try? JSONSerialization.data(withJSONObject: params, options: []))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+
+        let ptr: UnsafeMutablePointer<CChar>? = id.withCString { idPtr in
+            paramsJSON.withCString { paramsPtr in
+                if let png {
+                    return png.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> UnsafeMutablePointer<CChar>? in
+                        bixel_ai_run_skill(
+                            idPtr, paramsPtr,
+                            raw.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                            UInt64(png.count)
+                        )
+                    }
+                } else {
+                    return bixel_ai_run_skill(idPtr, paramsPtr, nil, 0)
+                }
+            }
+        }
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SkillRunResult.self, from: data)
+    }
+
     /// Text chat with the configured text model. Returns the assistant's reply.
     static func chat(prompt: String, system: String = "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.") -> String? {
         guard let ptr = bixel_ai_chat(prompt, system) else { return nil }
@@ -136,4 +163,11 @@ struct SkillInfo: Decodable, Identifiable {
     struct SkillParamsSchema: Decodable {
         // Only the top-level shape is needed for display.
     }
+}
+
+struct SkillRunResult: Decodable {
+    let text: String?
+    let image: String?
+    let frames: [String]?
+    let error: String?
 }

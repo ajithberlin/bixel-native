@@ -99,3 +99,78 @@ fn slice_grid_divides_into_frames() {
     assert_eq!(frames[2].pixel(0, 0), pixel(0, 0, 255, 255));
     assert_eq!(frames[3].pixel(0, 0), pixel(255, 255, 255, 255));
 }
+
+#[test]
+fn crop_clamps_to_bounds() {
+    let mut img = RgbaImage::new(4, 4);
+    img.set_pixel(3, 3, pixel(255, 0, 0, 255));
+    let out = image::crop(&img, 2, 2, 10, 10);
+    assert_eq!(out.width, 2);
+    assert_eq!(out.height, 2);
+    assert_eq!(out.pixel(1, 1), pixel(255, 0, 0, 255));
+}
+
+#[test]
+fn downscale_nearest_halves_dimensions() {
+    let mut img = RgbaImage::new(4, 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            img.set_pixel(x, y, pixel((x * 40) as u8, (y * 40) as u8, 128, 255));
+        }
+    }
+    let out = image::downscale_nearest(&img, 0.5);
+    assert_eq!(out.width, 2);
+    assert_eq!(out.height, 2);
+}
+
+#[test]
+fn pack_frames_creates_uniform_sheet() {
+    let mut a = RgbaImage::new(2, 2);
+    a.set_pixel(0, 0, pixel(255, 0, 0, 255));
+    let mut b = RgbaImage::new(1, 1);
+    b.set_pixel(0, 0, pixel(0, 255, 0, 255));
+
+    let sheet = image::pack_frames(&[a.clone(), b], 2, 0, image::PackAnchor::TopLeft);
+    assert_eq!(sheet.width, 4);
+    assert_eq!(sheet.height, 2);
+    assert_eq!(sheet.pixel(0, 0), pixel(255, 0, 0, 255));
+    assert_eq!(sheet.pixel(2, 0), pixel(0, 255, 0, 255));
+}
+
+#[test]
+fn find_components_detects_separate_regions() {
+    let mut img = RgbaImage::new(10, 5);
+    img.set_pixel(1, 1, pixel(255, 0, 0, 255));
+    img.set_pixel(2, 1, pixel(255, 0, 0, 255));
+    img.set_pixel(8, 3, pixel(0, 255, 0, 255));
+    let comps = image::find_components(&img, 1, 0);
+    assert_eq!(comps.len(), 2);
+}
+
+#[test]
+fn slice_nineslice_produces_nine_pieces() {
+    let mut img = RgbaImage::new(6, 6);
+    for y in 0..6 {
+        for x in 0..6 {
+            img.set_pixel(x, y, pixel((x * 40) as u8, (y * 40) as u8, 128, 255));
+        }
+    }
+    let pieces = image::slice_nineslice(&img, [2, 2, 2, 2]);
+    assert_eq!(pieces.len(), 9);
+    assert_eq!(pieces[0].width, 2);
+    assert_eq!(pieces[0].height, 2);
+}
+
+#[test]
+fn chroma_to_shadow_turns_green_transparent() {
+    let mut img = RgbaImage::new(2, 1);
+    img.set_pixel(0, 0, pixel(0, 200, 0, 255));
+    img.set_pixel(1, 0, pixel(255, 0, 0, 255));
+    let out = image::chroma_to_shadow(&img, 0, 150);
+    let shadow = out.pixel(0, 0);
+    assert_eq!(shadow[0], 0);
+    assert_eq!(shadow[1], 0);
+    assert_eq!(shadow[2], 0);
+    assert!(shadow[3] > 0);
+    assert_eq!(out.pixel(1, 0), pixel(255, 0, 0, 255));
+}

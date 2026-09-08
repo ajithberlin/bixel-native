@@ -1,0 +1,86 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-reduce-colors",
+  "version": "1.0.0",
+  "description": "Run the existing palette-reduction Python script. Reduce a PNG to a fixed color count, preserve alpha, and disable dithering by default.",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "colors": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 256,
+        "default": 16
+      },
+      "dither": {
+        "type": "string",
+        "enum": [
+          "none",
+          "floyd"
+        ],
+        "default": "none"
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "colors"
+    ],
+    "properties": {
+      "colors": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 256
+      }
+    }
+  },
+  "timeout": 30,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 4194304,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png"
+    ],
+    "max_count": 1
+  }
+}

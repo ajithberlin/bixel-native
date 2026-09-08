@@ -16,3 +16,5 @@ app/Bixel/Info.plist
 
 # macOS
 .DS_Store
+
+__PYCACHE__/

@@ -254,6 +254,142 @@ impl Engine {
                     "required": ["image"]
                 }),
             ),
+            tool(
+                "pixel_image_gen",
+                "Generate a single clean game-ready pixel-art asset from a prompt and save it as a PNG.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": { "type": "string", "description": "What to draw" },
+                        "style": { "type": "string", "description": "Art style hint" },
+                        "resolution": { "type": "string", "description": "e.g. 64x64" },
+                        "palette": { "type": "string", "description": "Named palette or family" }
+                    },
+                    "required": ["prompt"]
+                }),
+            ),
+            tool(
+                "pixel_reduce_colors",
+                "Reduce a PNG to a fixed color count and save the result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "colors": { "type": "integer", "description": "Color count (default 16)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_remove_bg",
+                "Remove a flat, white or chroma-key background from a PNG and save the result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "tolerance": { "type": "integer", "description": "Color tolerance (default 32)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_file_compressor",
+                "Quantize and optionally downscale a PNG to shrink its file size.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "colors": { "type": "integer", "description": "Target color count (0 = auto)" },
+                        "scale": { "type": "number", "description": "Downscale factor 0.05-1.0" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_9slice_splitter",
+                "Split an image into 9-slice panels, a grid, or scattered objects and save each piece.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "mode": { "type": "string", "description": "auto, grid, nineslice or scatter" },
+                        "cols": { "type": "integer", "description": "Grid columns" },
+                        "rows": { "type": "integer", "description": "Grid rows" },
+                        "insets": { "type": "string", "description": "top,right,bottom,left" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_spritesheet_gen",
+                "Extract sprites from an irregular spritesheet and save each as a PNG.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "min_area": { "type": "integer", "description": "Minimum sprite area" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_tileset_gen",
+                "Slice a tileset image into individual square tiles and save each as a PNG.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "tile": { "type": "integer", "description": "Tile size in pixels" }
+                    },
+                    "required": ["image", "tile"]
+                }),
+            ),
+            tool(
+                "pixel_game_ui_gen",
+                "Slice a UI image into components by connected alpha regions and save each.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_ui_elements_gen",
+                "Slice UI elements out of an image by connected alpha regions and save each.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_ui_kit_gen",
+                "Split a batch UI sheet into component crops by projection bands and save each.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "bg": { "type": "string", "description": "Background hex (default FF00FF)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
+            tool(
+                "pixel_game_asset_prep",
+                "Convert a chroma-green shadow placeholder into a soft drop shadow and save the result.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "image": { "type": "string", "description": "Path to the input PNG" },
+                        "max_alpha": { "type": "integer", "description": "Max shadow alpha (default 150)" }
+                    },
+                    "required": ["image"]
+                }),
+            ),
         ]
     }
 
@@ -265,21 +401,14 @@ impl Engine {
         let prompt = params.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let image_path = params.get("image").and_then(|v| v.as_str()).map(str::to_string);
 
-        let kind = match name {
-            "generate_art" => SkillKind::GenerateArt,
-            "spritesheet" => SkillKind::Spritesheet,
-            "next_frame" => SkillKind::NextFrame,
-            "compress" => SkillKind::Compress,
-            "remove_background" => SkillKind::RemoveBackground,
-            other => return Err(format!("unknown tool {other}")),
-        };
+        let kind = SkillKind::from_id(name).ok_or_else(|| format!("unknown tool {name}"))?;
 
         let image = match &image_path {
             Some(path) => Some(load_image_file(path)?),
             None => None,
         };
 
-        let input = SkillInput { prompt, image, params };
+        let input = SkillInput { prompt, image, images: vec![], params };
         let output = Skills::run(Some(self), kind, input).map_err(|e| e.to_string())?;
         self.save_skill_output(kind, output, image_path.as_deref())
     }
@@ -331,7 +460,52 @@ impl Engine {
                 let path = format!("next_{}.png", counter());
                 save(&img, &path)
             }
+            other => self.save_generic_output(other, output, source),
         }
+    }
+
+    /// Save the image(s) produced by a skill under deterministic names derived
+    /// from the skill id, returning a human-readable summary.
+    fn save_generic_output(
+        &self,
+        kind: SkillKind,
+        output: SkillOutput,
+        source: Option<&str>,
+    ) -> Result<String, String> {
+        let save = |img: &RgbaImage, path: &str| -> Result<String, String> {
+            let png = encode_png(img).map_err(|e| e.to_string())?;
+            std::fs::write(path, png).map_err(|e| e.to_string())?;
+            Ok(format!("{path} ({}×{})", img.width, img.height))
+        };
+        let id = kind.to_string();
+        let base = stem(source.unwrap_or("image"));
+
+        let mut saved = Vec::new();
+        if let Some(img) = &output.image {
+            let path = format!("{base}_{id}.png");
+            saved.push(save(img, &path)?);
+        }
+        if output.image.is_none() {
+            for (i, frame) in output.frames.iter().enumerate() {
+                let path = format!("{base}_{id}_{i}.png");
+                saved.push(save(frame, &path)?);
+            }
+        } else {
+            for (i, frame) in output.frames.iter().enumerate() {
+                let path = format!("{base}_{id}_f{i}.png");
+                saved.push(save(frame, &path)?);
+            }
+        }
+
+        if saved.is_empty() {
+            return Ok(output.text);
+        }
+        let mut text = output.text.clone();
+        if !text.is_empty() {
+            text.push_str(": ");
+        }
+        text.push_str(&saved.join(", "));
+        Ok(text)
     }
 
     // ------------------------------------------------------ images endpoint

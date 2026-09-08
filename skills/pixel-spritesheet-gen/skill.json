@@ -1,0 +1,143 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-spritesheet-gen",
+  "version": "1.0.0",
+  "description": "Extract and pack sprites from an irregular / scattered-layout spritesheet into a uniform engine-ready atlas (one transparent PNG plus JSON metadata).",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "actions": {
+        "type": "string",
+        "maxLength": 500,
+        "default": "auto"
+      },
+      "tol": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 441,
+        "default": 45
+      },
+      "min_area": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 1000000,
+        "default": 0
+      },
+      "pivot": {
+        "type": "string",
+        "enum": [
+          "centroid",
+          "bottom",
+          "center"
+        ],
+        "default": "centroid"
+      },
+      "snap": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 512,
+        "default": 1
+      },
+      "padding": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 32,
+        "default": 0
+      },
+      "edge_trim": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 8,
+        "default": 1
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "sprite_count",
+      "width",
+      "height",
+      "cell_width",
+      "cell_height",
+      "layout"
+    ],
+    "properties": {
+      "sprite_count": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 256
+      },
+      "width": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "cell_width": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "cell_height": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "layout": {
+        "type": "string",
+        "maxLength": 20,
+        "default": "freeform"
+      }
+    }
+  },
+  "timeout": 60,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy",
+      "scipy"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 16777216,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png"
+    ],
+    "max_count": 2
+  }
+}

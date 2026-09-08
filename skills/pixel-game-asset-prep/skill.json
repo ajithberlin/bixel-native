@@ -1,0 +1,94 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-game-asset-prep",
+  "version": "1.0.0",
+  "description": "Run a deterministic game-asset prep pass: convert a chroma-green shadow placeholder (any green variant) into a soft semi-transparent drop shadow.",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "max_alpha": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255,
+        "default": 150
+      },
+      "min_alpha": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255,
+        "default": 0
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "green_pixels",
+      "width",
+      "height"
+    ],
+    "properties": {
+      "green_pixels": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "width": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "height": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  },
+  "timeout": 30,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy",
+      "matplotlib"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 16777216,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png"
+    ],
+    "max_count": 1
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-file-compressor",
+  "version": "1.0.0",
+  "description": "Run the existing deterministic asset compressor. Quantize AI PNGs to a palette, optionally downscale with NEAREST, and re-encode to shrink file size (PNG only in the sandbox).",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "colors": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 256,
+        "default": 0
+      },
+      "scale": {
+        "type": "number",
+        "minimum": 0.05,
+        "maximum": 1.0,
+        "default": 1.0
+      },
+      "pixel_art": {
+        "type": "boolean",
+        "default": true
+      },
+      "quality": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+        "default": 85
+      },
+      "lossless": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input_bytes",
+      "output_bytes",
+      "saved_percent"
+    ],
+    "properties": {
+      "input_bytes": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "output_bytes": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "saved_percent": {
+        "type": "number",
+        "minimum": -100,
+        "maximum": 100
+      }
+    }
+  },
+  "timeout": 30,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 16777216,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png"
+    ],
+    "max_count": 1
+  }
+}

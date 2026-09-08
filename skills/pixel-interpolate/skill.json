@@ -1,0 +1,169 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-interpolate",
+  "version": "1.0.0",
+  "description": "Pack already-generated in-between frames (endpoints + in-betweens) into a uniform anti-jitter spritesheet (plus GIF preview).",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_2": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_3": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_4": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_5": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_6": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_7": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "frame_8": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "fps": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 60,
+        "default": 6
+      },
+      "anchor": {
+        "type": "string",
+        "enum": [
+          "bottom",
+          "center"
+        ],
+        "default": "bottom"
+      },
+      "cols": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 32,
+        "default": 0
+      },
+      "pad": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 32,
+        "default": 0
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "count",
+      "frame_width",
+      "frame_height",
+      "cols",
+      "rows",
+      "anchor"
+    ],
+    "properties": {
+      "count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64
+      },
+      "frame_width": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "frame_height": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "cols": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "rows": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "anchor": {
+        "type": "string",
+        "enum": [
+          "bottom",
+          "center"
+        ]
+      }
+    }
+  },
+  "timeout": 30,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 16777216,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png",
+      "image/gif"
+    ],
+    "max_count": 2
+  }
+}

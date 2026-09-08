@@ -5,11 +5,19 @@
 //! that routes *text*, *vision* and *image* models — and exposes a set of
 //! pixel-art **skills**:
 //!
-//! * `generate_art` — text-to-image generation.
+//! * `generate_art` / `pixel_image_gen` — text-to-image generation.
 //! * `spritesheet` — text-to-spritesheet generation + grid slicing.
 //! * `next_frame` — predict/create the next animation frame from the current one.
-//! * `compress` — reduce an image to a target bit depth (color count).
-//! * `remove_background` — strip a near-uniform background.
+//! * `compress` / `pixel_reduce_colors` / `pixel_file_compressor` — color
+//!   quantization / bit-depth / file-size reduction.
+//! * `remove_background` / `pixel_remove_bg` — strip a background.
+//! * `pixel_8dir_character` / `pixel_animate_text` / `pixel_interpolate` —
+//!   pack frames into a uniform spritesheet.
+//! * `pixel_9slice_splitter` / `pixel_spritesheet_gen` / `pixel_tileset_gen` —
+//!   slice images into panels, sprites or tiles.
+//! * `pixel_game_ui_gen` / `pixel_ui_elements_gen` / `pixel_ui_kit_gen` — slice
+//!   UI images into components.
+//! * `pixel_game_asset_prep` — chroma-green shadow placeholder → drop shadow.
 //!
 //! Model routing and credentials come from the environment (`.env`):
 //!
@@ -20,8 +28,9 @@
 //! BIXEL_IMAGE_MODEL=google/gemini-3-pro-image
 //! ```
 //!
-//! Deterministic skills (compress, remove background) run locally and are
-//! unit-tested; model-backed skills require a valid key and network.
+//! Deterministic skills (compress, reduce colors, remove background, slicing,
+//! packing) run locally and are unit-tested; model-backed skills require a
+//! valid key and network.
 
 pub mod config;
 pub mod engine;

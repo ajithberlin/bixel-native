@@ -371,3 +371,268 @@ pub fn slice_grid(img: &RgbaImage, cols: usize, rows: usize) -> Vec<RgbaImage> {
     }
     frames
 }
+
+/// Slice a tileset image into square `tile`-sized tiles. `cols`/`rows` of `0`
+/// mean "derive from the image size".
+pub fn slice_tiles(img: &RgbaImage, tile: usize, cols: usize, rows: usize) -> Vec<RgbaImage> {
+    let tile = tile.max(1);
+    let cols = if cols > 0 { cols } else { (img.width / tile).max(1) };
+    let rows = if rows > 0 { rows } else { (img.height / tile).max(1) };
+    slice_grid(img, cols, rows)
+}
+
+/// Crop a rectangular region, clamped to the image bounds.
+pub fn crop(img: &RgbaImage, x: usize, y: usize, cw: usize, ch: usize) -> RgbaImage {
+    let cw = cw.min(img.width.saturating_sub(x.min(img.width)));
+    let ch = ch.min(img.height.saturating_sub(y.min(img.height)));
+    let x = x.min(img.width);
+    let y = y.min(img.height);
+    let mut out = RgbaImage::blank(cw, ch);
+    for j in 0..ch {
+        for i in 0..cw {
+            out.set_pixel(i, j, img.pixel(x + i, y + j));
+        }
+    }
+    out
+}
+
+/// Downscale with nearest-neighbour sampling (no anti-aliasing). A `scale >= 1`
+/// or `scale <= 0` returns the image unchanged.
+pub fn downscale_nearest(img: &RgbaImage, scale: f32) -> RgbaImage {
+    if scale <= 0.0 || scale >= 1.0 || img.width == 0 || img.height == 0 {
+        return img.clone();
+    }
+    let nw = ((img.width as f32 * scale).round() as usize).max(1);
+    let nh = ((img.height as f32 * scale).round() as usize).max(1);
+    let mut out = RgbaImage::blank(nw, nh);
+    for y in 0..nh {
+        let sy = ((y as f32 / scale) as usize).min(img.height - 1);
+        for x in 0..nw {
+            let sx = ((x as f32 / scale) as usize).min(img.width - 1);
+            out.set_pixel(x, y, img.pixel(sx, sy));
+        }
+    }
+    out
+}
+
+/// How to align a frame within its (uniform) cell when packing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackAnchor {
+    /// Bottom-aligned, horizontally centered (feet on the baseline).
+    Bottom,
+    /// Centered on both axes.
+    Center,
+    /// Top-left (no alignment, just place).
+    TopLeft,
+}
+
+/// Pack a list of (possibly different-sized) frames into a uniform `cols`-wide
+/// grid sheet, aligning each frame within its cell.
+pub fn pack_frames(frames: &[RgbaImage], cols: usize, pad: usize, anchor: PackAnchor) -> RgbaImage {
+    if frames.is_empty() {
+        return RgbaImage::blank(1, 1);
+    }
+    let cols = cols.max(1);
+    let fw = frames.iter().map(|f| f.width).max().unwrap_or(1);
+    let fh = frames.iter().map(|f| f.height).max().unwrap_or(1);
+    let cw = fw + pad;
+    let ch = fh + pad;
+    let rows = (frames.len() + cols - 1) / cols;
+    let mut sheet = RgbaImage::blank(cw * cols, ch * rows);
+    for (i, frame) in frames.iter().enumerate() {
+        let cell_x = (i % cols) * cw;
+        let cell_y = (i / cols) * ch;
+        let (ox, oy) = match anchor {
+            PackAnchor::Bottom => ((fw - frame.width) / 2, fh - frame.height),
+            PackAnchor::Center => ((fw - frame.width) / 2, (fh - frame.height) / 2),
+            PackAnchor::TopLeft => (0, 0),
+        };
+        for y in 0..frame.height {
+            for x in 0..frame.width {
+                sheet.set_pixel(cell_x + ox + x, cell_y + oy + y, frame.pixel(x, y));
+            }
+        }
+    }
+    sheet
+}
+
+/// A bounding box of a connected opaque region.
+#[derive(Debug, Clone, Copy)]
+pub struct Bounds {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+/// Find connected components of opaque pixels (4-connectivity), returning their
+/// bounding boxes in top-left reading order. Components with fewer than
+/// `min_area` pixels are dropped; every box is expanded by `dilate` pixels.
+pub fn find_components(img: &RgbaImage, min_area: usize, dilate: usize) -> Vec<Bounds> {
+    let (w, h) = (img.width, img.height);
+    let mut visited = vec![false; w * h];
+    let mut out = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let key = y * w + x;
+            if visited[key] || img.pixel(x, y)[3] == 0 {
+                continue;
+            }
+            let mut min_x = x;
+            let mut max_x = x;
+            let mut min_y = y;
+            let mut max_y = y;
+            let mut area = 0usize;
+            let mut stack = vec![(x, y)];
+            visited[key] = true;
+            while let Some((cx, cy)) = stack.pop() {
+                area += 1;
+                min_x = min_x.min(cx);
+                max_x = max_x.max(cx);
+                min_y = min_y.min(cy);
+                max_y = max_y.max(cy);
+                if cx + 1 < w {
+                    let k = cy * w + cx + 1;
+                    if !visited[k] && img.pixel(cx + 1, cy)[3] != 0 {
+                        visited[k] = true;
+                        stack.push((cx + 1, cy));
+                    }
+                }
+                if cx > 0 {
+                    let k = cy * w + cx - 1;
+                    if !visited[k] && img.pixel(cx - 1, cy)[3] != 0 {
+                        visited[k] = true;
+                        stack.push((cx - 1, cy));
+                    }
+                }
+                if cy + 1 < h {
+                    let k = (cy + 1) * w + cx;
+                    if !visited[k] && img.pixel(cx, cy + 1)[3] != 0 {
+                        visited[k] = true;
+                        stack.push((cx, cy + 1));
+                    }
+                }
+                if cy > 0 {
+                    let k = (cy - 1) * w + cx;
+                    if !visited[k] && img.pixel(cx, cy - 1)[3] != 0 {
+                        visited[k] = true;
+                        stack.push((cx, cy - 1));
+                    }
+                }
+            }
+            if area < min_area {
+                continue;
+            }
+            let x0 = min_x.saturating_sub(dilate);
+            let y0 = min_y.saturating_sub(dilate);
+            let x1 = (max_x + dilate + 1).min(w);
+            let y1 = (max_y + dilate + 1).min(h);
+            out.push(Bounds { x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
+        }
+    }
+    out.sort_by(|a, b| (a.y, a.x).cmp(&(b.y, b.x)));
+    out
+}
+
+/// Slice an image into 9 pieces using `insets` (`[top, right, bottom, left]`,
+/// in pixels). Corner/edge pieces with a zero dimension are omitted.
+pub fn slice_nineslice(img: &RgbaImage, insets: [usize; 4]) -> Vec<RgbaImage> {
+    let [top, right, bottom, left] = insets;
+    let (w, h) = (img.width, img.height);
+    if top + bottom >= h || left + right >= w {
+        return vec![img.clone()];
+    }
+    let xs = [0usize, left, w - right];
+    let widths = [left, w - left - right, right];
+    let ys = [0usize, top, h - bottom];
+    let heights = [top, h - top - bottom, bottom];
+    let mut out = Vec::with_capacity(9);
+    for (ry, &y) in ys.iter().enumerate() {
+        for (rx, &x) in xs.iter().enumerate() {
+            if widths[rx] == 0 || heights[ry] == 0 {
+                continue;
+            }
+            out.push(crop(img, x, y, widths[rx], heights[ry]));
+        }
+    }
+    out
+}
+
+/// Convert a chroma-green placeholder into a soft semi-transparent drop shadow.
+/// Green-dominant pixels become black with an alpha scaled by green intensity
+/// between `min_alpha` and `max_alpha`; all other pixels are preserved.
+pub fn chroma_to_shadow(img: &RgbaImage, min_alpha: u8, max_alpha: u8) -> RgbaImage {
+    let mut out = img.clone();
+    let (w, h) = (img.width, img.height);
+    for y in 0..h {
+        for x in 0..w {
+            let p = img.pixel(x, y);
+            if p[3] == 0 {
+                continue;
+            }
+            let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+            if g > r + 24 && g > b + 24 {
+                let intensity = p[1] as f32 / 255.0;
+                let alpha = (min_alpha as f32
+                    + (max_alpha as f32 - min_alpha as f32) * intensity)
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                out.set_pixel(x, y, [0, 0, 0, alpha]);
+            }
+        }
+    }
+    out
+}
+
+/// Split a flat-background sheet into full-width horizontal bands separated by
+/// runs of the background color. Adjacent bands closer than `bridge` rows are
+/// merged.
+pub fn split_bands(img: &RgbaImage, bg: [u8; 3], tol: u32, bridge: usize) -> Vec<Bounds> {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let is_bg = |p: [u8; 4]| -> bool {
+        if p[3] == 0 {
+            return true;
+        }
+        let dr = p[0] as i32 - bg[0] as i32;
+        let dg = p[1] as i32 - bg[1] as i32;
+        let db = p[2] as i32 - bg[2] as i32;
+        ((dr * dr + dg * dg + db * db) as u32) <= tol * tol
+    };
+    let mut content_rows = vec![false; h];
+    for y in 0..h {
+        content_rows[y] = (0..w).any(|x| !is_bg(img.pixel(x, y)));
+    }
+
+    let mut bands: Vec<Bounds> = Vec::new();
+    let mut y = 0;
+    while y < h {
+        if !content_rows[y] {
+            y += 1;
+            continue;
+        }
+        let start = y;
+        let mut end = y + 1;
+        while end < h {
+            if content_rows[end] {
+                end += 1;
+                continue;
+            }
+            // skip a short background bridge, otherwise end the band
+            if (end + 1..h).take(bridge).any(|i| content_rows[i]) && end + 1 < h {
+                let next_content = (end + 1..=end + bridge.min(h - end - 1))
+                    .find(|&i| content_rows[i]);
+                if let Some(i) = next_content {
+                    end = i + 1;
+                    continue;
+                }
+            }
+            break;
+        }
+        bands.push(Bounds { x: 0, y: start, width: w, height: end - start });
+        y = end;
+    }
+    bands
+}

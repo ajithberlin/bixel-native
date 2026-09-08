@@ -1,0 +1,116 @@
+{
+  "manifest_version": 1,
+  "name": "pixel-remove-bg",
+  "version": "1.0.0",
+  "description": "Run the existing deterministic background-removal Python script. Remove a flat AI, white studio, or chroma-key background from a PNG to get a transparent sprite.",
+  "runtime": "python",
+  "entrypoint": "main.py",
+  "callable": "run",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "input"
+    ],
+    "properties": {
+      "input": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "format": "asset-path"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "key",
+          "white"
+        ],
+        "default": "auto"
+      },
+      "color": {
+        "type": "string",
+        "maxLength": 7,
+        "default": "FF00FF"
+      },
+      "tolerance": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 441,
+        "default": 32
+      },
+      "despill": {
+        "type": "boolean",
+        "default": false
+      },
+      "feather": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 16,
+        "default": 0
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "mode",
+      "removed_percent"
+    ],
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "key",
+          "white"
+        ]
+      },
+      "color": {
+        "type": "string",
+        "maxLength": 7
+      },
+      "removed_percent": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100
+      }
+    }
+  },
+  "timeout": 30,
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy",
+      "scipy"
+    ],
+    "system": [],
+    "requirements_file": "requirements.txt"
+  },
+  "permissions": {
+    "filesystem": {
+      "read": [
+        "inputs"
+      ],
+      "write": [
+        "outputs",
+        "tmp"
+      ]
+    },
+    "network": false
+  },
+  "limits": {
+    "memory_mb": 512,
+    "cpus": 1,
+    "max_input_pixels": 4194304,
+    "max_output_pixels": 16777216,
+    "max_output_bytes": 16777216
+  },
+  "artifacts": {
+    "media_types": [
+      "image/png"
+    ],
+    "max_count": 2
+  }
+}

@@ -720,3 +720,51 @@ pub unsafe extern "C" fn bixel_ai_remove_bg_rgba(
     let result = bixel_ai::image::remove_background(&img, tolerance);
     unsafe { std::ptr::copy_nonoverlapping(result.data.as_ptr(), out, w * h * 4) };
 }
+
+// -- generic skill runner (any registered skill, deterministic or model-backed)
+
+/// Run any registered skill by id, passing optional input PNG bytes and a JSON
+/// params object. Returns a JSON string (free with [`bixel_string_free`]) of the
+/// shape `{ "text": "...", "image": "<base64 png>", "frames": ["<base64>", ...] }`,
+/// or `{"error": "..."}` on failure.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_ai_run_skill(
+    skill_id: *const c_char,
+    params_json: *const c_char,
+    png_in: *const u8,
+    in_len: u64,
+) -> *mut c_char {
+    let id = arg_str(skill_id);
+    let Some(kind) = bixel_ai::skills::SkillKind::from_id(&id) else {
+        return out_cstr(r#"{"error":"unknown skill"}"#.to_string());
+    };
+
+    let params: serde_json::Value = match serde_json::from_str(&arg_str(params_json)) {
+        Ok(v) => v,
+        Err(_) => serde_json::json!({}),
+    };
+
+    let image = if !png_in.is_null() && in_len > 0 {
+        let bytes = unsafe { std::slice::from_raw_parts(png_in, in_len as usize) };
+        bixel_ai::image::decode_any(&bytes).ok()
+    } else {
+        None
+    };
+
+    let input = bixel_ai::skills::SkillInput {
+        prompt: String::new(),
+        image,
+        images: vec![],
+        params,
+    };
+
+    let engine = if kind.is_deterministic() { None } else { ai_engine().ok() };
+    let output = bixel_ai::skills::Skills::run(engine, kind, input);
+    match output {
+        Ok(o) => out_cstr(bixel_ai::skills::skill_output_to_json(&o)),
+        Err(e) => out_cstr(format!(
+            r#"{{"error":{}}}"#,
+            serde_json::to_string(&e.to_string()).unwrap_or_else(|_| r#""skill failed""#.into())
+        )),
+    }
+}
