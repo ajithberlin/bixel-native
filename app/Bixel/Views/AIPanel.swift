@@ -87,25 +87,32 @@ struct AIPanel: View {
 
     private var transcript: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 25) {
-                    if session.messages.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Image(systemName: "terminal").font(.system(size: 28, weight: .ultraLight)).foregroundColor(StudioTheme.textDisabled)
-                            Text("Let’s make something.").font(.system(size: 22, weight: .medium))
-                            Text("Describe an idea, drop in a reference, or add a skill with /.")
-                                .font(.system(size: 13)).lineSpacing(4).foregroundColor(StudioTheme.textSecondary)
-                        }.padding(.top, 55).padding(.bottom, 40).id("welcome")
-                    }
-                    ForEach(session.messages) { message in
-                        AssistantMessageView(message: message, commands: session.commands, model: model)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
-                }.padding(18)
-            }
-            .onChange(of: session.messages.count) { count in proxy.scrollTo(count == 0 ? "welcome" : "bottom", anchor: count == 0 ? .top : .bottom) }
-            .onChange(of: session.messages.last?.blocks.count) { _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            ScrollView { transcriptContent }
+                .onChange(of: session.messages.count) { count in
+                    if count == 0 { proxy.scrollTo("welcome", anchor: .top) }
+                    else { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
+                .onChange(of: session.messages.last?.blocks.count) { _ in proxy.scrollTo("bottom", anchor: .bottom) }
         }
+    }
+
+    private var transcriptContent: some View {
+        LazyVStack(alignment: .leading, spacing: 25) {
+            if session.messages.isEmpty { welcome.id("welcome") }
+            ForEach(session.messages) { message in
+                AssistantMessageView(message: message, commands: session.commands, model: model)
+            }
+            Color.clear.frame(height: 1).id("bottom")
+        }.padding(18)
+    }
+
+    private var welcome: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: "terminal").font(.system(size: 28, weight: .ultraLight)).foregroundColor(StudioTheme.textDisabled)
+            Text("Let’s make something.").font(.system(size: 22, weight: .medium))
+            Text("Describe an idea, drop in a reference, or add a skill with /.")
+                .font(.system(size: 13)).lineSpacing(4).foregroundColor(StudioTheme.textSecondary)
+        }.padding(.top, 55).padding(.bottom, 40)
     }
 
     private var history: some View {
