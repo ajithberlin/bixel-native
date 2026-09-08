@@ -1,7 +1,7 @@
 //! The goose-backed engine: a thin, synchronous facade over the goose SDK's
 //! OpenRouter provider for text, vision and image generation.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use goose_sdk::bindings::{
@@ -16,6 +16,44 @@ use crate::skills::{SkillInput, SkillKind, SkillOutput, Skills};
 /// Upper bound on tool-call rounds before the agent gives up.
 const MAX_TOOL_ROUNDS: usize = 6;
 
+/// A single chat conversation: its system prompt plus the full message history.
+///
+/// The goose SDK exposes a *provider* primitive (`complete`/`stream`/`compact`),
+/// not an agent loop — session state is the caller's responsibility. Keeping the
+/// history here and replaying it verbatim on every turn is what makes goose's
+/// context windowing and prompt caching actually work (a stable prefix is what
+/// the provider's token cache keys on).
+#[derive(Debug, Clone)]
+pub struct Session {
+    system: String,
+    messages: Vec<ProviderMessage>,
+}
+
+impl Session {
+    fn new() -> Self {
+        Session { system: String::new(), messages: Vec::new() }
+    }
+
+    /// Re-arm the session for a new conversation (or clear it).
+    fn reset(&mut self, system: &str) {
+        self.system = system.to_string();
+        self.messages.clear();
+    }
+
+    /// Number of messages currently in the history.
+    pub fn len(&self) -> usize {
+        self.messages.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
+    pub fn system(&self) -> &str {
+        &self.system
+    }
+}
+
 /// A synchronous wrapper around an OpenRouter provider constructed through the
 /// goose SDK. Holds its own tokio runtime so the FFI / UI layer can call it
 /// without an async context.
@@ -23,6 +61,7 @@ pub struct Engine {
     provider: Arc<bindings::Provider>,
     settings: AiSettings,
     runtime: tokio::runtime::Runtime,
+    session: Mutex<Session>,
 }
 
 impl Engine {
@@ -40,7 +79,7 @@ impl Engine {
         // The blocking reqwest client uses rustls without a default provider;
         // install the ring backend once (idempotent).
         let _ = rustls::crypto::ring::default_provider().install_default();
-        Ok(Engine { provider, settings, runtime })
+        Ok(Engine { provider, settings, runtime, session: Mutex::new(Session::new()) })
     }
 
     pub fn settings(&self) -> &AiSettings {
@@ -139,15 +178,32 @@ impl Engine {
 
     /// Chat with tool use: the text model may call the pixel-art skills as
     /// tools; their results are fed back until it produces a final answer.
+    ///
+    /// The conversation is stateful: each call appends to the engine's session
+    /// and replays the full history to the provider, so the model keeps the
+    /// context of previous turns (and the provider's token cache stays warm).
+    /// A change of `system` prompt starts a fresh conversation.
     pub fn chat(&self, prompt: &str, system: &str) -> Result<String, AiError> {
         let tools = self.skill_tools();
         let model = self.settings.text_model.clone();
-        let mut messages = vec![Self::user(vec![Self::text(prompt)])];
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| AiError::Provider("session lock poisoned".into()))?;
+
+        if session.system != system {
+            session.reset(system);
+        }
+
+        session.messages.push(Self::user(vec![Self::text(prompt)]));
 
         for _ in 0..MAX_TOOL_ROUNDS {
-            let completion = self
-                .runtime
-                .block_on(self.complete(&model, system, messages.clone(), tools.clone()))?;
+            let completion = self.runtime.block_on(self.complete(
+                &model,
+                &session.system,
+                session.messages.clone(),
+                tools.clone(),
+            ))?;
 
             let requests: Vec<(String, String, String)> = completion
                 .content
@@ -165,10 +221,14 @@ impl Engine {
                 if text.trim().is_empty() {
                     return Err(AiError::NoText);
                 }
+                session.messages.push(ProviderMessage {
+                    role: MessageRole::Assistant,
+                    content: completion.content.clone(),
+                });
                 return Ok(text);
             }
 
-            messages.push(ProviderMessage {
+            session.messages.push(ProviderMessage {
                 role: MessageRole::Assistant,
                 content: completion.content.clone(),
             });
@@ -183,10 +243,22 @@ impl Engine {
                     tool_result(id, success, text)
                 })
                 .collect();
-            messages.push(ProviderMessage { role: MessageRole::Tool, content: results });
+            session.messages.push(ProviderMessage { role: MessageRole::Tool, content: results });
         }
 
         Err(AiError::Provider("assistant kept calling tools without finishing".into()))
+    }
+
+    /// Forget the current conversation so the next `chat` starts fresh.
+    pub fn reset_chat(&self) {
+        if let Ok(mut session) = self.session.lock() {
+            session.reset("");
+        }
+    }
+
+    /// Current chat history length (for diagnostics / tests).
+    pub fn session_len(&self) -> usize {
+        self.session.lock().map(|s| s.len()).unwrap_or(0)
     }
 
     /// Declare the pixel-art skills as goose tools for the chat model.
@@ -648,4 +720,41 @@ fn decode_model_image(bytes: &[u8]) -> Result<RgbaImage, AiError> {
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     Ok(RgbaImage::from_rgba(w as usize, h as usize, rgba.into_raw()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(text: &str) -> ProviderMessage {
+        ProviderMessage {
+            role: MessageRole::User,
+            content: vec![MessageContent::Text { text: text.to_string() }],
+        }
+    }
+
+    #[test]
+    fn session_starts_empty_and_accumulates_history() {
+        let mut session = Session::new();
+        assert!(session.is_empty());
+
+        session.messages.push(user("hello"));
+        session.messages.push(ProviderMessage {
+            role: MessageRole::Assistant,
+            content: vec![MessageContent::Text { text: "hi!".to_string() }],
+        });
+        assert_eq!(session.len(), 2);
+        assert!(!session.is_empty());
+    }
+
+    #[test]
+    fn session_reset_clears_history_and_tracks_system() {
+        let mut session = Session::new();
+        session.reset("system A");
+        session.messages.push(user("first turn"));
+
+        session.reset("system B");
+        assert!(session.is_empty());
+        assert_eq!(session.system(), "system B");
+    }
 }

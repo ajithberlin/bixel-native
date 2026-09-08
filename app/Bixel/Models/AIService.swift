@@ -54,6 +54,11 @@ enum AIService {
         return String(cString: ptr)
     }
 
+    /// Forget the current chat conversation (starts the next `chat` fresh).
+    static func resetChat() {
+        bixel_ai_chat_reset()
+    }
+
     /// Text-to-image via the configured image model. Returns PNG bytes.
     static func generateArt(prompt: String) -> Data? {
         var len: UInt64 = 0

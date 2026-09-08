@@ -608,6 +608,15 @@ pub extern "C" fn bixel_ai_chat(prompt: *const c_char, system: *const c_char) ->
     }
 }
 
+/// Forget the current chat conversation so the next `bixel_ai_chat` starts
+/// fresh with no prior context.
+#[no_mangle]
+pub extern "C" fn bixel_ai_chat_reset() {
+    if let Ok(engine) = ai_engine() {
+        engine.reset_chat();
+    }
+}
+
 // -- buffer helpers (header-prefixed allocation, freed by bixel_ai_free_buffer)
 
 fn alloc_buffer(v: Vec<u8>) -> *mut u8 {

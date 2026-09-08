@@ -74,6 +74,12 @@ struct AIPanel: View {
                     .foregroundColor(StudioTheme.accent)
                 Text("Chat").font(.system(size: 12, weight: .semibold)).foregroundColor(StudioTheme.textPrimary)
                 Spacer()
+                if !chatMessages.isEmpty {
+                    Button("Clear") { clearChat() }
+                        .font(.system(size: 11))
+                        .buttonStyle(.plain)
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
                 if chatBusy { ProgressView().controlSize(.small) }
             }
 
@@ -149,6 +155,11 @@ struct AIPanel: View {
                 running = false
             }
         }
+    }
+
+    private func clearChat() {
+        chatMessages.removeAll()
+        AIService.resetChat()
     }
 
     private func sendChat() {
