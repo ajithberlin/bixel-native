@@ -4,17 +4,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "AI assistant engine for Bixel Studio: Goose SDK over OpenRouter (text, vision, image) plus pixel-art skills (generate, spritesheets, next-frame, compress, remove background)."
+description = "AI assistant engine for Bixel Studio: embeds the full goose agent (agent loop, skill/extension system) over the OpenRouter provider, plus pixel-art skills exposed as goose tools."
 
 [dependencies]
 bixel-core = { path = "../bixel-core" }
-goose-sdk = { version = "0.1.0-alpha.8", features = ["uniffi"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+goose = { git = "https://github.com/aaif-goose/goose", rev = "13f4d26e1e703d6ed1552c6e599abdfa8d3e44ff", default-features = false, features = ["rustls-tls"] }
+rmcp = { version = "3.2.0", default-features = false, features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "io-util", "fs"] }
+futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+schemars = "1"
+tracing = "0.1"
 png = "0.17"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "rustls-no-provider"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "rustls"] }
+
+# goose pins icu_locale/icu_calendar to 2.1.1 (temporal_rs workaround); idna_adapter
+# 1.2.2 bumps icu_normalizer to 2.2+ which pulls icu_collections 2.3 and conflicts.
+# Pin 1.2.1 to keep the icu 2.1.x tree unified.
+idna_adapter = "=1.2.1"

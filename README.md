@@ -18,10 +18,10 @@ Swift / SwiftUI          Metal                    Rust core
              │                           │ projects / sources     │
              │                           │ config / jobs          │
              ▼                           └───────────┬────────────┘
-        AI panel (Swift)                             │
-                                                      ▼
-                                           bixel-ai (goose SDK)
-                                           └─ OpenRouter (text/vision/image)
+         AI panel (Swift)                             │
+                                                       ▼
+                                            bixel-ai (goose agent)
+                                            └─ OpenRouter (text/vision/image)
 ```
 
 ## Why this split
@@ -38,57 +38,23 @@ becomes **"Swift sends a command, Rust processes a whole buffer."**
 * Swift talks to Rust through a small, hand-written `extern "C"` ABI
   (`crates/bixel-ffi`) with a cbindgen-generated header. No codegen runtime, no
   per-pixel FFI traffic.
-* The AI assistant (`bixel-ai`) wraps the [goose SDK](https://goose-docs.ai) to
-  talk to **OpenRouter** (text, vision and image models) and exposes pixel-art
-  *skills*.
+* The AI assistant (`bixel-ai`) embeds the **full goose agent** (`goose`) — its
+  agent loop, tool-calling, extension and skill systems — over the **OpenRouter**
+  provider, and exposes Bixel's pixel-art *skills* as goose tools.
 
-## Quick start (TUI chatbot)
+## Quick start
 
-The primary interface is a terminal chatbot harness (`bixel-tui`) with a
-chat + slash-command model, token-by-token streaming, markdown rendering and a
-command palette:
+The primary interface is the **macOS app** (`app/Bixel`, SwiftUI + Metal). The
+AI assistant panel (sparkles button) drives the embedded goose agent directly.
 
 ```bash
 cp .env.example .env   # add your OPENROUTER_API_KEY
-cargo run -p bixel-tui
+xcodegen generate
+open Bixel.xcodeproj
 ```
 
-Inside the TUI, type `/` to open the command palette (arrow keys + Tab to
-pick), or enter any of the commands directly:
-
-```
-/help                          list commands
-/skills                        list skills (grouped by category)
-/generate <prompt>             text → pixel art (saves art_N.png)
-/spritesheet <prompt> [--cols N --rows M]   sheet + slice into frames
-/next <image.png> [prompt]     predict the next animation frame
-/compress <image.png> [--bits N]   reduce to 2^N colors
-/remove_bg <image.png> [--tol N]   strip the background
-/clear                         clear the conversation
-/quit                          exit
-```
-
-Anything else is sent to the configured text model and streamed back as it is
-generated. The model may also call the pixel-art skills as tools mid-conversation;
-each tool call is shown inline with its result. A top status bar reports the
-provider, model, session size, token usage and elapsed time.
-
-Keyboard shortcuts:
-
-| Keys | Action |
-|------|--------|
-| `Enter` | send (or accept a palette entry) |
-| `Tab` / `Shift+Tab` | open/accept the command palette |
-| `↑` / `↓` | history (or palette navigation) |
-| `PgUp` / `PgDn` | scroll the transcript |
-| `Ctrl+L` | clear the conversation |
-| `Ctrl+U` / `Ctrl+W` / `Ctrl+K` | clear line / delete word / delete to end |
-| `Ctrl+A` / `Ctrl+E` | jump to start / end of line |
-| `Ctrl+C` | quit |
-
-Image generation uses OpenRouter's `/api/v1/images` endpoint
-(generation/editing), while chat and vision go through the goose SDK's
-chat-completions provider.
+Image generation uses OpenRouter's `/api/v1/images` endpoint, while chat and
+vision go through the embedded goose agent's OpenRouter provider.
 
 ## Repository layout
 
@@ -114,13 +80,15 @@ crates/
       audits.rs            # persisted validation reports
       jobs.rs              # subprocess execution queue (cancel, logs)
     tests/                 # integration tests
-  bixel-ai/                # goose SDK → OpenRouter + pixel-art skills
+  bixel-ai/                # embedded goose agent → OpenRouter + pixel-art skills
     src/
-      engine.rs            # text / vision / image completion + images endpoint
-      config.rs            # .env settings + declarative OpenRouter provider JSON
+      agent.rs             # GooseAgent: builds goose Agent, drives reply(), event mapping
+      config.rs            # .env settings + goose env wiring (OpenRouter provider)
+      skill_server.rs      # rmcp extension exposing skills as the `run_skill` tool
+      image_gen.rs         # OpenRouter image endpoints (text/image → image)
       skills.rs            # skill registry + prompts + dispatch
       image.rs             # PNG encode/decode, quantize, background removal, slicing
-  bixel-tui/               # terminal chatbot harness (ratatui) with slash commands
+      native_stream.rs     # NativeEvent/NativeRequest FFI contract
   bixel-ffi/               # C ABI over bixel-core + bixel-ai
     src/lib.rs             # extern "C" functions + opaque handles
 app/
@@ -148,8 +116,9 @@ generated/                 # (gitignored) libbixel.a + bixel.h
 
 ## AI assistant (goose + OpenRouter)
 
-The AI engine (`crates/bixel-ai`) uses the goose SDK's declarative provider to
-talk to OpenRouter's OpenAI-compatible gateway. Configure it with a `.env` file:
+The AI engine (`crates/bixel-ai`) embeds the goose agent and points it at
+OpenRouter's OpenAI-compatible gateway via the environment. Configure it with a
+`.env` file:
 
 ```bash
 cp .env.example .env   # then edit and add your key
@@ -240,7 +209,7 @@ rules that keep the boundary cheap:
 * ✅ Implemented and tested: document model (incl. brush strokes + flood fill),
   palette, timeline, tilemap, atlas/map validation, path jail, projects, sources,
   clipboard, config, audits, jobs, the full FFI, the Procreate-style SwiftUI/Metal
-  app, and the goose-SDK AI engine with five pixel-art skills.
+  app, and the embedded goose agent with pixel-art skills exposed as goose tools.
 * 🔮 Future: iPadOS/iOS targets (the Rust core and Metal renderer are already
   platform-neutral), Web/WebGPU and Tauri shells reusing `bixel-core`.
 
@@ -249,8 +218,8 @@ rules that keep the boundary cheap:
 The original "server owns disk, processes, and secrets" rule carries over:
 * `paths::safe_resolve` strictly jails every path within its base (project or
   workspace), rejecting `..` traversal, absolute paths and symlink escapes.
-* API keys live in `.env` (gitignored) and are resolved by the goose SDK's env
-  key resolver; the frontend only ever sees masked key status.
+* API keys live in `.env` (gitignored) and are resolved by the goose agent's
+  config (env-var precedence); the frontend only ever sees masked key status.
 * Snapshot/backup semantics (write-backups under `.studio/backups/`) are the
   intended next addition on top of the existing in-place source model.
 

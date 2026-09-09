@@ -1,14 +1,14 @@
-//! AI settings loaded from the environment (`.env`), plus the declarative
-//! OpenRouter provider JSON consumed by the goose SDK.
+//! AI settings loaded from the environment (`.env`), plus the env wiring that
+//! points the embedded goose agent at the OpenRouter provider.
 
-use serde::Serialize;
+use std::path::Path;
 
 /// Model routing + credentials for the OpenRouter gateway.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiSettings {
     /// `OPENROUTER_API_KEY`.
     pub api_key: String,
-    /// Text completion model.
+    /// Text completion model (also the goose agent's model).
     pub text_model: String,
     /// Vision model (image input → text output).
     pub vision_model: String,
@@ -32,9 +32,6 @@ impl Default for AiSettings {
 
 impl AiSettings {
     /// Read settings from the process environment (after `.env` has been loaded).
-    ///
-    /// `BIXEL_TEXT_MODEL`, `BIXEL_VISION_MODEL` and `BIXEL_IMAGE_MODEL` override
-    /// the defaults; `OPENROUTER_API_KEY` is required for model-backed skills.
     pub fn from_env() -> Self {
         let mut s = AiSettings::default();
         if let Ok(v) = std::env::var("OPENROUTER_API_KEY") {
@@ -73,44 +70,31 @@ impl AiSettings {
         bixel_core::config::load_env(None, false);
         Self::from_env()
     }
-}
 
-/// A single model entry in the declarative provider JSON.
-#[derive(Serialize)]
-struct DeclModel<'a> {
-    name: &'a str,
-    context_limit: u32,
-}
+    /// The OpenRouter host (origin only, no `/api/v1` path) consumed by goose's
+    /// `openrouter` provider.
+    pub fn openrouter_host(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        match base.strip_suffix("/api/v1") {
+            Some(host) => host.to_string(),
+            None => base.to_string(),
+        }
+    }
 
-/// The declarative-provider JSON for OpenRouter, resolved by the goose SDK.
-///
-/// OpenRouter is an OpenAI-compatible gateway, so `engine: "openai"` and the
-/// `OPENROUTER_API_KEY` env placeholder work out of the box.
-pub fn openrouter_provider_json(settings: &AiSettings) -> String {
-    let models = [
-        DeclModel { name: &settings.text_model, context_limit: 128_000 },
-        DeclModel { name: &settings.vision_model, context_limit: 128_000 },
-        DeclModel { name: &settings.image_model, context_limit: 128_000 },
-    ];
-    // De-duplicate by name (a model may serve more than one role).
-    let mut seen = std::collections::HashSet::new();
-    let models: Vec<_> = models
-        .into_iter()
-        .filter(|m| seen.insert(m.name.to_string()))
-        .collect();
-
-    serde_json::json!({
-        "name": "openrouter",
-        "engine": "openai",
-        "display_name": "OpenRouter",
-        "description": "OpenRouter multi-model gateway (text, vision, image)",
-        "api_key_env": "OPENROUTER_API_KEY",
-        "base_url": settings.base_url,
-        "models": models,
-        "supports_streaming": true,
-        "requires_auth": true,
-    })
-    .to_string()
+    /// Apply goose's configuration through the process environment.
+    ///
+    /// goose's `Config` resolves values from the environment (uppercased keys),
+    /// so this is how the embedded agent is pointed at OpenRouter. `data_dir`
+    /// (via `GOOSE_PATH_ROOT`) isolates goose's config/state/session SQLite so
+    /// the host owns the location and no user `~/.config/goose` is touched.
+    pub fn apply_goose_env(&self, data_dir: &Path) {
+        std::env::set_var("GOOSE_PATH_ROOT", data_dir);
+        std::env::set_var("GOOSE_DISABLE_KEYRING", "1");
+        std::env::set_var("GOOSE_PROVIDER", "openrouter");
+        std::env::set_var("GOOSE_MODEL", &self.text_model);
+        std::env::set_var("OPENROUTER_API_KEY", &self.api_key);
+        std::env::set_var("OPENROUTER_HOST", self.openrouter_host());
+    }
 }
 
 #[cfg(test)]
@@ -118,23 +102,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_json_is_valid_declarative_shape() {
-        let settings = AiSettings::default();
-        let json = openrouter_provider_json(&settings);
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(value["engine"], "openai");
-        assert_eq!(value["api_key_env"], "OPENROUTER_API_KEY");
-        assert_eq!(value["base_url"], "https://openrouter.ai/api/v1");
-        let models = value["models"].as_array().unwrap();
-        assert!(models.iter().any(|m| m["name"] == "meta/muse-spark-1.3"));
+    fn openrouter_host_strips_api_v1() {
+        let s = AiSettings::default();
+        assert_eq!(s.openrouter_host(), "https://openrouter.ai");
     }
 
     #[test]
-    fn from_env_reads_overrides() {
-        // Use unique env keys to avoid colliding with a real environment.
-        std::env::set_var("BIXEL_TEXT_MODEL", "test/text-model");
-        let s = AiSettings::from_env();
-        assert_eq!(s.text_model, "test/text-model");
-        std::env::remove_var("BIXEL_TEXT_MODEL");
+    fn openrouter_host_handles_custom_base() {
+        let s = AiSettings {
+            base_url: "https://proxy.example.com/api/v1".into(),
+            ..AiSettings::default()
+        };
+        assert_eq!(s.openrouter_host(), "https://proxy.example.com");
     }
 }

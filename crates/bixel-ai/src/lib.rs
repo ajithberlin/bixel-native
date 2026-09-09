@@ -1,9 +1,9 @@
 //! # bixel-ai
 //!
-//! AI assistant engine for Bixel Studio. Wraps the [goose SDK](https://goose-docs.ai)
-//! (`goose-sdk`) to talk to OpenRouter — a single OpenAI-compatible endpoint
-//! that routes *text*, *vision* and *image* models — and exposes a set of
-//! pixel-art **skills**:
+//! AI assistant engine for Bixel Studio. Embeds the **full goose agent**
+//! (`goose`) — its agent loop, tool-calling, extension and skill systems — over
+//! the OpenRouter provider, and exposes Bixel's pixel-art **skills** as a goose
+//! tool extension:
 //!
 //! * `generate_art` / `pixel_image_gen` — text-to-image generation.
 //! * `spritesheet` — text-to-spritesheet generation + grid slicing.
@@ -28,17 +28,20 @@
 //! BIXEL_IMAGE_MODEL=google/gemini-3-pro-image
 //! ```
 //!
-//! Deterministic skills (compress, reduce colors, remove background, slicing,
-//! packing) run locally and are unit-tested; model-backed skills require a
-//! valid key and network.
+//! Deterministic skills run locally (no network); model-backed skills call the
+//! OpenRouter image endpoints. The goose agent handles the chat loop, tool
+//! execution and session state.
 
+pub mod agent;
 pub mod config;
-pub mod engine;
 pub mod error;
 pub mod image;
+pub mod image_gen;
+pub mod native_stream;
+pub mod skill_server;
 pub mod skills;
 
+pub use agent::GooseAgent;
 pub use config::AiSettings;
-pub use engine::{Engine, StreamEvent};
 pub use error::AiError;
 pub use image::RgbaImage;

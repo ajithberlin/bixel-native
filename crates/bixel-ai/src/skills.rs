@@ -6,9 +6,9 @@
 
 use serde::Serialize;
 
-use crate::engine::Engine;
 use crate::error::AiError;
 use crate::image::{self, PackAnchor, RgbaImage};
+use crate::image_gen::ImageGen;
 
 /// The model role a skill needs (or `None` for local/deterministic skills).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -154,19 +154,20 @@ impl Skills {
         spec(kind)
     }
 
-    /// Run a skill. Deterministic skills ignore `engine` (pass `None`).
+    /// Run a skill. Deterministic skills ignore `gen` (pass `None`); model-backed
+    /// skills need an [`ImageGen`] client.
     pub fn run(
-        engine: Option<&Engine>,
+        gen: Option<&ImageGen>,
         kind: SkillKind,
         input: SkillInput,
     ) -> Result<SkillOutput, AiError> {
         match kind {
-            SkillKind::GenerateArt => generate_art(require_engine(engine)?, input),
-            SkillKind::Spritesheet => spritesheet(require_engine(engine)?, input),
-            SkillKind::NextFrame => next_frame(require_engine(engine)?, input),
+            SkillKind::GenerateArt => generate_art(require_gen(gen)?, input),
+            SkillKind::Spritesheet => spritesheet(require_gen(gen)?, input),
+            SkillKind::NextFrame => next_frame(require_gen(gen)?, input),
             SkillKind::Compress => compress(input),
             SkillKind::RemoveBackground => remove_background(input),
-            SkillKind::PixelImageGen => pixel_image_gen(require_engine(engine)?, input),
+            SkillKind::PixelImageGen => pixel_image_gen(require_gen(gen)?, input),
             SkillKind::PixelReduceColors => pixel_reduce_colors(input),
             SkillKind::PixelFileCompressor => pixel_file_compressor(input),
             SkillKind::PixelRemoveBg => pixel_remove_bg(input),
@@ -184,8 +185,8 @@ impl Skills {
     }
 }
 
-fn require_engine(engine: Option<&Engine>) -> Result<&Engine, AiError> {
-    engine.ok_or_else(|| AiError::Config("this skill requires a configured AI engine".into()))
+fn require_gen(gen: Option<&ImageGen>) -> Result<&ImageGen, AiError> {
+    gen.ok_or_else(|| AiError::Config("this skill requires a configured image model".into()))
 }
 
 fn spec(kind: SkillKind) -> SkillSpec {
@@ -534,17 +535,17 @@ fn param_usize(input: &SkillInput, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn generate_art(engine: &Engine, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn generate_art(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
     let prompt = build_art_prompt(&input);
-    let image = engine.generate_image(&prompt, None)?;
+    let image = gen.generate_image(&prompt, None)?;
     Ok(SkillOutput { image: Some(image), ..Default::default() })
 }
 
-fn spritesheet(engine: &Engine, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn spritesheet(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
     let cols = param_usize(&input, "cols", 4).max(1);
     let rows = param_usize(&input, "rows", 1).max(1);
     let prompt = build_spritesheet_prompt(&input, cols, rows);
-    let sheet = engine.generate_image(&prompt, None)?;
+    let sheet = gen.generate_image(&prompt, None)?;
     let frames = image::slice_grid(&sheet, cols.max(1), rows.max(1));
     Ok(SkillOutput {
         image: Some(sheet),
@@ -553,21 +554,21 @@ fn spritesheet(engine: &Engine, input: SkillInput) -> Result<SkillOutput, AiErro
     })
 }
 
-fn next_frame(engine: &Engine, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn next_frame(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
     let current = require_image(&input)?;
     let prompt = build_next_frame_prompt(&input);
-    let frame = engine.generate_image(&prompt, Some(current))?;
+    let frame = gen.generate_image(&prompt, Some(current))?;
     Ok(SkillOutput { image: Some(frame), ..Default::default() })
 }
 
-fn pixel_image_gen(engine: &Engine, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn pixel_image_gen(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
     let prompt = build_pixel_image_prompt(&input);
     let reference = if let Some(img) = &input.image {
         Some(img.clone())
     } else {
         None
     };
-    let image = engine.generate_image(&prompt, reference.as_ref())?;
+    let image = gen.generate_image(&prompt, reference.as_ref())?;
     Ok(SkillOutput { image: Some(image), ..Default::default() })
 }
 

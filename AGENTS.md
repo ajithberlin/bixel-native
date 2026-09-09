@@ -26,16 +26,18 @@ Swift / SwiftUI  →  Metal (MTKView)  →  Rust core (bixel-core)
 ## Stack
 
 - **Rust** (`crates/bixel-core`, `crates/bixel-ai`, `crates/bixel-ffi`) — edition
-  2021, Cargo workspace. `bixel-core` is the domain engine; `bixel-ai` wraps the
-  [goose SDK](https://goose-docs.ai) (`goose-sdk`, `uniffi` feature) to talk to
-  OpenRouter; `bixel-ffi` is the hand-written `extern "C"` ABI over both.
+  2021, Cargo workspace. `bixel-core` is the domain engine; `bixel-ai` embeds the
+  **full goose agent** (`goose` crate, git dep on `aaif-goose/goose`) over the
+  OpenRouter provider and exposes pixel-art skills as a goose tool extension;
+  `bixel-ffi` is the hand-written `extern "C"` ABI over both.
 - **Swift** (`app/Bixel/`) — SwiftUI + MetalKit, macOS 13+, Procreate-style dark
   UI. No package manager beyond the Xcode project (generated from `project.yml`
   via XcodeGen).
 - **XcodeGen** — `project.yml` is the source of truth; `Bixel.xcodeproj` is
   generated (gitignored). A pre-build phase runs `scripts/build-rust.sh`.
-- **goose-sdk** requires linking `Security` + `CoreFoundation` frameworks
-  (rustls-platform-verifier); already wired in `project.yml`.
+- **goose** requires linking `Security` + `CoreFoundation` frameworks
+  (rustls-platform-verifier); already wired in `project.yml`. `goose` is built
+  with `default-features = false, features = ["rustls-tls"]` (aws-lc-rs → cmake).
 
 ## Repo map
 
@@ -44,7 +46,7 @@ project.yml          # XcodeGen spec (generates the .xcodeproj)
 cbindgen.toml        # header generation
 scripts/build-rust.sh  # cargo build --release + cbindgen + stage into generated/
 crates/bixel-core/   # platform-independent domain logic (+ tests/)
-crates/bixel-ai/     # goose SDK → OpenRouter + skills (+ tests/)
+crates/bixel-ai/     # embedded goose agent → OpenRouter + skills (+ tests/)
 crates/bixel-ffi/    # C ABI layer (core + ai)
 app/Bixel/           # SwiftUI + Metal frontend
 skills/              # skill manifests (JSON; mirror of bixel-ai::skills)
@@ -72,14 +74,17 @@ Module → original Python/JS source (porting reference):
 
 ## AI / skills
 
-The AI engine (`bixel-ai`) uses `goose_sdk::bindings::declarative_provider_from_json`
-with an OpenRouter JSON definition (engine `"openai"`, `api_key_env:
-"OPENROUTER_API_KEY"`). Models come from `.env`
-(`BIXEL_TEXT_MODEL`/`BIXEL_VISION_MODEL`/`BIXEL_IMAGE_MODEL`). Skills live in
-`bixel-ai/src/skills.rs` (registry + prompts) and `skills/*.json` (manifests):
+The AI engine (`bixel-ai`) embeds the full goose agent (`goose` crate): it builds
+a `goose::agents::Agent`, points it at the `openrouter` provider via env
+(`GOOSE_PROVIDER`, `GOOSE_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_HOST`), and
+drives `Agent::reply` while mapping `AgentEvent`s to FFI `NativeEvent`s
+(`agent.rs`). Models come from `.env`
+(`BIXEL_TEXT_MODEL`/`BIXEL_VISION_MODEL`/`BIXEL_IMAGE_MODEL`).
 
-- `generate_art`, `spritesheet`, `next_frame` — model-backed (image model).
-- `compress`, `remove_background` — deterministic, no network.
+Pixel-art skills are exposed to the agent as an in-process `rmcp` builtin
+extension (`skill_server.rs` → `run_skill` tool) that dispatches to the skill
+registry (`skills.rs`). Deterministic skills run locally; model-backed skills
+call the OpenRouter image endpoints (`image_gen.rs`).
 
 Rules: keep `bixel-core` free of goose/network deps; all AI/network code stays in
 `bixel-ai`. FFI for AI is in `crates/bixel-ffi/src/lib.rs` (search `bixel_ai_`).
@@ -127,3 +132,10 @@ xcodebuild -project Bixel.xcodeproj -scheme Bixel -configuration Debug \
   `xcodebuild -downloadComponent MetalToolchain`.
 - `cbindgen` emits two harmless `WARN: Cannot find a mangling for generic path`
   lines for the private `Real*` type aliases; the generated header is unaffected.
+- The embedded `goose` agent pulls `aws-lc-rs` (needs `cmake`), `sqlx`/SQLite
+  (bundled), and `tree-sitter` ×8 (bundled C parsers) — the release staticlib is
+  large (~80 MB) and `scripts/build-rust.sh` takes several minutes with LTO.
+  The app links `SystemConfiguration` (reqwest system-proxy) in addition to
+  `Security`/`CoreFoundation`.
+- `idna_adapter` is pinned to `=1.2.1` in `bixel-ai` (goose pins `icu_locale` to
+  2.1.1; `idna_adapter` 1.2.2 bumps `icu_normalizer` to 2.2+ and conflicts).

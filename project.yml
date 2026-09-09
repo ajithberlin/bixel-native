@@ -38,9 +38,10 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
-        # -lbixel links the Rust engine (which pulls in reqwest/rustls via the
-        # goose SDK); rustls-platform-verifier needs the Security framework.
-        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation"
+        # -lbixel links the Rust engine (embedded goose agent). rustls-platform-verifier
+        # needs Security/CoreFoundation; reqwest's system-proxy support needs
+        # SystemConfiguration.
+        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation -framework SystemConfiguration"
         ENABLE_BITCODE: NO
         # The Rust build phase needs to read/write target/, generated/ and the
         # cargo/rustup homes, which the user-script sandbox blocks.

@@ -548,16 +548,25 @@ pub unsafe extern "C" fn bixel_timeline_loop_mode(ptr: *const BixelTimeline) -> 
 
 use std::sync::OnceLock;
 
-static AI_ENGINE: OnceLock<Result<bixel_ai::Engine, String>> = OnceLock::new();
+use bixel_ai::native_stream::{NativeEvent, NativeRequest};
 
-fn ai_engine() -> Result<&'static bixel_ai::Engine, String> {
+static AI_ENGINE: OnceLock<Result<bixel_ai::GooseAgent, String>> = OnceLock::new();
+
+fn ai_engine() -> Result<&'static bixel_ai::GooseAgent, String> {
     AI_ENGINE
         .get_or_init(|| {
             let settings = bixel_ai::AiSettings::from_env_file();
-            bixel_ai::Engine::new(settings).map_err(|e| e.to_string())
+            bixel_ai::GooseAgent::new(settings).map_err(|e| e.to_string())
         })
         .as_ref()
         .map_err(|e| e.clone())
+}
+
+static IMAGE_GEN: OnceLock<bixel_ai::image_gen::ImageGen> = OnceLock::new();
+
+fn image_gen() -> &'static bixel_ai::image_gen::ImageGen {
+    IMAGE_GEN
+        .get_or_init(|| bixel_ai::image_gen::ImageGen::new(&bixel_ai::AiSettings::from_env_file()))
 }
 
 /// Load a `.env` file into the process environment (`null`/empty = auto-detect).
@@ -601,10 +610,24 @@ pub extern "C" fn bixel_ai_chat(prompt: *const c_char, system: *const c_char) ->
     } else {
         system
     };
-    let Ok(engine) = ai_engine() else { return std::ptr::null_mut(); };
-    match engine.chat(&prompt, &system) {
-        Ok(text) => out_cstr(text),
-        Err(_) => std::ptr::null_mut(),
+    let Ok(agent) = ai_engine() else { return std::ptr::null_mut(); };
+    let base = std::env::temp_dir().join("bixel-assistant");
+    let request = NativeRequest {
+        prompt,
+        system,
+        base: base.to_string_lossy().into_owned(),
+        images: vec![],
+    };
+    let mut text = String::new();
+    let result = agent.chat_stream(request, |event| {
+        if let NativeEvent::Text { delta, .. } = event {
+            text.push_str(&delta);
+        }
+        true
+    });
+    match result {
+        Ok(()) if !text.trim().is_empty() => out_cstr(text),
+        _ => std::ptr::null_mut(),
     }
 }
 
@@ -617,7 +640,6 @@ pub extern "C" fn bixel_ai_chat_stream(
     callback: Option<extern "C" fn(*const c_char, *mut std::ffi::c_void) -> bool>,
     context: *mut std::ffi::c_void,
 ) -> bool {
-    use bixel_ai::engine::native_stream::{NativeEvent, NativeRequest};
     let Some(callback) = callback else { return false; };
     let emit = |event: NativeEvent| {
         let json = serde_json::to_string(&event).unwrap_or_default();
@@ -626,7 +648,7 @@ pub extern "C" fn bixel_ai_chat_stream(
     };
     let result = (|| {
         let request: NativeRequest = serde_json::from_str(&arg_str(request_json)).map_err(|e| e.to_string())?;
-        ai_engine()?.native_chat(request, emit).map_err(|e| e.to_string())
+        ai_engine()?.chat_stream(request, emit).map_err(|e| e.to_string())
     })();
     if let Err(message) = result {
         emit(NativeEvent::Error { message });
@@ -649,8 +671,8 @@ pub extern "C" fn bixel_ai_model_info() -> *mut c_char {
 /// fresh with no prior context.
 #[no_mangle]
 pub extern "C" fn bixel_ai_chat_reset() {
-    if let Ok(engine) = ai_engine() {
-        engine.reset_chat();
+    if let Ok(agent) = ai_engine() {
+        agent.reset();
     }
 }
 
@@ -694,8 +716,7 @@ pub unsafe extern "C" fn bixel_ai_generate_art(
     out_len: *mut u64,
 ) -> *mut u8 {
     let prompt = arg_str(prompt);
-    let Ok(engine) = ai_engine() else { return std::ptr::null_mut(); };
-    match engine.generate_image(&prompt, None) {
+    match image_gen().generate_image(&prompt, None) {
         Ok(img) => match bixel_ai::image::encode_png(&img) {
             Ok(png) => unsafe { return_bytes(png, out_len) },
             Err(_) => std::ptr::null_mut(),
@@ -719,8 +740,7 @@ pub unsafe extern "C" fn bixel_ai_next_frame(
         return std::ptr::null_mut();
     };
     let prompt = arg_str(prompt);
-    let Ok(engine) = ai_engine() else { return std::ptr::null_mut(); };
-    match engine.generate_image(&prompt, Some(&current)) {
+    match image_gen().generate_image(&prompt, Some(&current)) {
         Ok(img) => match bixel_ai::image::encode_png(&img) {
             Ok(png) => unsafe { return_bytes(png, out_len) },
             Err(_) => std::ptr::null_mut(),
@@ -804,7 +824,7 @@ pub unsafe extern "C" fn bixel_ai_run_skill(
         params,
     };
 
-    let engine = if kind.is_deterministic() { None } else { ai_engine().ok() };
+    let engine = if kind.is_deterministic() { None } else { Some(image_gen()) };
     let output = bixel_ai::skills::Skills::run(engine, kind, input);
     match output {
         Ok(o) => out_cstr(bixel_ai::skills::skill_output_to_json(&o)),
