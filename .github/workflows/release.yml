@@ -1,0 +1,118 @@
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+      draft:
+        description: 'Mark release as draft'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: 'Mark release as pre-release'
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build & Release macOS App
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse Version
+        id: version
+        run: |
+          RAW_VER="${{ github.event.inputs.version || github.ref_name }}"
+          if [ -z "$RAW_VER" ]; then
+            RAW_VER="v1.0.0"
+          fi
+          CLEAN_VER="${RAW_VER#v}"
+          TAG="v${CLEAN_VER}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "clean_version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "Target Release Tag: ${TAG} (Version: ${CLEAN_VER})"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install build tools (xcodegen, cbindgen)
+        run: |
+          brew install xcodegen cbindgen
+
+      - name: Configure Version
+        run: |
+          sed -i '' "s/CFBundleShortVersionString: .*/CFBundleShortVersionString: \"${{ steps.version.outputs.clean_version }}\"/" project.yml
+          sed -i '' "s/CFBundleVersion: .*/CFBundleVersion: \"${{ github.run_number }}\"/" project.yml
+
+      - name: Generate Xcode Project
+        run: |
+          xcodegen generate
+
+      - name: Build Rust Core
+        run: |
+          ./scripts/build-rust.sh
+
+      - name: Build macOS App (Release)
+        run: |
+          xcodebuild -project Bixel.xcodeproj \
+            -scheme Bixel \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package DMG
+        run: |
+          chmod +x ./scripts/package-dmg.sh
+          ./scripts/package-dmg.sh --version "${{ steps.version.outputs.tag }}"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bixel-${{ steps.version.outputs.tag }}-macOS
+          path: |
+            build/dist/*.dmg
+            build/dist/*.sha256
+          retention-days: 14
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Bixel Studio ${{ steps.version.outputs.tag }}"
+          draft: ${{ github.event.inputs.draft == true || github.event.inputs.draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == true || github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            build/dist/*.dmg
+            build/dist/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

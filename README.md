@@ -152,7 +152,14 @@ open Bixel.xcodeproj
 #    …or…
 xcodebuild -project Bixel.xcodeproj -scheme Bixel -configuration Debug \
   -destination 'platform=macOS' build
+
+# 3. Package DMG installer
+scripts/package-dmg.sh --version v1.0.0 --build
 ```
+
+The DMG is written to `build/dist/Bixel-v1.0.0.dmg` with an accompanying `.sha256` checksum.
+You can also trigger builds and GitHub Releases automatically using the `.github/workflows/release.yml`
+workflow (via GitHub Actions `workflow_dispatch` or by pushing a `v*` tag).
 
 The Xcode build runs `scripts/build-rust.sh` as a pre-build phase, which builds
 the Rust core (`cargo build --release -p bixel-ffi`), generates `generated/bixel.h`

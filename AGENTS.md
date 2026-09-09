@@ -103,6 +103,7 @@ cbindgen --config cbindgen.toml --crate bixel-ffi --output generated/bixel.h
 xcodegen generate              # regenerate Bixel.xcodeproj from project.yml
 xcodebuild -project Bixel.xcodeproj -scheme Bixel -configuration Debug \
   -destination 'platform=macOS' build
+scripts/package-dmg.sh --version v1.0.0 --build  # build release & package DMG
 ```
 
 ## Conventions & rules
