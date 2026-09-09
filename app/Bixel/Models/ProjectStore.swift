@@ -40,13 +40,20 @@ final class ProjectStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
-    func create(name: String) {
+    func create(name: String, width: Int = 32, height: Int = 32) {
         guard !assistant.busy else { return }
         do {
             let value = try ProjectStorage.request(base: root, ["op": "create", "id": UUID().uuidString, "name": name])!
             let project = try JSONDecoder().decode(StudioProject.self, from: JSONSerialization.data(withJSONObject: value))
             refresh()
             try open(project)
+            // open() loads a saved document when one exists; a brand-new project
+            // gets a fresh document at the requested canvas size instead.
+            editor.pause()
+            editor.onDocumentChanged = nil
+            let editor = EditorModel(width: width, height: height)
+            self.editor = editor
+            editor.onDocumentChanged = { [weak self] in self?.saveDocument() }
             saveDocument()
         } catch { self.error = error.localizedDescription }
     }

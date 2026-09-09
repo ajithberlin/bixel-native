@@ -6,6 +6,8 @@
 // so a whole stroke becomes a single Rust FFI call (never per-pixel).
 
 import Foundation
+import AppKit
+import UniformTypeIdentifiers
 import Combine
 
 enum Tool: String, CaseIterable, Identifiable {
@@ -48,6 +50,14 @@ final class EditorModel: ObservableObject {
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
 
+    // Playback settings
+    @Published var fps: Double = 12 {
+        didSet { timeline.setFPS(Float(fps)) }
+    }
+    @Published var loopMode: LoopMode = .forward {
+        didSet { timeline.setLoopMode(loopMode) }
+    }
+
     let canvasChanged = PassthroughSubject<Void, Never>()
     var onDocumentChanged: (() -> Void)?
     private var frameCache: [Int: [UInt8]] = [:]
@@ -84,6 +94,7 @@ final class EditorModel: ObservableObject {
     }
 
     func addLayer() {
+        document.snapshot()
         activeLayer = document.addLayer()
         reloadLayers()
         commitChange(allFrames: true)
@@ -91,10 +102,21 @@ final class EditorModel: ObservableObject {
 
     func deleteLayer() {
         guard document.layerCount > 1 else { return }
+        document.snapshot()
         document.removeLayer(activeLayer)
         activeLayer = max(0, activeLayer - 1)
         reloadLayers()
         commitChange(allFrames: true)
+    }
+
+    func renameLayer(_ index: Int, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        document.snapshot()
+        document.renameLayer(index, name: trimmed)
+        reloadLayers()
+        objectWillChange.send()
+        onDocumentChanged?()
     }
 
     func toggleLayerVisibility(_ index: Int) {
@@ -225,11 +247,76 @@ final class EditorModel: ObservableObject {
 
     func duplicateFrame() {
         // Copy the current frame's active layer cel into a brand-new frame.
+        document.snapshot()
         let src = document.compositeRGBA(frame: frame)
         let newFrame = document.addFrame(durationMs: 125)
         document.loadImageData(src, width: width, height: height, layer: 0, frame: newFrame)
         frame = newFrame
         commitChange(allFrames: true)
+    }
+
+    func removeFrame() {
+        guard document.frameCount > 1 else { return }
+        document.snapshot()
+        document.removeFrame(frame)
+        frame = min(frame, document.frameCount - 1)
+        commitChange(allFrames: true)
+    }
+
+    /// Resize the canvas, preserving existing pixels anchored to the top-left.
+    func resizeCanvas(width newWidth: Int, height newHeight: Int) {
+        guard newWidth > 0, newHeight > 0, newWidth != width || newHeight != height else { return }
+        document.snapshot()
+        document.resize(width: newWidth, height: newHeight)
+        frame = min(frame, document.frameCount - 1)
+        commitChange(allFrames: true)
+    }
+
+    // MARK: - Export
+
+    /// Render the current frame at `scale`× and offer it as a PNG via the save panel.
+    func exportPNG(scale: Int = 4) {
+        let scale = max(1, scale)
+        let pixels = compositeCurrentFrame()
+        let w = width, h = height
+        var scaled = [UInt8](repeating: 0, count: w * scale * h * scale * 4)
+        for y in 0..<h * scale {
+            let srcRow = y / scale
+            for x in 0..<w * scale {
+                let src = (srcRow * w + x / scale) * 4
+                let dst = (y * w * scale + x) * 4
+                scaled[dst] = pixels[src]
+                scaled[dst + 1] = pixels[src + 1]
+                scaled[dst + 2] = pixels[src + 2]
+                scaled[dst + 3] = pixels[src + 3]
+            }
+        }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: w * scale,
+            pixelsHigh: h * scale,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: w * scale * 4,
+            bitsPerPixel: 32
+        ), let bitmap = rep.bitmapData else { return }
+        scaled.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                memcpy(bitmap, base, scaled.count)
+            }
+        }
+        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "frame-\(frame + 1)-\(w)x\(h)@\(scale)x.png"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? png.write(to: url)
+        }
     }
 
     func undo() { if document.undo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }

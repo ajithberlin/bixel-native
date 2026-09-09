@@ -50,6 +50,23 @@ extension View {
         self
             .buttonStyle(StudioButtonStyle())
     }
+
+    /// Floating capsule chrome (top bar, tool rail) — translucent material
+    /// with a hairline and soft shadow, Procreate-style.
+    func studioPill() -> some View {
+        self
+            .background(Capsule(style: .continuous).fill(.ultraThinMaterial))
+            .overlay(Capsule(style: .continuous).strokeBorder(StudioTheme.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+    }
+
+    /// Floating rounded panel (color/layers, assistant) over the canvas.
+    func studioPanel(radius: CGFloat = 14) -> some View {
+        self
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.regularMaterial))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(StudioTheme.hairline, lineWidth: 1))
+            .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
+    }
 }
 
 struct StudioButtonStyle: ButtonStyle {

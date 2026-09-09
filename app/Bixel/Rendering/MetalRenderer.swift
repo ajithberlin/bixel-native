@@ -1,20 +1,34 @@
 // MetalRenderer.swift
 //
-// Owns the Metal device, pipeline and the canvas texture. The Swift layer
-// hands it a flattened RGBA buffer (produced by the Rust core via
-// `Document.composite`) and it blits it to screen once per frame. This keeps
-// the per-pixel work in Rust and the pixel transfer to a single texture upload.
+// Owns the Metal device, pipeline and the canvas textures. The Swift layer
+// hands it flattened RGBA buffers (produced by the Rust core via
+// `Document.composite`) and it blits them once per frame, transformed by the
+// viewport uniforms — pan/zoom happen on the GPU, so the pixel buffers only
+// cross the boundary when the artwork itself changes.
 
 import Metal
 import MetalKit
+import simd
 
-final class MetalRenderer: NSObject, MTKViewDelegate {
+/// Mirrors `ViewportUniforms` in CanvasShaders.metal.
+struct ViewportUniforms {
+    var viewSize: SIMD2<Float>
+    var canvasSize: SIMD2<Float>
+    var origin: SIMD2<Float>
+    var scale: Float
+    var gridAlpha: Float
+    var onionAlpha: Float
+    var pad: Float = 0
+}
+
+final class MetalRenderer {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
     private let sampler: MTLSamplerState
 
     private var canvasTexture: MTLTexture?
+    private var onionTexture: MTLTexture?
     private var canvasWidth = 0
     private var canvasHeight = 0
 
@@ -46,27 +60,20 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         self.queue = queue
         self.sampler = sampler
-        super.init()
     }
 
-    /// Upload a flattened RGBA buffer as the canvas texture.
-    func updateCanvas(pixels: [UInt8], width: Int, height: Int) {
-        guard width > 0, height > 0 else { return }
+    private func makeTexture(width: Int, height: Int) -> MTLTexture? {
+        let texDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        texDescriptor.usage = [.shaderRead]
+        return device.makeTexture(descriptor: texDescriptor)
+    }
 
-        if canvasWidth != width || canvasHeight != height || canvasTexture == nil {
-            let texDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .rgba8Unorm,
-                width: width,
-                height: height,
-                mipmapped: false
-            )
-            texDescriptor.usage = [.shaderRead]
-            canvasTexture = device.makeTexture(descriptor: texDescriptor)
-            canvasWidth = width
-            canvasHeight = height
-        }
-
-        guard let texture = canvasTexture else { return }
+    private func upload(_ pixels: [UInt8], to texture: MTLTexture, width: Int, height: Int) {
         pixels.withUnsafeBytes { raw in
             if let base = raw.baseAddress {
                 texture.replace(
@@ -79,11 +86,33 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        // Nothing to pre-allocate; the fullscreen triangle adapts to any size.
+    /// Upload a flattened RGBA buffer as the canvas texture.
+    func updateCanvas(pixels: [UInt8], width: Int, height: Int) {
+        guard width > 0, height > 0 else { return }
+
+        if canvasWidth != width || canvasHeight != height || canvasTexture == nil {
+            canvasTexture = makeTexture(width: width, height: height)
+            canvasWidth = width
+            canvasHeight = height
+        }
+        guard let texture = canvasTexture else { return }
+        upload(pixels, to: texture, width: width, height: height)
     }
 
-    func draw(in view: MTKView) {
+    /// Upload the onion-skin (previous frame) texture; nil disables it.
+    func updateOnion(pixels: [UInt8]?, width: Int, height: Int) {
+        guard let pixels, width > 0, height > 0 else {
+            onionTexture = nil
+            return
+        }
+        if onionTexture == nil || onionTexture?.width != width || onionTexture?.height != height {
+            onionTexture = makeTexture(width: width, height: height)
+        }
+        guard let texture = onionTexture else { return }
+        upload(pixels, to: texture, width: width, height: height)
+    }
+
+    func draw(in view: MTKView, uniforms: ViewportUniforms) {
         guard
             let drawable = view.currentDrawable,
             let descriptor = view.currentRenderPassDescriptor,
@@ -94,8 +123,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             return
         }
 
+        var uniforms = uniforms
         encoder.setRenderPipelineState(pipeline)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ViewportUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
+        encoder.setFragmentTexture(onionTexture ?? texture, index: 1)
         encoder.setFragmentSamplerState(sampler, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()

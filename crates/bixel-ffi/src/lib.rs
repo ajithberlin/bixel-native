@@ -210,6 +210,11 @@ pub unsafe extern "C" fn bixel_doc_add_frame(ptr: *mut BixelDoc, duration_ms: u3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn bixel_doc_remove_frame(ptr: *mut BixelDoc, idx: u32) {
+    unsafe { doc(ptr) }.lock().unwrap().remove_frame(idx as usize);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn bixel_doc_snapshot(ptr: *mut BixelDoc) {
     unsafe { doc(ptr) }.lock().unwrap().snapshot();
 }
@@ -355,6 +360,15 @@ pub unsafe extern "C" fn bixel_doc_set_layer_visible(ptr: *mut BixelDoc, idx: u3
 #[no_mangle]
 pub unsafe extern "C" fn bixel_doc_remove_layer(ptr: *mut BixelDoc, idx: u32) {
     unsafe { doc(ptr) }.lock().unwrap().remove_layer(idx as usize);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_rename_layer(ptr: *mut BixelDoc, idx: u32, name: *const c_char) {
+    let name = arg_str(name);
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .rename_layer(idx as usize, &name);
 }
 
 // --------------------------------------------------------------- palette

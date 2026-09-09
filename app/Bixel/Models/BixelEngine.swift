@@ -110,6 +110,18 @@ final class Document: @unchecked Sendable {
         Int(bixel_doc_add_frame(handle, UInt32(durationMs)))
     }
 
+    func removeFrame(_ index: Int) {
+        bixel_doc_remove_frame(handle, UInt32(index))
+    }
+
+    func renameLayer(_ index: Int, name: String) {
+        bixel_doc_rename_layer(handle, UInt32(index), name)
+    }
+
+    func resize(width: Int, height: Int) {
+        bixel_doc_resize(handle, UInt32(width), UInt32(height))
+    }
+
     func snapshot() { bixel_doc_snapshot(handle) }
     @discardableResult
     func undo() -> Bool { bixel_doc_undo(handle) }
