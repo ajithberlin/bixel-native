@@ -122,7 +122,7 @@ final class Document: @unchecked Sendable {
         }
         var rgba = [UInt8](repeating: 0, count: bytes)
         let succeeded = rgba.withUnsafeMutableBufferPointer {
-            bixel_doc_pack_frames(handle, cols, $0.baseAddress, $0.count)
+            bixel_doc_pack_frames(handle, cols, $0.baseAddress, UInt($0.count))
         }
         guard succeeded else { throw StorageError.message("Cannot pack the document frames into a sprite sheet.") }
         return (rgba, sheetWidth, sheetHeight)
@@ -138,7 +138,7 @@ final class Document: @unchecked Sendable {
             throw StorageError.message("Invalid image placement dimensions or coordinates.")
         }
         let index = data.withUnsafeBufferPointer {
-            bixel_doc_place_image(handle, $0.baseAddress, $0.count, w, h, px, py, f, name)
+            bixel_doc_place_image(handle, $0.baseAddress, UInt($0.count), w, h, px, py, f, name)
         }
         guard index >= 0 else {
             throw StorageError.message("Cannot place this image. Check its pixel data, destination frame, and canvas overlap.")
@@ -155,7 +155,7 @@ final class Document: @unchecked Sendable {
             throw StorageError.message("Invalid tile placement dimensions or coordinates.")
         }
         let succeeded = data.withUnsafeBufferPointer {
-            bixel_doc_stamp_image(handle, $0.baseAddress, $0.count, w, h, px, py, l, f)
+            bixel_doc_stamp_image(handle, $0.baseAddress, UInt($0.count), w, h, px, py, l, f)
         }
         guard succeeded else {
             throw StorageError.message("Cannot stamp this tile. Check the image, canvas overlap, and destination layer lock.")
@@ -175,7 +175,7 @@ final class Document: @unchecked Sendable {
             throw StorageError.message("Sheet dimensions must be divisible by the cell size.")
         }
         let index = data.withUnsafeBufferPointer {
-            bixel_doc_import_sheet(handle, $0.baseAddress, $0.count, w, h, cw, ch, name)
+            bixel_doc_import_sheet(handle, $0.baseAddress, UInt($0.count), w, h, cw, ch, name)
         }
         guard index >= 0 else {
             throw StorageError.message("Cannot import this sheet. Check its pixel data and limit it to 4096 frames and 256 MB.")

@@ -930,7 +930,9 @@ mod preparation_tests {
         .unwrap();
         let image = output.image.unwrap();
         assert_eq!((image.width, image.height), (16, 16));
-        assert_eq!(image.pixel(0, 0)[3], 0);
+        // Opaque assets use a cover fit, so preparation does not invent
+        // transparent margins when the source and target aspect ratios differ.
+        assert_eq!(image.pixel(0, 0)[3], 255);
         assert_eq!(image.pixel(8, 8)[3], 255);
         assert_eq!(output.source_image.unwrap().data, source.data);
     }
@@ -1131,6 +1133,25 @@ fn fit_generated(source: &RgbaImage, width: usize, height: usize) -> RgbaImage {
     out
 }
 
+/// Fit an opaque asset without introducing transparent margins. The source is
+/// scaled to cover the target and the centered excess is cropped.
+fn fit_generated_opaque(source: &RgbaImage, width: usize, height: usize) -> RgbaImage {
+    let scale = (width as f64 / source.width as f64).max(height as f64 / source.height as f64);
+    let w = ((source.width as f64 * scale).round() as usize).max(width);
+    let h = ((source.height as f64 * scale).round() as usize).max(height);
+    let crop_x = w.saturating_sub(width) / 2;
+    let crop_y = h.saturating_sub(height) / 2;
+    let mut out = RgbaImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let sx = ((x + crop_x) * source.width / w).min(source.width - 1);
+            let sy = ((y + crop_y) * source.height / h).min(source.height - 1);
+            out.set_pixel(x, y, source.pixel(sx, sy));
+        }
+    }
+    out
+}
+
 /// Only remove a uniform edge-connected backdrop. Mixed edges can contain
 /// subject colors; preserving those pixels is safer than guessing a matte.
 fn prepare_matte(source: &RgbaImage) -> RgbaImage {
@@ -1184,7 +1205,7 @@ fn prepare_generated(
     let prepared = if let Some((cols, rows)) = grid {
         frames = image::slice_grid(&working, cols, rows);
         if let Some((w, h)) = target {
-            frames = frames.iter().map(|f| fit_generated(f, w, h)).collect();
+            frames = frames.iter().map(|f| if transparent { fit_generated(f, w, h) } else { fit_generated_opaque(f, w, h) }).collect();
             let mut sheet = RgbaImage::new(w * cols, h * rows);
             for (i, f) in frames.iter().enumerate() {
                 for y in 0..h {
@@ -1198,7 +1219,7 @@ fn prepare_generated(
             working.clone()
         }
     } else if let Some((w, h)) = target {
-        fit_generated(&working, w, h)
+        if transparent { fit_generated(&working, w, h) } else { fit_generated_opaque(&working, w, h) }
     } else {
         working.clone()
     };
