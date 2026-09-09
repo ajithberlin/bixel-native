@@ -13,6 +13,7 @@ struct TopBar: View {
     let onShowProjects: () -> Void
     @Binding var showPanel: Bool
     @Binding var showAI: Bool
+    @State private var showOnionSettings = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -76,10 +77,25 @@ struct TopBar: View {
                     Image(systemName: "grid")
                 }
                 .help("Pixel grid (G)")
-                Toggle(isOn: $viewport.onionSkin) {
-                    Image(systemName: "circle.dashed.inset.filled")
+
+                HStack(spacing: 0) {
+                    Toggle(isOn: $viewport.onionSkin) {
+                        Image(systemName: "circle.dashed.inset.filled")
+                    }
+                    .help("Onion skin — ghost previous frames")
+
+                    if viewport.onionSkin {
+                        Button { showOnionSettings = true } label: {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 7, weight: .bold))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Onion skin settings")
+                        .popover(isPresented: $showOnionSettings, arrowEdge: .bottom) {
+                            OnionSettings(viewport: viewport)
+                        }
+                    }
                 }
-                .help("Onion skin")
             }
             .toggleStyle(.button)
             .foregroundColor(StudioTheme.textSecondary)
@@ -135,5 +151,46 @@ struct TopBar: View {
         Rectangle()
             .fill(StudioTheme.hairline)
             .frame(width: 1, height: 18)
+    }
+}
+
+/// Onion-skin settings popover: ghost opacity and how many frames back to show.
+private struct OnionSettings: View {
+    @ObservedObject var viewport: CanvasViewport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Onion Skin")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(StudioTheme.textPrimary)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Opacity")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    Spacer()
+                    Text("\(Int((viewport.onionOpacity * 100).rounded()))%")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+                Slider(value: $viewport.onionOpacity, in: 0.1...0.8)
+                    .controlSize(.small)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Previous frames")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.textSecondary)
+                Picker("", selection: $viewport.onionFrames) {
+                    Text("1").tag(1)
+                    Text("2").tag(2)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            }
+        }
+        .padding(14)
+        .frame(width: 200)
     }
 }

@@ -18,6 +18,10 @@ final class CanvasViewport: ObservableObject {
     @Published var pan: CGPoint = .zero
     @Published var showGrid = true
     @Published var onionSkin = false
+    /// Ghost opacity for the most recent previous frame (0...1).
+    @Published var onionOpacity: Double = 0.32
+    /// How many previous frames to ghost (1 or 2; the older one fades more).
+    @Published var onionFrames: Int = 1
 
     static let minZoom: CGFloat = 0.25
     static let maxZoom: CGFloat = 64

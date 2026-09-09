@@ -85,7 +85,7 @@ pub struct RunSkillParams {
     /// Input image: a base64 data URL or a filename in the workspace.
     #[serde(default)]
     pub image: Option<String>,
-    /// Extra skill parameters (see each skill's schema).
+    /// Generation params: width and height (1..4096) explicitly requested output pixels; omit both to keep source dimensions. Sheets use frame_width/frame_height plus cols/rows instead. transparent defaults true for sprites; set false for opaque backgrounds or terrain. palette is color/style guidance. Never infer target dimensions from the active canvas.
     #[serde(default)]
     pub params: serde_json::Value,
 }
@@ -105,7 +105,7 @@ impl SkillServer {
 
     #[tool(
         name = "run_skill",
-        description = "Run a Bixel pixel-art skill. Skills: generate_art, spritesheet, next_frame, pixel_image_gen (image model); compress, remove_background, pixel_reduce_colors, pixel_file_compressor, pixel_remove_bg, pixel_8dir_character, pixel_animate_text, pixel_interpolate, pixel_9slice_splitter, pixel_spritesheet_gen, pixel_tileset_gen, pixel_game_ui_gen, pixel_ui_elements_gen, pixel_ui_kit_gen, pixel_game_asset_prep (local, no network). Returns saved image filenames."
+        description = "Run a Bixel pixel-art skill. Skills: generate_art, spritesheet, next_frame, pixel_image_gen (image model); compress, remove_background, pixel_reduce_colors, pixel_file_compressor, pixel_remove_bg, pixel_8dir_character, pixel_animate_text, pixel_interpolate, pixel_9slice_splitter, pixel_spritesheet_gen, pixel_tileset_gen, pixel_game_ui_gen, pixel_ui_elements_gen, pixel_ui_kit_gen, pixel_game_asset_prep (local, no network). Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites, false for opaque backgrounds; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Raw model sources are retained separately; prepared assets use aspect fit and transparent padding. Returns saved image filenames."
     )]
     pub async fn run_skill(
         &self,
@@ -164,6 +164,12 @@ impl SkillServer {
             Ok(name)
         };
 
+        if let Some(img) = &output.source_image {
+            match push(img, &format!("{}_source", kind)) {
+                Ok(name) => saved.push(name),
+                Err(e) => return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e, None)),
+            }
+        }
         if let Some(img) = &output.image {
             match push(img, &kind.to_string()) {
                 Ok(name) => saved.push(name),

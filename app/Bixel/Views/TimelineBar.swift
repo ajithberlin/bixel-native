@@ -12,7 +12,28 @@ struct TimelineBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !collapsed {
+            if collapsed {
+                // Slim collapsed pill — stays visible and clickable so the
+                // timeline can always be brought back.
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { collapsed = false }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 9, weight: .bold))
+                        Text("Timeline")
+                            .font(.system(size: 10, weight: .semibold))
+                        Text("·  \(model.frameCount) frame\(model.frameCount == 1 ? "" : "s")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(StudioTheme.textDisabled)
+                    }
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 26)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
                 HStack(spacing: 12) {
                     playbackControls
                     divider
@@ -38,24 +59,26 @@ struct TimelineBar: View {
                 .strokeBorder(StudioTheme.hairline, lineWidth: 1)
         )
         .overlay(alignment: .topTrailing) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) { collapsed.toggle() }
-            } label: {
-                Image(systemName: collapsed ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(StudioTheme.textSecondary)
-                    .frame(width: 40, height: 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.regularMaterial)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(StudioTheme.hairline, lineWidth: 1)
-                    )
+            if !collapsed {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { collapsed = true }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .frame(width: 40, height: 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.regularMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(StudioTheme.hairline, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .offset(y: -8)
+                .help("Hide timeline")
             }
-            .buttonStyle(.plain)
-            .offset(y: collapsed ? 0 : -8)
-            .help(collapsed ? "Show timeline" : "Hide timeline")
         }
         .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
@@ -148,10 +171,6 @@ struct TimelineBar: View {
                 Image(systemName: "plus.rectangle.on.rectangle")
             }
             .help("Add frame")
-            Button { model.duplicateFrame() } label: {
-                Image(systemName: "plus.square.on.square")
-            }
-            .help("Duplicate frame")
             Button { model.removeFrame() } label: {
                 Image(systemName: "trash")
             }

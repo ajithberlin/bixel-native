@@ -280,6 +280,56 @@ pub unsafe extern "C" fn bixel_doc_load_image(
         .load_image_data(slice, width as usize, height as usize, layer as usize, frame as usize);
 }
 
+/// Place RGBA data on a new layer without resizing. Returns layer index, or -1.
+/// `data` must point to `data_len` readable bytes. Records one undo snapshot.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_place_image(
+    ptr: *mut BixelDoc, data: *const u8, data_len: usize,
+    width: u32, height: u32, x: i32, y: i32, frame: u32, name: *const c_char,
+) -> i32 {
+    if ptr.is_null() || data.is_null() || data_len > 256 * 1024 * 1024 { return -1; }
+    let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4));
+    if expected != Some(data_len) || data_len == 0 { return -1; }
+    let data = unsafe { std::slice::from_raw_parts(data, data_len) };
+    let name = if name.is_null() { "Placed image" } else { unsafe { CStr::from_ptr(name) }.to_str().unwrap_or("Placed image") };
+    unsafe { doc(ptr) }.lock().unwrap()
+        .place_image_data(data, width as usize, height as usize, x, y, frame as usize, name)
+        .map_or(-1, |index| index as i32)
+}
+
+/// Replace an RGBA region on an existing layer. Host owns undo snapshots.
+/// Returns false for invalid input, unavailable layer, or no canvas overlap.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_stamp_image(
+    ptr: *mut BixelDoc, data: *const u8, data_len: usize,
+    width: u32, height: u32, x: i32, y: i32, layer: u32, frame: u32,
+) -> bool {
+    if ptr.is_null() || data.is_null() || data_len > 256 * 1024 * 1024 { return false; }
+    let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4));
+    if expected != Some(data_len) || data_len == 0 { return false; }
+    let data = unsafe { std::slice::from_raw_parts(data, data_len) };
+    unsafe { doc(ptr) }.lock().unwrap()
+        .stamp_image_data(data, width as usize, height as usize, x, y, layer as usize, frame as usize)
+        .is_ok()
+}
+
+/// Import a regular RGBA sheet to a new layer, starting at frame zero.
+/// Cell size must match the canvas. Returns layer index, or -1; one undo step.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_import_sheet(
+    ptr: *mut BixelDoc, data: *const u8, data_len: usize,
+    width: u32, height: u32, cell_width: u32, cell_height: u32, name: *const c_char,
+) -> i32 {
+    if ptr.is_null() || data.is_null() || data_len > 256 * 1024 * 1024 { return -1; }
+    let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4));
+    if expected != Some(data_len) || data_len == 0 { return -1; }
+    let data = unsafe { std::slice::from_raw_parts(data, data_len) };
+    let name = if name.is_null() { "Imported sheet" } else { unsafe { CStr::from_ptr(name) }.to_str().unwrap_or("Imported sheet") };
+    unsafe { doc(ptr) }.lock().unwrap()
+        .import_sheet_data(data, width as usize, height as usize, cell_width as usize, cell_height as usize, name)
+        .map_or(-1, |index| index as i32)
+}
+
 /// Rasterise a polyline stroke with a round brush (one FFI call per gesture).
 #[no_mangle]
 pub unsafe extern "C" fn bixel_doc_stroke(

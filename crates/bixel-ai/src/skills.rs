@@ -136,6 +136,8 @@ pub struct SkillInput {
 /// Output of a skill run: optional text, single image, and/or sliced frames.
 #[derive(Debug, Clone, Default)]
 pub struct SkillOutput {
+    /// Unmodified model output, kept separately from the prepared asset.
+    pub source_image: Option<RgbaImage>,
     pub text: String,
     pub image: Option<RgbaImage>,
     pub frames: Vec<RgbaImage>,
@@ -478,8 +480,22 @@ fn spec_gen(
     description: &str,
     category: &'static str,
     model: ModelRole,
-    params_schema: serde_json::Value,
+    mut params_schema: serde_json::Value,
 ) -> SkillSpec {
+    if model == ModelRole::Image {
+        let props = params_schema["properties"].as_object_mut().unwrap();
+        let dimensions = if kind == SkillKind::Spritesheet { ["frame_width", "frame_height"] } else { ["width", "height"] };
+        for key in dimensions {
+            props.insert(key.into(), serde_json::json!({"type":"integer","minimum":1,"maximum":4096,"description":"Explicit output pixels per asset/frame; supply both dimensions together. Omit both to retain source size."}));
+        }
+        if kind == SkillKind::Spritesheet {
+            for key in ["cols", "rows"] {
+                props.insert(key.into(), serde_json::json!({"type":"integer","minimum":1,"maximum":64,"description":"Grid count; at most 256 total cells, prepared sheet at most 4096 pixels per side"}));
+            }
+        }
+        props.insert("transparent".into(), serde_json::json!({"type":"boolean","default":true,"description":"Sprite background transparency; false for opaque backgrounds/terrain."}));
+        props.insert("palette".into(), serde_json::json!({"type":"string","description":"Palette colors/style guidance for generation"}));
+    }
     SkillSpec {
         id: kind.to_string(),
         name: name.into(),
@@ -536,40 +552,38 @@ fn param_usize(input: &SkillInput, key: &str, default: usize) -> usize {
 }
 
 fn generate_art(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
-    let prompt = build_art_prompt(&input);
+    generation_target(&input, None)?;
+    let prompt = format!("{} {}", build_art_prompt(&input), generation_guidance(&input));
     let image = gen.generate_image(&prompt, None)?;
-    Ok(SkillOutput { image: Some(image), ..Default::default() })
+    prepare_generated(image, &input, None)
 }
 
 fn spritesheet(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
-    let cols = param_usize(&input, "cols", 4).max(1);
-    let rows = param_usize(&input, "rows", 1).max(1);
-    let prompt = build_spritesheet_prompt(&input, cols, rows);
+    let (cols, rows) = generation_grid(&input)?;
+    generation_target(&input, Some((cols, rows)))?;
+    let prompt = format!("{} {}", build_spritesheet_prompt(&input, cols, rows), generation_guidance(&input));
     let sheet = gen.generate_image(&prompt, None)?;
-    let frames = image::slice_grid(&sheet, cols.max(1), rows.max(1));
-    Ok(SkillOutput {
-        image: Some(sheet),
-        frames,
-        ..Default::default()
-    })
+    prepare_generated(sheet, &input, Some((cols, rows)))
 }
 
 fn next_frame(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
     let current = require_image(&input)?;
-    let prompt = build_next_frame_prompt(&input);
+    generation_target(&input, None)?;
+    let prompt = format!("{} {}", build_next_frame_prompt(&input), generation_guidance(&input));
     let frame = gen.generate_image(&prompt, Some(current))?;
-    Ok(SkillOutput { image: Some(frame), ..Default::default() })
+    prepare_generated(frame, &input, None)
 }
 
 fn pixel_image_gen(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
-    let prompt = build_pixel_image_prompt(&input);
+    generation_target(&input, None)?;
+    let prompt = format!("{} {}", build_pixel_image_prompt(&input), generation_guidance(&input));
     let reference = if let Some(img) = &input.image {
         Some(img.clone())
     } else {
         None
     };
     let image = gen.generate_image(&prompt, reference.as_ref())?;
-    Ok(SkillOutput { image: Some(image), ..Default::default() })
+    prepare_generated(image, &input, None)
 }
 
 fn compress(input: SkillInput) -> Result<SkillOutput, AiError> {
@@ -845,7 +859,7 @@ fn build_pixel_image_prompt(input: &SkillInput) -> String {
     if let Some(pal) = input.params.get("palette").and_then(|v| v.as_str()) {
         extra.push_str(&format!(" Palette: {pal}. "));
     }
-    if input.params.get("transparent").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if input.params.get("transparent").and_then(|v| v.as_bool()).unwrap_or(true) {
         extra.push_str(" Fully transparent background. ");
     }
     format!(
@@ -859,7 +873,7 @@ fn build_spritesheet_prompt(input: &SkillInput, cols: usize, rows: usize) -> Str
     format!(
         "Create a sprite sheet arranged on a uniform grid of {cols} columns by {rows} rows. \
          Every cell holds one animation frame of: {}\nKeep each frame the same size, aligned to \
-         the grid, with a solid background color for easy slicing. No text or watermark.",
+         the grid, with consistent empty margins and no gutters. No text or watermark.",
         input.prompt
     )
 }
@@ -889,7 +903,330 @@ pub fn skill_output_to_json(output: &SkillOutput) -> String {
     serde_json::json!({
         "text": output.text,
         "image": image,
+        "source_image": output.source_image.as_ref().map(b64),
         "frames": frames,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod preparation_tests {
+    use super::*;
+    fn input(params: serde_json::Value) -> SkillInput {
+        SkillInput {
+            params,
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn explicit_size_fits_and_retains_source() {
+        let mut source = RgbaImage::new(80, 40);
+        source.data.fill(255);
+        let output = prepare_generated(
+            source.clone(),
+            &input(serde_json::json!({"width":16,"height":16,"transparent":false})),
+            None,
+        )
+        .unwrap();
+        let image = output.image.unwrap();
+        assert_eq!((image.width, image.height), (16, 16));
+        assert_eq!(image.pixel(0, 0)[3], 0);
+        assert_eq!(image.pixel(8, 8)[3], 255);
+        assert_eq!(output.source_image.unwrap().data, source.data);
+    }
+    #[test]
+    fn no_target_keeps_original_and_reports_alpha() {
+        let mut source = RgbaImage::new(4, 4);
+        source.data.fill(255);
+        let output =
+            prepare_generated(source.clone(), &input(serde_json::json!({})), None).unwrap();
+        assert_eq!(output.image.unwrap().data, source.data);
+        assert!(output.text.contains("opaque"));
+    }
+    #[test]
+    fn uniform_backdrop_removed_without_erasing_enclosed_same_color() {
+        let mut source = RgbaImage::new(5, 5);
+        source.data.fill(255);
+        for y in 1..4 {
+            for x in 1..4 {
+                source.set_pixel(x, y, [255, 0, 0, 255]);
+            }
+        }
+        source.set_pixel(2, 2, [255, 255, 255, 255]);
+        let output = prepare_generated(
+            source.clone(),
+            &input(serde_json::json!({"width":5,"height":5})),
+            None,
+        )
+        .unwrap();
+        let image = output.image.unwrap();
+        assert_eq!(image.pixel(0, 0)[3], 0);
+        assert_eq!(image.pixel(2, 2), [255, 255, 255, 255]);
+        assert_eq!(output.source_image.unwrap(), source);
+    }
+    #[test]
+    fn mixed_border_and_existing_alpha_are_preserved() {
+        let mut source = RgbaImage::new(3, 3);
+        source.data.fill(255);
+        source.set_pixel(0, 0, [20, 30, 40, 255]);
+        assert_eq!(prepare_matte(&source), source);
+        source.set_pixel(0, 0, [20, 30, 40, 0]);
+        assert_eq!(prepare_matte(&source), source);
+    }
+    #[test]
+    fn invalid_targets_rejected() {
+        for params in [
+            serde_json::json!({"width":16}),
+            serde_json::json!({"width":0,"height":16}),
+            serde_json::json!({"width":"16","height":16}),
+            serde_json::json!({"width":999999,"height":16}),
+        ] {
+            assert!(generation_target(&input(params), None).is_err());
+        }
+    }
+    #[test]
+    fn invalid_sheet_keeps_source_for_review() {
+        let source = RgbaImage::new(7, 5);
+        let output = prepare_generated(
+            source.clone(),
+            &input(serde_json::json!({"frame_width":8,"frame_height":8})),
+            Some((2, 1)),
+        )
+        .unwrap();
+        assert!(output.frames.is_empty());
+        assert_eq!(output.source_image.unwrap(), source);
+        assert!(output.text.contains("No frames prepared"));
+        assert!(generation_grid(&input(serde_json::json!({"cols":0}))).is_err());
+        assert!(generation_grid(&input(serde_json::json!({"cols":64,"rows":64}))).is_err());
+        assert!(generation_target(
+            &input(serde_json::json!({"frame_width":4096,"frame_height":32})),
+            Some((2, 1))
+        )
+        .is_err());
+    }
+    #[test]
+    fn sheet_cells_use_explicit_frame_budget() {
+        let output = prepare_generated(
+            RgbaImage::new(80, 40),
+            &input(serde_json::json!({"frame_width":8,"frame_height":12})),
+            Some((2, 1)),
+        )
+        .unwrap();
+        assert_eq!(output.frames.len(), 2);
+        assert!(output.frames.iter().all(|f| f.width == 8 && f.height == 12));
+        let sheet = output.image.unwrap();
+        assert_eq!((sheet.width, sheet.height), (16, 12));
+    }
+}
+
+fn generation_grid(input: &SkillInput) -> Result<(usize, usize), AiError> {
+    let read = |key: &str, default| -> Result<usize, AiError> {
+        match input.params.get(key) {
+            None => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .filter(|n| (1..=64).contains(n))
+                .map(|n| n as usize)
+                .ok_or_else(|| AiError::Image(format!("{key} must be an integer from 1 to 64"))),
+        }
+    };
+    let grid = (read("cols", 4)?, read("rows", 1)?);
+    if grid.0 * grid.1 > 256 {
+        return Err(AiError::Image(
+            "At most 256 sheet cells are supported".into(),
+        ));
+    }
+    Ok(grid)
+}
+
+fn generation_target(
+    input: &SkillInput,
+    grid: Option<(usize, usize)>,
+) -> Result<Option<(usize, usize)>, AiError> {
+    if input
+        .params
+        .get("transparent")
+        .is_some_and(|v| !v.is_boolean())
+    {
+        return Err(AiError::Image("transparent must be a boolean".into()));
+    }
+    let (wk, hk) = if grid.is_some() {
+        ("frame_width", "frame_height")
+    } else {
+        ("width", "height")
+    };
+    if grid.is_some()
+        && (input.params.get("width").is_some() || input.params.get("height").is_some())
+    {
+        return Err(AiError::Image(
+            "Sheets require frame_width and frame_height, not whole-image width/height".into(),
+        ));
+    }
+    let (w, h) = (input.params.get(wk), input.params.get(hk));
+    if w.is_none() && h.is_none() {
+        return Ok(None);
+    }
+    let read = |v: Option<&serde_json::Value>| {
+        v.and_then(|v| v.as_u64())
+            .filter(|n| (1..=4096).contains(n))
+            .map(|n| n as usize)
+    };
+    let (Some(w), Some(h)) = (read(w), read(h)) else {
+        return Err(AiError::Image(format!(
+            "Supply both {wk} and {hk} as integers from 1 to 4096"
+        )));
+    };
+    let (cols, rows) = grid.unwrap_or((1, 1));
+    if w * cols > 4096 || h * rows > 4096 {
+        return Err(AiError::Image(
+            "Prepared image must fit within 4096 × 4096 pixels".into(),
+        ));
+    }
+    Ok(Some((w, h)))
+}
+
+fn generation_guidance(input: &SkillInput) -> String {
+    let mut guidance = if input
+        .params
+        .get("transparent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+    {
+        "Use a truly transparent background, never a painted checkerboard. If alpha is unavailable, use a single flat contrasting backdrop with clear margins; keep the subject away from all edges.".to_owned()
+    } else {
+        "Create an opaque background as requested.".to_owned()
+    };
+    let w = input
+        .params
+        .get("frame_width")
+        .or_else(|| input.params.get("width"));
+    let h = input
+        .params
+        .get("frame_height")
+        .or_else(|| input.params.get("height"));
+    if let (Some(w), Some(h)) = (w, h) {
+        guidance.push_str(&format!(" Final pixel budget per asset/frame is {w} × {h}: use a readable silhouette and large pixel clusters; avoid fine detail that disappears at this size."));
+    }
+    if let Some(palette) = input.params.get("palette").and_then(|v| v.as_str()) {
+        guidance.push_str(&format!(" Palette: {palette}."));
+    }
+    guidance
+}
+
+/// Fit using nearest-neighbor sampling and transparent, centered padding.
+fn fit_generated(source: &RgbaImage, width: usize, height: usize) -> RgbaImage {
+    let scale = (width as f64 / source.width as f64).min(height as f64 / source.height as f64);
+    let w = ((source.width as f64 * scale).round() as usize).clamp(1, width);
+    let h = ((source.height as f64 * scale).round() as usize).clamp(1, height);
+    let mut out = RgbaImage::new(width, height);
+    for y in 0..h {
+        for x in 0..w {
+            out.set_pixel(
+                x + (width - w) / 2,
+                y + (height - h) / 2,
+                source.pixel(x * source.width / w, y * source.height / h),
+            );
+        }
+    }
+    out
+}
+
+/// Only remove a uniform edge-connected backdrop. Mixed edges can contain
+/// subject colors; preserving those pixels is safer than guessing a matte.
+fn prepare_matte(source: &RgbaImage) -> RgbaImage {
+    if source.data.chunks_exact(4).any(|p| p[3] < 255) {
+        return source.clone();
+    }
+    let color = source.pixel(0, 0);
+    let uniform = (0..source.width)
+        .all(|x| source.pixel(x, 0) == color && source.pixel(x, source.height - 1) == color)
+        && (0..source.height)
+            .all(|y| source.pixel(0, y) == color && source.pixel(source.width - 1, y) == color);
+    if !uniform {
+        return source.clone();
+    }
+    let result = image::remove_background(source, 0.0);
+    if result.data.chunks_exact(4).all(|p| p[3] == 0) {
+        source.clone()
+    } else {
+        result
+    }
+}
+
+fn prepare_generated(
+    source: RgbaImage,
+    input: &SkillInput,
+    grid: Option<(usize, usize)>,
+) -> Result<SkillOutput, AiError> {
+    let target = generation_target(input, grid)?;
+    if source.width == 0 || source.height == 0 {
+        return Err(AiError::Image("Model returned an empty image".into()));
+    }
+    if let Some((cols, rows)) = grid {
+        if cols == 0 || rows == 0 || source.width % cols != 0 || source.height % rows != 0 {
+            return Ok(SkillOutput {
+                text: "Source retained unchanged: generated sheet dimensions do not divide evenly into the requested grid. No frames prepared; regenerate or crop before slicing.".into(),
+                image: Some(source.clone()), source_image: Some(source), ..Default::default()
+            });
+        }
+    }
+    let transparent = input
+        .params
+        .get("transparent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let working = if target.is_some() && transparent {
+        prepare_matte(&source)
+    } else {
+        source.clone()
+    };
+    let mut frames = Vec::new();
+    let prepared = if let Some((cols, rows)) = grid {
+        frames = image::slice_grid(&working, cols, rows);
+        if let Some((w, h)) = target {
+            frames = frames.iter().map(|f| fit_generated(f, w, h)).collect();
+            let mut sheet = RgbaImage::new(w * cols, h * rows);
+            for (i, f) in frames.iter().enumerate() {
+                for y in 0..h {
+                    for x in 0..w {
+                        sheet.set_pixel((i % cols) * w + x, (i / cols) * h + y, f.pixel(x, y));
+                    }
+                }
+            }
+            sheet
+        } else {
+            working.clone()
+        }
+    } else if let Some((w, h)) = target {
+        fit_generated(&working, w, h)
+    } else {
+        working.clone()
+    };
+    let clear = working.data.chunks_exact(4).filter(|p| p[3] == 0).count();
+    let visible = working.data.chunks_exact(4).filter(|p| p[3] > 0).count();
+    let alpha = if visible == 0 {
+        "empty alpha: no visible subject"
+    } else if clear == 0 {
+        "opaque: no fully transparent background pixels"
+    } else {
+        "alpha present; inspect subject edges"
+    };
+    let text = format!(
+        "Source retained at {} × {}. Output {} × {}. Alpha validation before padding: {alpha}. {}",
+        source.width,
+        source.height,
+        prepared.width,
+        prepared.height,
+        if target.is_none() {
+            "No explicit target: source pixels unchanged."
+        } else {
+            "Prepared with aspect fit and transparent padding."
+        }
+    );
+    Ok(SkillOutput {
+        text,
+        image: Some(prepared),
+        source_image: Some(source),
+        frames,
+    })
 }

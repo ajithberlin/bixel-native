@@ -105,6 +105,61 @@ final class Document: @unchecked Sendable {
         }
     }
 
+    /// Place an image on a new layer, clipped to this canvas, in one undo step.
+    @discardableResult
+    func placeImageData(_ data: [UInt8], width: Int, height: Int, x: Int, y: Int,
+                        frame: Int, name: String) throws -> Int {
+        guard let w = UInt32(exactly: width), let h = UInt32(exactly: height),
+              let px = Int32(exactly: x), let py = Int32(exactly: y),
+              let f = UInt32(exactly: frame), w > 0, h > 0 else {
+            throw StorageError.message("Invalid image placement dimensions or coordinates.")
+        }
+        let index = data.withUnsafeBufferPointer {
+            bixel_doc_place_image(handle, $0.baseAddress, $0.count, w, h, px, py, f, name)
+        }
+        guard index >= 0 else {
+            throw StorageError.message("Cannot place this image. Check its pixel data, destination frame, and canvas overlap.")
+        }
+        return Int(index)
+    }
+
+    /// Replace a tile-sized region. The caller snapshots once at stroke start.
+    func stampImageData(_ data: [UInt8], width: Int, height: Int, x: Int, y: Int,
+                        layer: Int, frame: Int) throws {
+        guard let w = UInt32(exactly: width), let h = UInt32(exactly: height),
+              let px = Int32(exactly: x), let py = Int32(exactly: y),
+              let l = UInt32(exactly: layer), let f = UInt32(exactly: frame), w > 0, h > 0 else {
+            throw StorageError.message("Invalid tile placement dimensions or coordinates.")
+        }
+        let succeeded = data.withUnsafeBufferPointer {
+            bixel_doc_stamp_image(handle, $0.baseAddress, $0.count, w, h, px, py, l, f)
+        }
+        guard succeeded else {
+            throw StorageError.message("Cannot stamp this tile. Check the image, canvas overlap, and destination layer lock.")
+        }
+    }
+
+    /// Import sheet cells into a new layer from frame zero without resizing.
+    @discardableResult
+    func importSheetData(_ data: [UInt8], width: Int, height: Int,
+                         cellWidth: Int, cellHeight: Int, name: String) throws -> Int {
+        guard let w = UInt32(exactly: width), let h = UInt32(exactly: height),
+              let cw = UInt32(exactly: cellWidth), let ch = UInt32(exactly: cellHeight),
+              cw > 0, ch > 0, cellWidth == self.width, cellHeight == self.height else {
+            throw StorageError.message("Sheet cell dimensions must match the canvas dimensions.")
+        }
+        guard w > 0, h > 0, w % cw == 0, h % ch == 0 else {
+            throw StorageError.message("Sheet dimensions must be divisible by the cell size.")
+        }
+        let index = data.withUnsafeBufferPointer {
+            bixel_doc_import_sheet(handle, $0.baseAddress, $0.count, w, h, cw, ch, name)
+        }
+        guard index >= 0 else {
+            throw StorageError.message("Cannot import this sheet. Check its pixel data and limit it to 4096 frames and 256 MB.")
+        }
+        return Int(index)
+    }
+
     @discardableResult
     func addFrame(durationMs: Int) -> Int {
         Int(bixel_doc_add_frame(handle, UInt32(durationMs)))

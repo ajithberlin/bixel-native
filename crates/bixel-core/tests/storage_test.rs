@@ -40,3 +40,54 @@ fn document_roundtrip_preserves_editable_layers_and_frames() {
     let invalid = saved.replace("\"width\":4", "\"width\":0");
     assert!(AsepriteDoc::from_json(&invalid).is_err());
 }
+
+#[test]
+fn file_inventory_and_binary_reads_are_confined() {
+    let root = std::env::temp_dir().join(format!("bixel-inventory-{}", std::process::id()));
+    storage::write(&root, "one/.studio/cache/ai/nested/z.png", &[0, 255, 128]).unwrap();
+    storage::write(&root, "one/.studio/cache/ai/a.txt", b"hello").unwrap();
+    storage::write(&root, "two/private.bin", b"private").unwrap();
+    let project = root.join("one");
+    let files = storage::request(&project, &json!({"op":"files", "path":".studio/cache/ai"})).unwrap();
+    assert_eq!(files, json!([
+        {"path":".studio/cache/ai/a.txt", "name":"a.txt", "bytes":5},
+        {"path":".studio/cache/ai/nested/z.png", "name":"z.png", "bytes":3}
+    ]));
+    assert_eq!(storage::request(&project, &json!({"op":"files", "path":".studio/cache/ai", "recursive":false})).unwrap(), json!([files[0]]));
+    assert_eq!(storage::request(&project, &json!({"op":"read_bytes", "path":".studio/cache/ai/nested/z.png"})).unwrap(), json!([0,255,128]));
+    assert_eq!(storage::request(&project, &json!({"op":"read_bytes", "path":"missing"})).unwrap(), serde_json::Value::Null);
+    for op in ["files", "read_bytes"] {
+        for path in ["../two", ".studio/../cache", "/tmp", "../two/private.bin"] {
+            assert!(storage::request(&project, &json!({"op":op,"path":path})).is_err());
+        }
+        assert!(storage::request(std::path::Path::new("relative"), &json!({"op":op,"path":"."})).is_err());
+    }
+    #[cfg(unix)] {
+        std::os::unix::fs::symlink(project.join(".studio/cache/ai/nested"), project.join("linked")).unwrap();
+        std::os::unix::fs::symlink(root.join("two"), project.join("outside")).unwrap();
+        std::os::unix::fs::symlink(project.join(".studio/cache/ai/a.txt"), project.join("file-link")).unwrap();
+        let all = storage::request(&project, &json!({"op":"files","path":"."})).unwrap();
+        assert_eq!(all, files);
+        for op in ["files", "read_bytes"] {
+            for path in ["linked", "linked/z.png", "outside/private.bin", "file-link"] {
+                assert!(storage::request(&project, &json!({"op":op,"path":path})).is_err());
+            }
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn file_inventory_is_bounded_and_sorted() {
+    let root = std::env::temp_dir().join(format!("bixel-inventory-limit-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for index in (0..2005).rev() {
+        std::fs::write(root.join(format!("{index:04}.bin")), []).unwrap();
+    }
+    let files = storage::request(&root, &json!({"op":"files","path":"."})).unwrap();
+    let files = files.as_array().unwrap();
+    assert_eq!(files.len(), 2000);
+    assert_eq!(files[0]["name"], "0000.bin");
+    assert_eq!(files[1999]["name"], "1999.bin");
+    std::fs::remove_dir_all(root).unwrap();
+}

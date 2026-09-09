@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 import Combine
 
 enum Tool: String, CaseIterable, Identifiable {
-    case pencil, eraser, fill, eyedropper, line
+    case pencil, eraser, fill, eyedropper
     var id: String { rawValue }
 
     var symbol: String {
@@ -20,7 +20,6 @@ enum Tool: String, CaseIterable, Identifiable {
         case .eraser: return "eraser"
         case .fill: return "paintbrush.pointed.fill"
         case .eyedropper: return "eyedropper"
-        case .line: return "line.diagonal"
         }
     }
 
@@ -78,7 +77,6 @@ final class EditorModel: ObservableObject {
 
     private var playbackTimer: Timer?
     private var lastPoint: (x: Int, y: Int)?
-    private var strokeCommitted = false
 
     init(width: Int = 32, height: Int = 32, document restored: Document? = nil) {
         let document = restored ?? Document(width: width, height: height)
@@ -199,10 +197,6 @@ final class EditorModel: ObservableObject {
             document.floodFill(layer: activeLayer, frame: frame, x: x, y: y, drawColor)
             strokeChanged = true
             pixelsChanged()
-        case .line:
-            document.snapshot()
-            lastPoint = (x, y)
-            strokeCommitted = false
         case .pencil, .eraser:
             document.snapshot()
             lastPoint = (x, y)
@@ -220,9 +214,6 @@ final class EditorModel: ObservableObject {
             lastPoint = (x, y)
             strokeChanged = true
             pixelsChanged()
-        case .line:
-            // No live preview for line; committed on end.
-            break
         default:
             break
         }
@@ -230,18 +221,27 @@ final class EditorModel: ObservableObject {
 
     func endStroke(x: Int, y: Int) {
         if tool == .pencil || tool == .eraser { continueStroke(x: x, y: y) }
-        if tool == .line, let start = lastPoint, !strokeCommitted {
-            document.stroke(layer: activeLayer, frame: frame, points: [start, (x, y)], color: strokeColor, radius: brushRadius)
-            strokeCommitted = true
-            strokeChanged = true
-            pixelsChanged()
-        }
         lastPoint = nil
         if strokeChanged {
             strokeChanged = false
+            lastStrokeEnd = (x, y)
             commitChange()
         }
     }
+
+    /// Shift-draw: a straight line with the current brush. With no drag
+    /// (Shift+click), the line starts where the previous stroke ended —
+    /// Photoshop-style connected lines.
+    func strokeLine(from start: (x: Int, y: Int), to end: (x: Int, y: Int)) {
+        guard tool == .pencil || tool == .eraser else { return }
+        document.snapshot()
+        document.stroke(layer: activeLayer, frame: frame, points: [start, end], color: strokeColor, radius: brushRadius)
+        lastStrokeEnd = end
+        commitChange()
+    }
+
+    /// Where the last committed stroke ended; Shift+click continues from here.
+    private(set) var lastStrokeEnd: (x: Int, y: Int)?
 
     private var strokeColor: BixelColor {
         tool == .eraser ? BixelColor(r: 0, g: 0, b: 0, a: 0) : drawColor

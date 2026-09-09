@@ -18,7 +18,7 @@ struct ViewportUniforms {
     var scale: Float
     var gridAlpha: Float
     var onionAlpha: Float
-    var pad: Float = 0
+    var onionAlpha2: Float
 }
 
 final class MetalRenderer {
@@ -29,6 +29,7 @@ final class MetalRenderer {
 
     private var canvasTexture: MTLTexture?
     private var onionTexture: MTLTexture?
+    private var onionTexture2: MTLTexture?
     private var canvasWidth = 0
     private var canvasHeight = 0
 
@@ -99,16 +100,19 @@ final class MetalRenderer {
         upload(pixels, to: texture, width: width, height: height)
     }
 
-    /// Upload the onion-skin (previous frame) texture; nil disables it.
-    func updateOnion(pixels: [UInt8]?, width: Int, height: Int) {
+    /// Upload an onion-skin (previous frame) texture; nil disables the slot.
+    /// Slot 0 = frame−1, slot 1 = frame−2.
+    func updateOnion(pixels: [UInt8]?, width: Int, height: Int, slot: Int) {
+        var texture = slot == 0 ? onionTexture : onionTexture2
         guard let pixels, width > 0, height > 0 else {
-            onionTexture = nil
+            if slot == 0 { onionTexture = nil } else { onionTexture2 = nil }
             return
         }
-        if onionTexture == nil || onionTexture?.width != width || onionTexture?.height != height {
-            onionTexture = makeTexture(width: width, height: height)
+        if texture == nil || texture?.width != width || texture?.height != height {
+            texture = makeTexture(width: width, height: height)
+            if slot == 0 { onionTexture = texture } else { onionTexture2 = texture }
         }
-        guard let texture = onionTexture else { return }
+        guard let texture else { return }
         upload(pixels, to: texture, width: width, height: height)
     }
 
@@ -128,6 +132,7 @@ final class MetalRenderer {
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ViewportUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentTexture(onionTexture ?? texture, index: 1)
+        encoder.setFragmentTexture(onionTexture2 ?? texture, index: 2)
         encoder.setFragmentSamplerState(sampler, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()

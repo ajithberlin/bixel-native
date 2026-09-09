@@ -85,48 +85,12 @@ struct ProjectPicker: View {
 
     private var newCanvas: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("NEW CANVAS")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(StudioTheme.textSecondary)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(CanvasTemplate.presets) { preset in
-                        TemplateCard(template: preset, selected: template.id == preset.id) {
-                            template = preset
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-
-            HStack(spacing: 12) {
-                TextField("Project name", text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 280)
-                    .onSubmit(create)
-
-                if template.isCustom {
-                    SizeField(label: "W", value: $customWidth)
-                    SizeField(label: "H", value: $customHeight)
-                }
-
-                Text("\(canvasSize.width) × \(canvasSize.height) px")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(StudioTheme.textSecondary)
-
-                Spacer()
-
-                Button(action: create) {
-                    Label("Create", systemImage: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(StudioTheme.accent))
-                        .foregroundColor(.white)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canCreate)
+            Text("New project").font(.headline)
+            Text("A workspace for sprites, animations, tilesets, maps, and references. Choose sizes when you add documents.")
+                .font(.caption).foregroundColor(StudioTheme.textSecondary)
+            HStack {
+                TextField("Project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
+                Button("Create project", action: create).buttonStyle(.borderedProminent).disabled(!canCreate)
             }
         }
     }
@@ -138,7 +102,7 @@ struct ProjectPicker: View {
                 .foregroundColor(StudioTheme.textSecondary)
 
             if store.projects.isEmpty {
-                Text("No projects yet — pick a template above to start.")
+                Text("Create a project above to start building your game assets.")
                     .font(.system(size: 12))
                     .foregroundColor(StudioTheme.textDisabled)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

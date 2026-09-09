@@ -50,6 +50,7 @@ struct CanvasView: NSViewRepresentable {
         private var canvasDirty = true
         private var onionDirty = true
         private var lastOnionSkin = false
+        private var lastOnionFrames = 1
 
         init(model: EditorModel, viewport: CanvasViewport) {
             self.model = model
@@ -63,10 +64,17 @@ struct CanvasView: NSViewRepresentable {
                 view?.needsDisplay = true
             }.store(in: &observations)
             viewport.objectWillChange.sink { [weak self, weak view] in
-                if self?.lastOnionSkin != self?.viewport.onionSkin {
-                    self?.onionDirty = true
-                }
                 view?.needsDisplay = true
+                // objectWillChange fires before the new value lands; hop to the
+                // next runloop tick to compare post-change onion settings.
+                DispatchQueue.main.async { [weak self, weak view] in
+                    guard let self else { return }
+                    if self.lastOnionSkin != self.viewport.onionSkin
+                        || self.lastOnionFrames != self.viewport.onionFrames {
+                        self.onionDirty = true
+                        view?.needsDisplay = true
+                    }
+                }
             }.store(in: &observations)
         }
 
@@ -85,19 +93,30 @@ struct CanvasView: NSViewRepresentable {
                 renderer?.updateCanvas(pixels: pixels, width: model.width, height: model.height)
                 canvasDirty = false
             }
+
             var onionAlpha: Float = 0
+            var onionAlpha2: Float = 0
             if viewport.onionSkin, model.frame > 0 {
                 if onionDirty {
                     renderer?.updateOnion(pixels: model.compositeFrame(model.frame - 1),
-                                          width: model.width, height: model.height)
-                    onionDirty = false
+                                          width: model.width, height: model.height, slot: 0)
                 }
-                onionAlpha = 0.35
-            } else if onionDirty {
-                renderer?.updateOnion(pixels: nil, width: 0, height: 0)
+                onionAlpha = Float(viewport.onionOpacity)
+                if viewport.onionFrames >= 2, model.frame > 1 {
+                    if onionDirty {
+                        renderer?.updateOnion(pixels: model.compositeFrame(model.frame - 2),
+                                              width: model.width, height: model.height, slot: 1)
+                    }
+                    onionAlpha2 = Float(viewport.onionOpacity * 0.5)
+                }
+            }
+            if onionDirty {
+                if onionAlpha == 0 { renderer?.updateOnion(pixels: nil, width: 0, height: 0, slot: 0) }
+                if onionAlpha2 == 0 { renderer?.updateOnion(pixels: nil, width: 0, height: 0, slot: 1) }
                 onionDirty = false
             }
             lastOnionSkin = viewport.onionSkin
+            lastOnionFrames = viewport.onionFrames
 
             let sf = view.drawableSize.width / max(1, bounds.width)
             let origin = viewport.artboardOrigin(viewSize: bounds.size,
@@ -108,7 +127,8 @@ struct CanvasView: NSViewRepresentable {
                 origin: SIMD2(Float(origin.x * sf), Float(origin.y * sf)),
                 scale: Float(viewport.zoom * sf),
                 gridAlpha: viewport.showGrid ? 1 : 0,
-                onionAlpha: onionAlpha
+                onionAlpha: onionAlpha,
+                onionAlpha2: onionAlpha2
             )
             renderer?.draw(in: view, uniforms: uniforms)
         }
@@ -130,6 +150,18 @@ struct CanvasView: NSViewRepresentable {
             model.endStroke(x: p.x, y: p.y)
         }
 
+        /// Shift+drag: straight line between press and release.
+        /// Shift+click (no drag): line continuing from the last stroke's end.
+        func commitLine(from startView: CGPoint, to endView: CGPoint, dragged: Bool, in view: MTKView) {
+            guard let end = pixelCoordinate(endView, in: view, clamp: true) else { return }
+            if !dragged, let last = model.lastStrokeEnd {
+                model.strokeLine(from: last, to: end)
+                return
+            }
+            guard dragged, let start = pixelCoordinate(startView, in: view, clamp: true) else { return }
+            model.strokeLine(from: start, to: end)
+        }
+
         private func pixelCoordinate(_ point: CGPoint, in view: MTKView, clamp: Bool = false) -> (x: Int, y: Int)? {
             viewport.viewToDoc(point, viewSize: view.bounds.size,
                                width: model.width, height: model.height, clamp: clamp)
@@ -144,6 +176,9 @@ final class PixelCanvas: MTKView {
     private var spaceDown = false
     private var panning = false
     private var lastPanPoint: CGPoint = .zero
+    private var lineGesture = false
+    private var lineDragged = false
+    private var lineStart: CGPoint = .zero
 
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -176,7 +211,16 @@ final class PixelCanvas: MTKView {
             NSCursor.closedHand.set()
             return
         }
-        coordinator?.begin(at: convert(event.locationInWindow, from: nil), in: self)
+        let point = convert(event.locationInWindow, from: nil)
+        // Shift+draw paints a straight line with the current brush.
+        if event.modifierFlags.contains(.shift),
+           let tool = coordinator?.model.tool, tool == .pencil || tool == .eraser {
+            lineGesture = true
+            lineDragged = false
+            lineStart = point
+            return
+        }
+        coordinator?.begin(at: point, in: self)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -186,6 +230,10 @@ final class PixelCanvas: MTKView {
             lastPanPoint = point
             return
         }
+        if lineGesture {
+            lineDragged = true
+            return
+        }
         coordinator?.drag(at: point, in: self)
     }
 
@@ -193,6 +241,12 @@ final class PixelCanvas: MTKView {
         if panning {
             panning = false
             (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
+            return
+        }
+        if lineGesture {
+            lineGesture = false
+            coordinator?.commitLine(from: lineStart, to: convert(event.locationInWindow, from: nil),
+                                    dragged: lineDragged, in: self)
             return
         }
         coordinator?.end(at: convert(event.locationInWindow, from: nil), in: self)
@@ -267,7 +321,6 @@ final class PixelCanvas: MTKView {
             case "e": model.tool = .eraser
             case "f": model.tool = .fill
             case "i": model.tool = .eyedropper
-            case "l": model.tool = .line
             case "[": model.brushSize = max(1, model.brushSize - 1)
             case "]": model.brushSize = min(32, model.brushSize + 1)
             case "g": viewport.showGrid.toggle()

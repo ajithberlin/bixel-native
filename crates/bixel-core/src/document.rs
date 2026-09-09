@@ -501,6 +501,105 @@ impl AsepriteDoc {
         }
     }
 
+    fn validate_image(data: &[u8], w: usize, h: usize) -> Result<(), String> {
+        let bytes = w.checked_mul(h).and_then(|n| n.checked_mul(4));
+        if w == 0 || h == 0 || bytes != Some(data.len()) || data.len() > 256 * 1024 * 1024 {
+            return Err("Invalid RGBA image dimensions or buffer length".into());
+        }
+        Ok(())
+    }
+
+    /// Place pixels on a new layer, clipping to the canvas, as one undo step.
+    pub fn place_image_data(
+        &mut self, data: &[u8], w: usize, h: usize, x: i32, y: i32,
+        frame: usize, name: &str,
+    ) -> Result<usize, String> {
+        Self::validate_image(data, w, h)?;
+        if frame >= self.frames.len() { return Err("Invalid destination frame".into()); }
+        let left = (x as i64).max(0) as usize;
+        let top = (y as i64).max(0) as usize;
+        let right = ((x as i64) + w as i64).min(self.width as i64).max(0) as usize;
+        let bottom = ((y as i64) + h as i64).min(self.height as i64).max(0) as usize;
+        if left >= right || top >= bottom { return Err("Image is outside the canvas".into()); }
+        let index = self.layers.len();
+        let mut layer = Layer::new(name);
+        layer.cels.resize(self.frames.len(), None);
+        let mut cel = Cel::new(index, frame, self.width, self.height);
+        for dy in top..bottom {
+            let source = (((dy as i64 - y as i64) as usize) * w + (left as i64 - x as i64) as usize) * 4;
+            let target = (dy * self.width + left) * 4;
+            let count = (right - left) * 4;
+            cel.data[target..target + count].copy_from_slice(&data[source..source + count]);
+        }
+        layer.cels[frame] = Some(cel);
+        self.snapshot();
+        self.layers.push(layer);
+        Ok(index)
+    }
+
+    /// Replace an image-sized region on an existing layer. The host snapshots once per stroke.
+    pub fn stamp_image_data(
+        &mut self, data: &[u8], w: usize, h: usize, x: i32, y: i32,
+        layer: usize, frame: usize,
+    ) -> Result<(), String> {
+        Self::validate_image(data, w, h)?;
+        if frame >= self.frames.len() || self.layers.get(layer).map_or(true, |l| l.locked) {
+            return Err("Invalid frame or unavailable destination layer".into());
+        }
+        let left = (x as i64).max(0) as usize;
+        let top = (y as i64).max(0) as usize;
+        let right = ((x as i64) + w as i64).min(self.width as i64).max(0) as usize;
+        let bottom = ((y as i64) + h as i64).min(self.height as i64).max(0) as usize;
+        if left >= right || top >= bottom { return Err("Image is outside the canvas".into()); }
+        let canvas_width = self.width;
+        let cel = self.cel_mut(layer, frame).ok_or("Invalid layer")?;
+        for dy in top..bottom {
+            let source = (((dy as i64 - y as i64) as usize) * w + (left as i64 - x as i64) as usize) * 4;
+            let target = (dy * canvas_width + left) * 4;
+            let count = (right - left) * 4;
+            cel.data[target..target + count].copy_from_slice(&data[source..source + count]);
+        }
+        Ok(())
+    }
+
+    /// Import a regular sheet to a new layer, row-major from frame zero.
+    /// Existing layers and canvas dimensions are preserved; history records one step.
+    pub fn import_sheet_data(
+        &mut self, data: &[u8], w: usize, h: usize,
+        cell_w: usize, cell_h: usize, name: &str,
+    ) -> Result<usize, String> {
+        Self::validate_image(data, w, h)?;
+        if cell_w == 0 || cell_h == 0 || cell_w != self.width || cell_h != self.height {
+            return Err("Sheet cell dimensions must match the canvas".into());
+        }
+        if w % cell_w != 0 || h % cell_h != 0 {
+            return Err("Sheet dimensions must be divisible by the cell size".into());
+        }
+        let columns = w / cell_w;
+        let count = columns * (h / cell_h);
+        if count > 4096 { return Err("Sheet exceeds 4096 frames".into()); }
+        let index = self.layers.len();
+        let mut layer = Layer::new(name);
+        layer.cels.resize(self.frames.len().max(count), None);
+        for frame in 0..count {
+            let mut cel = Cel::new(index, frame, cell_w, cell_h);
+            for row in 0..cell_h {
+                let source = (((frame / columns) * cell_h + row) * w + (frame % columns) * cell_w) * 4;
+                let target = row * cell_w * 4;
+                cel.data[target..target + cell_w * 4].copy_from_slice(&data[source..source + cell_w * 4]);
+            }
+            layer.cels[frame] = Some(cel);
+        }
+        self.snapshot();
+        let duration = self.frames.first().map_or(100, |frame| frame.duration_ms);
+        while self.frames.len() < count {
+            self.frames.push(Frame::new(self.frames.len(), duration));
+        }
+        for existing in &mut self.layers { existing.cels.resize(self.frames.len(), None); }
+        self.layers.push(layer);
+        Ok(index)
+    }
+
     /// Draw a polyline stroke with a round brush of the given radius.
     ///
     /// `radius == 0` is a single-pixel pencil. This is the "Swift sends a list

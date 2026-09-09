@@ -28,12 +28,13 @@ struct ContentView: View {
                     .id(projects.current?.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Left tool rail, vertically centered.
-                HStack {
+                // Left tool rail + brush sliders, vertically centered.
+                HStack(alignment: .center, spacing: 8) {
                     ToolRail(model: model)
-                        .padding(.leading, 14)
+                    BrushSliders(model: model)
                     Spacer()
                 }
+                .padding(.leading, 14)
 
                 // Right side: assistant, or the color/layers panel.
                 HStack {

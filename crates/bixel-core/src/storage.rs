@@ -6,6 +6,59 @@ use crate::paths::safe_resolve;
 
 static WRITE_ID: AtomicU64 = AtomicU64::new(0);
 
+// Inventory and binary reads accept only literal relative paths, and never
+// follow links (including links that happen to point back inside the root).
+fn file_path(root: &Path, relative: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::Component;
+    let relative = relative.trim();
+    let path = Path::new(relative);
+    if path.is_absolute() || relative.starts_with('\\') || path.components().any(|part| matches!(part, Component::ParentDir)) {
+        return Err("Expected a relative path without traversal".into());
+    }
+    let resolved = safe_resolve(relative, root).map_err(|e| e.to_string())?;
+    let mut current = root.to_path_buf();
+    for part in path.components() {
+        current.push(part);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => return Err("Symbolic links are not allowed".into()),
+            Ok(_) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(resolved)
+}
+
+fn files(root: &Path, relative: &str, recursive: bool) -> Result<Value, String> {
+    let directory = file_path(root, relative)?;
+    let mut pending = std::collections::BTreeSet::from([directory]);
+    let mut files = Vec::new();
+    while let Some(directory) = pending.pop_first() {
+        let mut entries = fs::read_dir(directory).map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_symlink() { continue; }
+            let entry_path = entry.path();
+            let relative = entry_path.strip_prefix(root).map_err(|e| e.to_string())?
+                .to_str().ok_or("File path is not UTF-8")?;
+            let path = file_path(root, relative)?;
+            if kind.is_dir() && recursive {
+                pending.insert(path);
+            } else if kind.is_file() {
+                let metadata = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+                if !metadata.is_file() { continue; }
+                files.push(json!({"path": relative, "name": entry.file_name().to_string_lossy(), "bytes": metadata.len()}));
+                if files.len() == 2000 { break; }
+            }
+        }
+        if files.len() == 2000 { break; }
+    }
+    files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    Ok(files.into())
+}
+
 fn ensure_root(base: &Path) -> Result<std::path::PathBuf, String> {
     if !base.is_absolute() { return Err("Storage root must be absolute".into()); }
     let ancestor = base.ancestors().find(|p| p.exists()).ok_or("Storage has no existing ancestor")?;
@@ -76,6 +129,27 @@ pub fn request(base: &Path, value: &Value) -> Result<Value, String> {
             let path = safe_resolve(field("path")?, &root).map_err(|e| e.to_string())?;
             match fs::read_to_string(path) {
                 Ok(text) => Ok(text.into()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
+                Err(e) => Err(e.to_string()),
+            }
+        }
+        "files" => {
+            let recursive = match value.get("recursive") {
+                None => true,
+                Some(value) => value.as_bool().ok_or("recursive must be a boolean")?,
+            };
+            files(&root, field("path")?, recursive)
+        }
+        "read_bytes" => {
+            let path = file_path(&root, field("path")?)?;
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {},
+                Ok(_) => return Err("Expected a regular file".into()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
+                Err(e) => return Err(e.to_string()),
+            }
+            match fs::read(path) {
+                Ok(bytes) => Ok(json!(bytes)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
                 Err(e) => Err(e.to_string()),
             }

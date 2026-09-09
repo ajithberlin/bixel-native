@@ -15,8 +15,8 @@ struct ViewportUniforms {
     float2 origin;      // artboard bottom-left corner, y-up device px
     float  scale;       // device px per document px
     float  gridAlpha;   // 0 = hidden, 1 = shown
-    float  onionAlpha;  // 0 = off, >0 = previous-frame ghost opacity
-    float  pad;
+    float  onionAlpha;  // ghost opacity of frame-1 (0 = off)
+    float  onionAlpha2; // ghost opacity of frame-2 (0 = off)
 };
 
 struct CanvasVertexOut {
@@ -42,6 +42,7 @@ fragment float4 canvas_fragment(CanvasVertexOut in [[stage_in]],
                                 constant ViewportUniforms& u [[buffer(0)]],
                                 texture2d<float> tex [[texture(0)]],
                                 texture2d<float> prevTex [[texture(1)]],
+                                texture2d<float> prevTex2 [[texture(2)]],
                                 sampler smp [[sampler(0)]]) {
     // Fragment position is top-left origin; the viewport math is y-up.
     float2 p = float2(in.position.x, u.viewSize.y - in.position.y);
@@ -73,6 +74,12 @@ fragment float4 canvas_fragment(CanvasVertexOut in [[stage_in]],
 
     // Texture v: local.y = board height is the top edge, texture row 0.
     float2 uv = float2(local.x / board.x, 1.0 - local.y / board.y);
+
+    if (u.onionAlpha2 > 0.0) {
+        float4 prev2 = prevTex2.sample(smp, uv);
+        prev2.a *= u.onionAlpha2;
+        col = over(col, prev2);
+    }
 
     if (u.onionAlpha > 0.0) {
         float4 prev = prevTex.sample(smp, uv);
