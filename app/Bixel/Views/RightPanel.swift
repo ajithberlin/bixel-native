@@ -1,7 +1,9 @@
 // RightPanel.swift
 //
 // Floating right panel: brush settings on top, then "Color" (disc + preset
-// swatches) and "Layers" tabs. Layers support inline rename (double-click).
+// swatches) and "Layers" tabs. Layer rows show a live thumbnail, support
+// drag-to-reorder, inline rename (double-click or context menu), visibility
+// toggles, and a per-layer opacity slider.
 
 import SwiftUI
 
@@ -42,7 +44,7 @@ struct RightPanel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 260, height: 520)
+        .frame(width: 268, height: 540)
         .studioPanel()
     }
 
@@ -87,18 +89,22 @@ struct RightPanel: View {
         }
     }
 
+    // MARK: - Layers
+
     private var layersTab: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("LAYERS").font(.system(size: 10, weight: .semibold)).foregroundColor(StudioTheme.textSecondary)
+                Text("LAYERS")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                Text("\(model.layers.count)")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(StudioTheme.textDisabled)
                 Spacer()
-                Button { model.addLayer() } label: { Image(systemName: "plus") }.buttonStyle(.plain)
+                Button { model.addLayer() } label: { Image(systemName: "plus") }
+                    .buttonStyle(.plain)
                     .foregroundColor(StudioTheme.textPrimary)
                     .help("Add layer")
-                Button { model.deleteLayer() } label: { Image(systemName: "trash") }.buttonStyle(.plain)
-                    .foregroundColor(model.document.layerCount > 1 ? StudioTheme.textPrimary : StudioTheme.textDisabled)
-                    .disabled(model.document.layerCount <= 1)
-                    .help("Delete layer")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -108,17 +114,47 @@ struct RightPanel: View {
                     // Topmost layer first.
                     ForEach(model.layers.reversed()) { layer in
                         LayerRow(
-                            name: layer.name,
-                            visible: layer.visible,
+                            layer: layer,
                             selected: layer.index == model.activeLayer,
+                            thumbnail: model.layerThumbnail(layer.index),
+                            thumbWidth: model.width,
+                            thumbHeight: model.height,
+                            canDelete: model.layers.count > 1,
                             onSelect: { model.activeLayer = layer.index },
                             onToggle: { model.toggleLayerVisibility(layer.index) },
-                            onRename: { model.renameLayer(layer.index, name: $0) }
+                            onRename: { model.renameLayer(layer.index, name: $0) },
+                            onDelete: { model.activeLayer = layer.index; model.deleteLayer() },
+                            onMoveHere: { model.moveLayer(from: $0, to: layer.index) }
                         )
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.bottom, 12)
+            }
+
+            // Opacity of the active layer.
+            if let active = model.layers.first(where: { $0.index == model.activeLayer }) {
+                VStack(spacing: 4) {
+                    Divider().overlay(StudioTheme.hairline)
+                    HStack(spacing: 8) {
+                        Text("Opacity")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(StudioTheme.textSecondary)
+                        Slider(
+                            value: Binding(
+                                get: { active.opacity },
+                                set: { model.setLayerOpacity(model.activeLayer, $0) }
+                            ),
+                            in: 0...1
+                        )
+                        .controlSize(.mini)
+                        Text("\(Int((active.opacity * 100).rounded()))%")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(StudioTheme.textSecondary)
+                            .frame(width: 30, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                }
             }
         }
     }
@@ -128,54 +164,128 @@ struct RightPanel: View {
     }
 }
 
+// MARK: - Layer row
+
 private struct LayerRow: View {
-    let name: String
-    let visible: Bool
+    let layer: LayerInfo
     let selected: Bool
+    let thumbnail: [UInt8]
+    let thumbWidth: Int
+    let thumbHeight: Int
+    let canDelete: Bool
     let onSelect: () -> Void
     let onToggle: () -> Void
     let onRename: (String) -> Void
+    let onDelete: () -> Void
+    let onMoveHere: (Int) -> Void
 
     @State private var editing = false
     @State private var draft = ""
+    @State private var dropTargeted = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 9) {
             Button(action: onToggle) {
-                Image(systemName: visible ? "eye.fill" : "eye.slash")
-                    .font(.system(size: 12))
-                    .foregroundColor(visible ? StudioTheme.textPrimary : StudioTheme.textDisabled)
+                Image(systemName: layer.visible ? "eye.fill" : "eye.slash")
+                    .font(.system(size: 11))
+                    .foregroundColor(layer.visible ? StudioTheme.textPrimary : StudioTheme.textDisabled)
+                    .frame(width: 16)
             }
             .buttonStyle(.plain)
+            .help(layer.visible ? "Hide layer" : "Show layer")
 
-            if editing {
-                TextField("", text: $draft, onCommit: {
-                    onRename(draft)
-                    editing = false
-                })
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(StudioTheme.textPrimary)
-            } else {
-                Text(name)
-                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                    .foregroundColor(selected ? StudioTheme.textPrimary : StudioTheme.textSecondary)
-                    .lineLimit(1)
-                    .onTapGesture(count: 2) {
-                        draft = name
-                        editing = true
-                    }
-                    .onTapGesture(count: 1, perform: onSelect)
+            PixelImageView(image: thumbnail, width: thumbWidth, height: thumbHeight)
+                .frame(width: 40, height: 40)
+                .background(CheckerboardView(cell: 5))
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(StudioTheme.hairlineStrong, lineWidth: 1)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                if editing {
+                    TextField("", text: $draft, onCommit: {
+                        onRename(draft)
+                        editing = false
+                    })
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(StudioTheme.textPrimary)
+                } else {
+                    Text(layer.name)
+                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        .foregroundColor(selected ? StudioTheme.textPrimary : StudioTheme.textSecondary)
+                        .lineLimit(1)
+                        .onTapGesture(count: 2) {
+                            draft = layer.name
+                            editing = true
+                        }
+                }
+                if layer.opacity < 1.0 {
+                    Text("\(Int((layer.opacity * 100).rounded()))%")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(StudioTheme.textDisabled)
+                }
             }
-            Spacer()
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(selected ? StudioTheme.accentSoft : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(dropTargeted ? StudioTheme.accent : Color.clear, lineWidth: 1.5)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
+        .draggable(String(layer.index))
+        .dropDestination(for: String.self, action: { items, _ in
+            guard let raw = items.first, let from = Int(raw), from != layer.index else { return false }
+            onMoveHere(from)
+            return true
+        }, isTargeted: { dropTargeted = $0 })
+        .contextMenu {
+            Button("Rename") {
+                draft = layer.name
+                editing = true
+            }
+            Divider()
+            Button("Delete Layer", role: .destructive, action: onDelete)
+                .disabled(!canDelete)
+        }
+    }
+}
+
+// MARK: - Checkerboard
+
+/// Transparency checkerboard used behind layer/frame thumbnails.
+struct CheckerboardView: View {
+    var cell: CGFloat = 6
+
+    var body: some View {
+        Canvas { context, size in
+            let light = Color(white: 0.55)
+            let dark = Color(white: 0.40)
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(dark))
+            var row = 0
+            var y: CGFloat = 0
+            while y < size.height {
+                var x: CGFloat = (row % 2 == 0) ? 0 : -cell
+                while x < size.width {
+                    context.fill(
+                        Path(CGRect(x: x, y: y, width: cell, height: cell)),
+                        with: .color(light)
+                    )
+                    x += cell * 2
+                }
+                y += cell
+                row += 1
+            }
+        }
     }
 }

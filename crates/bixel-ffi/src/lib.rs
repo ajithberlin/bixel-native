@@ -371,6 +371,74 @@ pub unsafe extern "C" fn bixel_doc_rename_layer(ptr: *mut BixelDoc, idx: u32, na
         .rename_layer(idx as usize, &name);
 }
 
+/// Move a layer from one stack position to another (0 = bottom).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_reorder_layer(ptr: *mut BixelDoc, from: u32, to: u32) {
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .reorder_layer(from as usize, to as usize);
+}
+
+/// Layer opacity, 0.0..=1.0.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_layer_opacity(ptr: *const BixelDoc, idx: u32) -> f32 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .layers
+        .get(idx as usize)
+        .map(|l| l.opacity)
+        .unwrap_or(1.0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_set_layer_opacity(ptr: *mut BixelDoc, idx: u32, opacity: f32) {
+    if let Some(layer) = unsafe { doc(ptr) }.lock().unwrap().layers.get_mut(idx as usize) {
+        layer.opacity = opacity.clamp(0.0, 1.0);
+    }
+}
+
+/// Copy one cel's packed RGBA into `out` (`width * height * 4` bytes). Missing
+/// cels yield a fully transparent buffer.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_cel_rgba(ptr: *const BixelDoc, layer: u32, frame: u32, out: *mut u8) {
+    if out.is_null() {
+        return;
+    }
+    let doc = unsafe { doc_ref(ptr) }.lock().unwrap();
+    let len = doc.width * doc.height * 4;
+    let empty = vec![0u8; len];
+    let data: &[u8] = doc
+        .layers
+        .get(layer as usize)
+        .and_then(|l| l.cels.get(frame as usize))
+        .and_then(|c| c.as_ref())
+        .map(|c| c.data.as_slice())
+        .filter(|d| d.len() == len)
+        .unwrap_or(&empty);
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out, len) };
+}
+
+/// Frame duration in milliseconds.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_frame_duration(ptr: *const BixelDoc, idx: u32) -> u32 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .frames
+        .get(idx as usize)
+        .map(|f| f.duration_ms)
+        .unwrap_or(0)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_set_frame_duration(ptr: *mut BixelDoc, idx: u32, duration_ms: u32) {
+    if let Some(frame) = unsafe { doc(ptr) }.lock().unwrap().frames.get_mut(idx as usize) {
+        frame.duration_ms = duration_ms.max(1);
+    }
+}
+
 // --------------------------------------------------------------- palette
 
 #[no_mangle]

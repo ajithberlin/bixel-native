@@ -122,6 +122,35 @@ final class Document: @unchecked Sendable {
         bixel_doc_resize(handle, UInt32(width), UInt32(height))
     }
 
+    func reorderLayer(from: Int, to: Int) {
+        bixel_doc_reorder_layer(handle, UInt32(from), UInt32(to))
+    }
+
+    func layerOpacity(_ index: Int) -> Float {
+        bixel_doc_layer_opacity(handle, UInt32(index))
+    }
+
+    func setLayerOpacity(_ index: Int, _ opacity: Float) {
+        bixel_doc_set_layer_opacity(handle, UInt32(index), opacity)
+    }
+
+    /// Raw RGBA of a single layer's cel at `frame` (transparent when empty).
+    func celRGBA(layer: Int, frame: Int) -> [UInt8] {
+        var buf = [UInt8](repeating: 0, count: bytesPerFrame)
+        buf.withUnsafeMutableBytes {
+            bixel_doc_cel_rgba(handle, UInt32(layer), UInt32(frame), $0.baseAddress)
+        }
+        return buf
+    }
+
+    func frameDuration(_ index: Int) -> Int {
+        Int(bixel_doc_frame_duration(handle, UInt32(index)))
+    }
+
+    func setFrameDuration(_ index: Int, ms: Int) {
+        bixel_doc_set_frame_duration(handle, UInt32(index), UInt32(ms))
+    }
+
     func snapshot() { bixel_doc_snapshot(handle) }
     @discardableResult
     func undo() -> Bool { bixel_doc_undo(handle) }

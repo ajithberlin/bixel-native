@@ -65,7 +65,12 @@ final class CanvasViewport: ObservableObject {
 
     func zoomToFit(viewSize: CGSize, canvasWidth w: Int, height h: Int) {
         guard viewSize.width > 40, viewSize.height > 40, w > 0, h > 0 else { return }
-        zoom = Self.clampZoom(min((viewSize.width - 64) / CGFloat(w), (viewSize.height - 64) / CGFloat(h)))
+        // Leave room for the floating chrome (top capsule, tool rail, panels,
+        // timeline) so the artboard never starts hidden underneath it.
+        let availW = viewSize.width - 260
+        let availH = viewSize.height - 220
+        guard availW > 40, availH > 40 else { return }
+        zoom = Self.clampZoom(min(availW / CGFloat(w), availH / CGFloat(h)))
         pan = .zero
         didFit = true
     }

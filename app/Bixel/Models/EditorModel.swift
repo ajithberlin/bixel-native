@@ -31,6 +31,7 @@ struct LayerInfo: Identifiable {
     let index: Int
     var name: String
     var visible: Bool
+    var opacity: Double
     var id: Int { index }
 }
 
@@ -65,6 +66,7 @@ final class EditorModel: ObservableObject {
 
     private func pixelsChanged(allFrames: Bool = false) {
         if allFrames { frameCache.removeAll() } else { frameCache[frame] = nil }
+        thumbCache.removeAll()
         canvasChanged.send()
     }
 
@@ -89,7 +91,8 @@ final class EditorModel: ObservableObject {
 
     func reloadLayers() {
         layers = (0..<document.layerCount).map { i in
-            LayerInfo(index: i, name: document.layerName(i), visible: document.isLayerVisible(i))
+            LayerInfo(index: i, name: document.layerName(i), visible: document.isLayerVisible(i),
+                      opacity: Double(document.layerOpacity(i)))
         }
     }
 
@@ -124,6 +127,49 @@ final class EditorModel: ObservableObject {
         document.setLayerVisible(index, newValue)
         reloadLayers()
         commitChange(allFrames: true)
+    }
+
+    func setLayerOpacity(_ index: Int, _ value: Double) {
+        document.setLayerOpacity(index, Float(value))
+        if layers.indices.contains(index) { layers[index].opacity = value }
+        commitChange(allFrames: true)
+    }
+
+    /// Move a layer in the stack (0 = bottom); standard remove-then-insert.
+    func moveLayer(from: Int, to: Int) {
+        guard from != to, from >= 0, to >= 0,
+              from < document.layerCount, to < document.layerCount else { return }
+        document.snapshot()
+        document.reorderLayer(from: from, to: to)
+        activeLayer = to
+        reloadLayers()
+        commitChange(allFrames: true)
+    }
+
+    /// Thumbnail pixels for a layer at the current frame, cached per frame.
+    func layerThumbnail(_ layer: Int) -> [UInt8] {
+        let key = layer * 1_000_000 + frame
+        if let cached = thumbCache[key] { return cached }
+        let pixels = document.celRGBA(layer: layer, frame: frame)
+        if thumbCache.count > 64 { thumbCache.removeAll() }
+        thumbCache[key] = pixels
+        return pixels
+    }
+
+    private var thumbCache: [Int: [UInt8]] = [:]
+
+    // MARK: - Frame timing
+
+    func frameDuration(_ index: Int) -> Int {
+        document.frameDuration(index)
+    }
+
+    func setFrameDuration(_ index: Int, ms: Int) {
+        guard index >= 0, index < document.frameCount else { return }
+        document.snapshot()
+        document.setFrameDuration(index, ms: ms)
+        objectWillChange.send()
+        onDocumentChanged?()
     }
 
     // MARK: - Drawing
