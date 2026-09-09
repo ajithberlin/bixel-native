@@ -280,6 +280,29 @@ pub unsafe extern "C" fn bixel_doc_load_image(
         .load_image_data(slice, width as usize, height as usize, layer as usize, frame as usize);
 }
 
+/// Pack composited frames row-major into a caller-owned RGBA buffer.
+/// Buffer length must exactly match the packed dimensions; capped at 256 MB.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_pack_frames(
+    ptr: *const BixelDoc, columns: u32, out: *mut u8, out_len: usize,
+) -> bool {
+    if ptr.is_null() || out.is_null() || columns == 0 || out_len > 256 * 1024 * 1024 { return false; }
+    let document = unsafe { doc_ref(ptr) }.lock().unwrap();
+    let columns = columns as usize;
+    let rows = document.frames.len() / columns + usize::from(document.frames.len() % columns != 0);
+    let expected = document.width.checked_mul(columns)
+        .and_then(|w| document.height.checked_mul(rows).and_then(|h| w.checked_mul(h)))
+        .and_then(|n| n.checked_mul(4));
+    if expected != Some(out_len) || out_len == 0 { return false; }
+    match document.pack_frames(columns) {
+        Ok((pixels, _, _)) => {
+            unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), out, pixels.len()); }
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Place RGBA data on a new layer without resizing. Returns layer index, or -1.
 /// `data` must point to `data_len` readable bytes. Records one undo snapshot.
 #[no_mangle]

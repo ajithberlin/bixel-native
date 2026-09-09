@@ -37,6 +37,13 @@ struct LayerInfo: Identifiable {
 final class EditorModel: ObservableObject {
     let document: Document
     let timeline: Timeline
+    var assetKind: AssetKind = .sprite
+    var cellWidth = 16
+    var cellHeight = 16
+    @Published var operationError: String?
+    @Published var tileName: String?
+    private var tileStamp: (rgba: [UInt8], width: Int, height: Int)?
+    private var lastTile: (x: Int, y: Int)?
 
     // Tool + brush state
     @Published var tool: Tool = .pencil
@@ -189,6 +196,12 @@ final class EditorModel: ObservableObject {
     func beginStroke(x: Int, y: Int) {
         lastPoint = nil
         strokeChanged = false
+        if assetKind == .map, tileStamp != nil, tool == .pencil {
+            document.snapshot()
+            lastTile = nil
+            paintTile(x: x, y: y)
+            return
+        }
         switch tool {
         case .eyedropper:
             pick(x: x, y: y)
@@ -207,6 +220,7 @@ final class EditorModel: ObservableObject {
     }
 
     func continueStroke(x: Int, y: Int) {
+        if assetKind == .map, tileStamp != nil, tool == .pencil { paintTile(x: x, y: y); return }
         guard let last = lastPoint, last.x != x || last.y != y else { return }
         switch tool {
         case .pencil, .eraser:
@@ -222,6 +236,7 @@ final class EditorModel: ObservableObject {
     func endStroke(x: Int, y: Int) {
         if tool == .pencil || tool == .eraser { continueStroke(x: x, y: y) }
         lastPoint = nil
+        lastTile = nil
         if strokeChanged {
             strokeChanged = false
             lastStrokeEnd = (x, y)
@@ -390,21 +405,92 @@ final class EditorModel: ObservableObject {
         return pixels
     }
 
-    // MARK: - AI result application
-
-    /// Load an RGBA buffer (e.g. an AI result) into a brand-new frame.
-    func applyImageToNewFrame(_ rgba: [UInt8], width: Int, height: Int) {
-        let newFrame = document.addFrame(durationMs: 125)
-        document.loadImageData(rgba, width: width, height: height, layer: 0, frame: newFrame)
-        frame = newFrame
-        reloadLayers()
-        commitChange(allFrames: true)
+    /// Pack the current animation with Rust and export matching frame metadata.
+    func exportSpriteSheet() {
+        do {
+            let columns = max(1, Int(ceil(sqrt(Double(frameCount)))))
+            let sheet = try document.packFrames(columns: columns)
+            guard let png = AIService.rgbaToPNG(sheet.rgba, width: sheet.width, height: sheet.height) else {
+                throw StorageError.message("Could not encode the sprite sheet.")
+            }
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.png]
+            panel.nameFieldStringValue = "animation-\(width)x\(height).png"
+            let metadata: [String: Any] = ["frame_width": width, "frame_height": height, "columns": columns,
+                "frames": (0..<frameCount).map { ["x": ($0 % columns) * width, "y": ($0 / columns) * height,
+                                                     "width": width, "height": height, "duration_ms": document.frameDuration($0)] }]
+            let json = try JSONSerialization.data(withJSONObject: metadata, options: [.prettyPrinted, .sortedKeys])
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return }
+                do {
+                    try ProjectStorage.write(base: url.deletingLastPathComponent(), path: url.lastPathComponent, data: png)
+                    try ProjectStorage.write(base: url.deletingLastPathComponent(), path: url.deletingPathExtension().lastPathComponent + ".json", data: json)
+                } catch { self.operationError = error.localizedDescription }
+            }
+        } catch { operationError = error.localizedDescription }
     }
 
-    /// Replace the current frame's base layer with an RGBA buffer.
-    func applyImageToCurrentFrame(_ rgba: [UInt8], width: Int, height: Int) {
+    // MARK: - AI result application
+
+    func placeAsset(_ data: Data, name: String, x: Int? = nil, y: Int? = nil) {
+        operationError = nil
+        guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the image."; return }
+        let px = x ?? max(0, (width - image.width) / 2)
+        let py = y ?? max(0, (height - image.height) / 2)
+        let snapX = assetKind == .map ? (px / max(1, cellWidth)) * cellWidth : px
+        let snapY = assetKind == .map ? (py / max(1, cellHeight)) * cellHeight : py
+        do {
+            activeLayer = try document.placeImageData(image.rgba, width: image.width, height: image.height,
+                                                       x: snapX, y: snapY, frame: frame, name: name)
+            reloadLayers(); commitChange(allFrames: true)
+        } catch { operationError = error.localizedDescription }
+    }
+
+    func importSheet(_ data: Data, name: String) {
+        guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the sheet."; return }
+        do {
+            activeLayer = try document.importSheetData(image.rgba, width: image.width, height: image.height,
+                                                       cellWidth: width, cellHeight: height, name: name)
+            frame = 0; reloadLayers(); commitChange(allFrames: true)
+        } catch { operationError = error.localizedDescription }
+    }
+
+    func selectTile(_ data: Data, name: String) {
+        guard let image = AIService.pngToRGBA(data), image.width == cellWidth, image.height == cellHeight else {
+            operationError = "Select a tile matching this map's cell dimensions."; return
+        }
+        tileStamp = image; tileName = name; tool = .pencil
+    }
+
+    func clearTile() { tileStamp = nil; tileName = nil; lastTile = nil }
+
+    private func paintTile(x: Int, y: Int) {
+        guard let tileStamp else { return }
+        let tile = (x: x / max(1, cellWidth), y: y / max(1, cellHeight))
+        if let lastTile, tile == lastTile { return }
+        do {
+            try document.stampImageData(tileStamp.rgba, width: tileStamp.width, height: tileStamp.height,
+                                        x: tile.x * cellWidth, y: tile.y * cellHeight, layer: activeLayer, frame: frame)
+            lastTile = tile; strokeChanged = true; pixelsChanged()
+        } catch { operationError = error.localizedDescription }
+    }
+
+    /// Image frames must match this document; generation must never resize it.
+    func applyImageToNewFrame(_ rgba: [UInt8], width: Int, height: Int) {
+        guard width == self.width, height == self.height else {
+            operationError = "This image is \(width) × \(height). Prepare it to \(self.width) × \(self.height), or open it as its own document from the library."
+            return
+        }
         document.snapshot()
-        document.loadImageData(rgba, width: width, height: height, layer: 0, frame: frame)
+        let newFrame = document.addFrame(durationMs: 125)
+        document.loadImageData(rgba, width: width, height: height, layer: 0, frame: newFrame)
+        frame = newFrame; reloadLayers(); commitChange(allFrames: true)
+    }
+
+    func applyImageToCurrentFrame(_ rgba: [UInt8], width: Int, height: Int) {
+        guard width == self.width, height == self.height else { operationError = "Image dimensions must match this document."; return }
+        document.snapshot()
+        document.loadImageData(rgba, width: width, height: height, layer: activeLayer, frame: frame)
         commitChange(allFrames: true)
     }
 }

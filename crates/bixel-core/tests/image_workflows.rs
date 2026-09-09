@@ -68,3 +68,29 @@ fn stamp_clips_replaces_transparency_and_uses_host_history() {
     doc.layers[0].locked = true;
     assert!(doc.stamp_image_data(&[0;4],1,1,0,0,0,0).is_err());
 }
+
+#[test]
+fn packed_frames_use_row_major_order_with_transparent_padding_and_no_mutation() {
+    let mut doc = AsepriteDoc::new(2,1,&[]);
+    doc.add_frame(100);
+    doc.add_frame(100);
+    for frame in 0..3 { doc.set_pixel(0,frame,0,0,Rgba{r:frame as u8+1,g:0,b:0,a:255}); }
+    let empty_layer = doc.add_layer(Some("Empty"));
+    doc.layers[empty_layer].cels[0] = None;
+    let (pixels,w,h) = doc.pack_frames(2).unwrap();
+    assert_eq!((w,h),(4,2));
+    assert_eq!(pixels[0],1);
+    assert_eq!(pixels[8],2);
+    assert_eq!(pixels[16],3);
+    assert_eq!(&pixels[24..32],&[0;8]);
+    assert!(doc.layers[empty_layer].cels[0].is_none());
+    assert!(!doc.can_undo());
+}
+
+#[test]
+fn frame_packing_rejects_invalid_and_excessive_columns() {
+    let doc = AsepriteDoc::new(2,1,&[]);
+    assert!(doc.pack_frames(0).is_err());
+    assert!(doc.pack_frames(usize::MAX).is_err());
+    assert!(doc.pack_frames(33_554_433).is_err());
+}

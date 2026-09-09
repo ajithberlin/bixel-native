@@ -149,9 +149,7 @@ struct ProjectPicker: View {
     private func create() {
         guard canCreate else { return }
         let previous = store.current?.id
-        let size = canvasSize
-        store.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                     width: size.width, height: size.height)
+        store.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines))
         if store.current?.id != previous { dismiss() }
     }
 }

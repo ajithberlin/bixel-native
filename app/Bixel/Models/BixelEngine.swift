@@ -105,6 +105,29 @@ final class Document: @unchecked Sendable {
         }
     }
 
+    /// Export every composited frame into a row-major sheet with transparent padding.
+    func packFrames(columns: Int) throws -> (rgba: [UInt8], width: Int, height: Int) {
+        guard let cols = UInt32(exactly: columns), cols > 0, frameCount > 0 else {
+            throw StorageError.message("Choose at least one column for the sprite sheet.")
+        }
+        let frames = frameCount
+        let rows = frames / columns + (frames % columns == 0 ? 0 : 1)
+        let (sheetWidth, widthOverflow) = width.multipliedReportingOverflow(by: columns)
+        let (sheetHeight, heightOverflow) = height.multipliedReportingOverflow(by: rows)
+        let (pixels, pixelOverflow) = sheetWidth.multipliedReportingOverflow(by: sheetHeight)
+        let (bytes, byteOverflow) = pixels.multipliedReportingOverflow(by: 4)
+        guard !widthOverflow, !heightOverflow, !pixelOverflow, !byteOverflow,
+              bytes > 0, bytes <= 256 * 1024 * 1024 else {
+            throw StorageError.message("The exported sprite sheet exceeds 256 MB.")
+        }
+        var rgba = [UInt8](repeating: 0, count: bytes)
+        let succeeded = rgba.withUnsafeMutableBufferPointer {
+            bixel_doc_pack_frames(handle, cols, $0.baseAddress, $0.count)
+        }
+        guard succeeded else { throw StorageError.message("Cannot pack the document frames into a sprite sheet.") }
+        return (rgba, sheetWidth, sheetHeight)
+    }
+
     /// Place an image on a new layer, clipped to this canvas, in one undo step.
     @discardableResult
     func placeImageData(_ data: [UInt8], width: Int, height: Int, x: Int, y: Int,

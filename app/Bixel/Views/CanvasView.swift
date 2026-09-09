@@ -22,6 +22,7 @@ struct CanvasView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PixelCanvas {
         let view = PixelCanvas()
+        view.registerForDraggedTypes([.png])
         view.device = MTLCreateSystemDefaultDevice()
         view.colorPixelFormat = .bgra8Unorm
         view.clearColor = MTLClearColor(red: 0.07, green: 0.073, blue: 0.085, alpha: 1.0)
@@ -179,6 +180,20 @@ final class PixelCanvas: MTKView {
     private var lineGesture = false
     private var lineDragged = false
     private var lineStart: CGPoint = .zero
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.availableType(from: [.png]) != nil ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let coordinator, let data = sender.draggingPasteboard.data(forType: .png),
+              data.count <= 32_000_000 else { return false }
+        let point = convert(sender.draggingLocation, from: nil)
+        guard let pixel = coordinator.viewport.viewToDoc(point, viewSize: bounds.size,
+                width: coordinator.model.width, height: coordinator.model.height) else { return false }
+        coordinator.model.placeAsset(data, name: "Placed asset", x: pixel.x, y: pixel.y)
+        return coordinator.model.operationError == nil
+    }
 
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

@@ -91,3 +91,16 @@ fn file_inventory_is_bounded_and_sorted() {
     assert_eq!(files[1999]["name"], "1999.bin");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn missing_inventory_is_empty_and_binary_reads_enforce_size_limit() {
+    let root = std::env::temp_dir().join(format!("bixel-storage-missing-{}", std::process::id()));
+    assert_eq!(storage::request(&root, &json!({"op":"files", "path":"assets"})).unwrap(), json!([]));
+    assert_eq!(storage::request(&root, &json!({"op":"files", "path":".studio/cache"})).unwrap(), json!([]));
+    let oversized = std::fs::File::create(root.join("large.png")).unwrap();
+    oversized.set_len(32_000_001).unwrap();
+    let error = storage::request(&root, &json!({"op":"read_bytes", "path":"large.png"})).unwrap_err();
+    assert!(error.contains("32 MB"), "{error}");
+    assert!(storage::request(&root, &json!({"op":"files", "path":"large.png"})).is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}

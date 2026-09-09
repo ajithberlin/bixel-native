@@ -11,6 +11,8 @@ struct ContentView: View {
     @StateObject private var projects = ProjectStore()
     @StateObject private var viewport = CanvasViewport()
     @State private var showProjects = false
+    @State private var showLibrary = true
+    @State private var showNewDocument = false
     @State private var showAI = true
     @State private var showPanel = true
     @State private var timelineCollapsed = false
@@ -25,16 +27,29 @@ struct ContentView: View {
             Group {
                 // Infinite canvas, edge to edge.
                 CanvasView(model: model, viewport: viewport)
-                    .id(projects.current?.id)
+                    .id(projects.catalog.activeDocumentID)
+                    .allowsHitTesting(projects.activeDocument != nil)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 // Left tool rail + brush sliders, vertically centered.
+                if !showLibrary {
                 HStack(alignment: .center, spacing: 8) {
                     ToolRail(model: model)
                     BrushSliders(model: model)
                     Spacer()
                 }
                 .padding(.leading, 14)
+                .disabled(projects.activeDocument == nil)
+                }
+
+                if showLibrary {
+                    HStack {
+                        WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
+                            .id(projects.current?.id)
+                            .studioPanel().padding(.leading, 14).padding(.top, 106).padding(.bottom, 100)
+                        Spacer()
+                    }
+                }
 
                 // Right side: assistant, or the color/layers panel.
                 HStack {
@@ -69,12 +84,25 @@ struct ContentView: View {
                         showAI: $showAI
                     )
                     .padding(.top, 10)
+                    HStack {
+                        Button { showLibrary.toggle() } label: { Label("Library", systemImage: "square.stack.3d.up") }
+                        Button { showNewDocument = true } label: { Image(systemName: "plus") }.help("New document")
+                            .disabled(assistant.busy)
+                        if let item = projects.activeDocument {
+                            Text("\(item.name) · \(item.kind.title)").font(.caption.bold())
+                            Text(item.summary).font(.caption).foregroundColor(.secondary)
+                        } else { Text("Add a document to start creating").font(.caption) }
+                        Spacer()
+                    }.padding(.horizontal, 24).padding(.top, 6)
 
                     Spacer()
 
+                    EditorOperationFeedback(model: model)
+                    if projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
                     TimelineBar(model: model, collapsed: $timelineCollapsed)
                         .padding(.horizontal, 16)
                         .padding(.bottom, timelineCollapsed ? 4 : 12)
+                    }
                 }
             }
             .disabled(projects.current == nil)
@@ -101,8 +129,10 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: showAI)
         .animation(.easeInOut(duration: 0.2), value: showPanel)
         .sheet(isPresented: $showProjects) { ProjectPicker(store: projects) }
+        .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .onAppear { showProjects = projects.current == nil }
-        .onChange(of: projects.current?.id) { _ in viewport.refit() }
+        .onChange(of: projects.current?.id) { _ in viewport.refit(); showLibrary = true }
+        .onChange(of: projects.catalog.activeDocumentID) { _ in viewport.refit() }
         .onChange(of: scenePhase) { phase in
             if phase != .active { flushProject() }
         }

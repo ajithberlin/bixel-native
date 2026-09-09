@@ -705,11 +705,31 @@ impl AsepriteDoc {
         count
     }
 
+    /// Composite animation frames into a regular sheet without modifying the document.
+    pub fn pack_frames(&self, columns: usize) -> Result<(Vec<u8>, usize, usize), String> {
+        if columns == 0 || self.frames.is_empty() { return Err("No frames or zero columns".into()); }
+        let rows = self.frames.len() / columns + usize::from(self.frames.len() % columns != 0);
+        let width = self.width.checked_mul(columns).ok_or("Sheet width overflow")?;
+        let height = self.height.checked_mul(rows).ok_or("Sheet height overflow")?;
+        let bytes = width.checked_mul(height).and_then(|n| n.checked_mul(4)).ok_or("Sheet size overflow")?;
+        if bytes == 0 || bytes > 256 * 1024 * 1024 { return Err("Sheet exceeds 256 MB".into()); }
+        let mut output = vec![0; bytes];
+        for frame in 0..self.frames.len() {
+            let pixels = self.composite_frame(frame);
+            for row in 0..self.height {
+                let target = (((frame / columns) * self.height + row) * width + (frame % columns) * self.width) * 4;
+                let source = row * self.width * 4;
+                output[target..target + self.width * 4].copy_from_slice(&pixels[source..source + self.width * 4]);
+            }
+        }
+        Ok((output, width, height))
+    }
+
     /// Flatten every visible layer at `frame_idx` into a single RGBA buffer.
     ///
     /// Faithful port of `compositeFrame` — including per-layer opacity and the
     /// Aseprite blend modes.
-    pub fn composite_frame(&mut self, frame_idx: usize) -> Vec<u8> {
+    pub fn composite_frame(&self, frame_idx: usize) -> Vec<u8> {
         let len = self.width * self.height * 4;
         let mut output = vec![0u8; len];
 
@@ -731,12 +751,11 @@ impl AsepriteDoc {
             let _ = visible;
 
             let src = {
-                let cel = match self.cel_mut(l, frame_idx) {
+                let cel = match self.layers[l].cels.get(frame_idx).and_then(Option::as_ref) {
                     Some(c) => c,
                     None => continue,
                 };
-                // Clone the pixels we need while releasing the mutable borrow of
-                // `self` so the per-pixel loop below can keep `output` local.
+                // Pad short legacy cel buffers before compositing.
                 let mut buf = vec![0u8; len];
                 let take = len.min(cel.data.len());
                 buf[..take].copy_from_slice(&cel.data[..take]);

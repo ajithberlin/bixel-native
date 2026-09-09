@@ -201,3 +201,20 @@ struct NewWorkspaceDocument: View {
         VStack(alignment: .leading) { Text(title).font(.caption); TextField(title, value: value, format: .number).textFieldStyle(.roundedBorder) }
     }
 }
+
+struct EditorOperationFeedback: View {
+    @ObservedObject var model: EditorModel
+    var body: some View {
+        Group {
+            if let name = model.tileName {
+                HStack {
+                    Label("Tile brush: \(name)", systemImage: "square.grid.2x2")
+                    Button("Clear tile brush") { model.clearTile() }
+                }.font(.caption).padding(8).background(.regularMaterial, in: Capsule())
+            } else { Color.clear.frame(height: 1) }
+        }
+        .alert("Asset could not be applied", isPresented: Binding(get: { model.operationError != nil }, set: { if !$0 { model.operationError = nil } })) {
+            Button("OK") { model.operationError = nil }
+        } message: { Text(model.operationError ?? "") }
+    }
+}

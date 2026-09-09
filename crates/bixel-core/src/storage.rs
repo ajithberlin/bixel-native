@@ -34,8 +34,12 @@ fn files(root: &Path, relative: &str, recursive: bool) -> Result<Value, String> 
     let mut pending = std::collections::BTreeSet::from([directory]);
     let mut files = Vec::new();
     while let Some(directory) = pending.pop_first() {
-        let mut entries = fs::read_dir(directory).map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let entries = match fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut entries = entries.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let kind = entry.file_type().map_err(|e| e.to_string())?;
@@ -141,6 +145,8 @@ pub fn request(base: &Path, value: &Value) -> Result<Value, String> {
             files(&root, field("path")?, recursive)
         }
         "read_bytes" => {
+            use std::io::Read;
+            const MAX_BYTES: u64 = 32_000_000;
             let path = file_path(&root, field("path")?)?;
             match fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.is_file() => {},
@@ -148,11 +154,19 @@ pub fn request(base: &Path, value: &Value) -> Result<Value, String> {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
                 Err(e) => return Err(e.to_string()),
             }
-            match fs::read(path) {
-                Ok(bytes) => Ok(json!(bytes)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Value::Null),
-                Err(e) => Err(e.to_string()),
-            }
+            let file = match fs::File::open(path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
+                Err(e) => return Err(e.to_string()),
+            };
+            let metadata = file.metadata().map_err(|e| e.to_string())?;
+            if !metadata.is_file() { return Err("Expected a regular file".into()); }
+            if metadata.len() > MAX_BYTES { return Err("Choose an asset no larger than 32 MB.".into()); }
+            // Bound the actual read too: a file may grow after metadata is read.
+            let mut bytes = Vec::new();
+            file.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > MAX_BYTES { return Err("Choose an asset no larger than 32 MB.".into()); }
+            Ok(json!(bytes))
         }
         "write" => { write(&root, field("path")?, field("text")?.as_bytes())?; Ok(Value::Null) }
         _ => Err("Unknown storage operation".into()),

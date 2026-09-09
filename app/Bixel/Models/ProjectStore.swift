@@ -86,7 +86,7 @@ final class ProjectStore: ObservableObject {
         }
         let transcript = try ProjectStorage.read(base: base, path: "assistant.json")
         let state = try transcript.map { try JSONDecoder().decode(AssistantSavedState.self, from: Data($0.utf8)) }
-        current = project; catalog = nextCatalog
+        current = project; catalog = nextCatalog; assets = []
         installEditor(document.map { EditorModel(document: $0) } ?? EditorModel())
         assistant.configure(projectRoot: base, state: state)
         assistant.onPersist = { [weak self] in self?.saveAssistant() }
@@ -132,6 +132,7 @@ final class ProjectStore: ObservableObject {
     }
 
     func setStyle(_ style: String) {
+        do { try flush() } catch { self.error = error.localizedDescription; return }
         let old = catalog.style
         catalog.style = String(style.prefix(4000))
         do { try persistCatalog() } catch { catalog.style = old; self.error = error.localizedDescription }

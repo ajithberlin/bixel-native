@@ -104,6 +104,8 @@ struct TopBar: View {
 
             // Export
             Menu {
+                Button("Animation sheet + frame timings…") { model.exportSpriteSheet() }
+                Divider()
                 ForEach([1, 2, 4, 8], id: \.self) { scale in
                     Button("PNG at \(scale)× (\(model.width * scale) × \(model.height * scale))") {
                         model.exportPNG(scale: scale)

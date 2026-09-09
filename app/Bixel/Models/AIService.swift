@@ -138,7 +138,12 @@ enum AIService {
     }
 
     static func pngToRGBA(_ data: Data) -> (rgba: [UInt8], width: Int, height: Int)? {
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+        guard data.count <= 32_000_000,
+              let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let sourceWidth = properties[kCGImagePropertyPixelWidth] as? Int,
+              let sourceHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+              sourceWidth > 0, sourceHeight > 0, sourceWidth <= 4096, sourceHeight <= 4096,
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let w = cg.width
         let h = cg.height

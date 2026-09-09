@@ -390,7 +390,8 @@ private struct AssistantArtifactCard: View {
                 Button { showImage = true } label: {
                     Image(nsImage: image).resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 230)
                         .padding(8).background(StudioTheme.background, in: RoundedRectangle(cornerRadius: 10))
-                }.buttonStyle(.plain).help("View image")
+                }.buttonStyle(.plain).help("View image or drag onto the canvas")
+                .onDrag { imageProvider(artifact.data) }
             }
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -403,7 +404,8 @@ private struct AssistantArtifactCard: View {
                     if let decoded = AIService.pngToRGBA(artifact.data) {
                         model.applyImageToNewFrame(decoded.rgba, width: decoded.width, height: decoded.height); applied = true
                     }
-                }.font(.system(size: 10)).disabled(applied)
+                }.font(.system(size: 10)).disabled(applied || artifact.width != model.width || artifact.height != model.height)
+                .help("Frames must match this document. Use the library to open a different-sized image.")
             }
         }.padding(10).background(StudioTheme.panelElevated.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         .sheet(isPresented: $showImage) {
