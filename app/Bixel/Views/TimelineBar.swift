@@ -1,288 +1,152 @@
 // TimelineBar.swift
-//
-// Floating bottom timeline, Procreate Dreams-style: playback controls, a strip
-// of frame thumbnails with duration badges and per-frame context actions
-// (duration, duplicate, delete), plus FPS and loop-mode settings.
+// Compact animation assist: controls above a draggable strip of frames.
 
 import SwiftUI
 
 struct TimelineBar: View {
     @ObservedObject var model: EditorModel
-    @Binding var collapsed: Bool
+    @State private var dropTarget: Int?
+
+    private var dragPrefix: String {
+        "bixel-frame:\(ObjectIdentifier(model.document)):\(model.frameCount):"
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if collapsed {
-                // Slim collapsed pill — stays visible and clickable so the
-                // timeline can always be brought back.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { collapsed = false }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.up")
-                            .font(.system(size: 9, weight: .bold))
-                        Text("Timeline")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("·  \(model.frameCount) frame\(model.frameCount == 1 ? "" : "s")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(StudioTheme.textDisabled)
+        VStack(spacing: 6) {
+            HStack(spacing: 18) {
+                Button(model.playing ? "Pause" : "Play") { model.togglePlayback() }
+                    .help("Play or pause animation")
+                Spacer(minLength: 12)
+                Menu {
+                    Menu("Frames per second") {
+                        ForEach([4, 8, 12, 24, 30, 60], id: \.self) { fps in
+                            Button {
+                                model.fps = Double(fps)
+                            } label: {
+                                if Int(model.fps) == fps {
+                                    Label("\(fps) FPS", systemImage: "checkmark")
+                                } else {
+                                    Text("\(fps) FPS")
+                                }
+                            }
+                        }
                     }
-                    .foregroundColor(StudioTheme.textSecondary)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 26)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            } else {
-                HStack(spacing: 12) {
-                    playbackControls
-                    divider
-                    frameStrip
-                    divider
-                    frameActions
-                    divider
-                    playbackSettings
-                }
-                // ScrollViews are greedy; without a fixed height the bar
-                // stretches to fill the whole window.
-                .frame(height: 76)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(StudioTheme.hairline, lineWidth: 1)
-        )
-        .overlay(alignment: .topTrailing) {
-            if !collapsed {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) { collapsed = true }
+                    Picker("Playback", selection: $model.loopMode) {
+                        Text("Loop").tag(LoopMode.forward)
+                        Text("Reverse").tag(LoopMode.reverse)
+                        Text("Ping-pong").tag(LoopMode.pingPong)
+                    }
                 } label: {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundColor(StudioTheme.textSecondary)
-                        .frame(width: 40, height: 16)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.regularMaterial)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(StudioTheme.hairline, lineWidth: 1)
-                        )
+                    Text("Settings")
                 }
-                .buttonStyle(.plain)
-                .offset(y: -8)
-                .help("Hide timeline")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                Button("Add Frame") { model.pause(); model.addFrame() }
             }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(StudioTheme.textSecondary)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 3)
+
+            frameStrip
+                .frame(height: 48)
         }
-        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+        .padding(9)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(white: 0.12).opacity(0.96)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(StudioTheme.hairline, lineWidth: 1))
+        .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
     }
-
-    private var divider: some View {
-        Rectangle().fill(StudioTheme.hairline).frame(width: 1, height: 48)
-    }
-
-    // MARK: - Playback
-
-    private var playbackControls: some View {
-        HStack(spacing: 4) {
-            Button { model.goTo(0) } label: {
-                Image(systemName: "backward.end.fill")
-            }
-            .help("First frame")
-            Button { model.goTo(max(0, model.frame - 1)) } label: {
-                Image(systemName: "backward.frame.fill")
-            }
-            .help("Previous frame")
-            Button { model.togglePlayback() } label: {
-                Image(systemName: model.playing ? "pause.fill" : "play.fill")
-                    .font(.title3)
-                    .frame(width: 30)
-            }
-            .help("Play / pause")
-            Button { model.goTo(min(model.frameCount - 1, model.frame + 1)) } label: {
-                Image(systemName: "forward.frame.fill")
-            }
-            .help("Next frame")
-            Button { model.goTo(model.frameCount - 1) } label: {
-                Image(systemName: "forward.end.fill")
-            }
-            .help("Last frame")
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(StudioTheme.textPrimary)
-    }
-
-    // MARK: - Frame strip
 
     private var frameStrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 6) {
+                LazyHStack(spacing: 5) {
                     ForEach(0..<model.frameCount, id: \.self) { index in
                         FrameCell(
-                            index: index,
                             selected: index == model.frame,
-                            durationMs: model.frameDuration(index),
+                            targeted: dropTarget == index,
                             image: model.frameThumbnailCGImage(index),
                             width: model.width,
                             height: model.height
                         )
                         .id(index)
-                        .onTapGesture { model.goTo(index) }
+                        .onTapGesture { model.pause(); model.goTo(index) }
                         .contextMenu { frameMenu(for: index) }
+                        .draggable(dragPrefix + String(index))
+                        .dropDestination(for: String.self) { items, _ in
+                            defer { dropTarget = nil }
+                            guard items.count == 1, let value = items.first,
+                                  value.hasPrefix(dragPrefix),
+                                  let source = Int(value.dropFirst(dragPrefix.count)),
+                                  source >= 0, source < model.frameCount,
+                                  source != index else { return false }
+                            model.reorderFrame(from: source, to: index)
+                            return true
+                        } isTargeted: { targeted in
+                            if targeted { dropTarget = index }
+                            else if dropTarget == index { dropTarget = nil }
+                        }
+                        .accessibilityLabel("Frame \(index + 1), \(model.frameDuration(index)) milliseconds")
+                        .accessibilityAddTraits(index == model.frame ? [.isSelected] : [])
+                        .accessibilityAction(named: "Move earlier") {
+                            model.reorderFrame(from: index, to: index - 1)
+                        }
+                        .accessibilityAction(named: "Move later") {
+                            model.reorderFrame(from: index, to: index + 1)
+                        }
+                        .help("Frame \(index + 1) · \(model.frameDuration(index)) ms — drag to arrange; right-click for options")
                     }
                 }
-                .padding(.vertical, 2)
                 .padding(.horizontal, 2)
             }
-            .onChange(of: model.frame) { idx in
-                withAnimation { proxy.scrollTo(idx, anchor: .center) }
+            .onChange(of: model.frame) { index in
+                withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(index, anchor: .center) }
             }
         }
     }
 
     @ViewBuilder
     private func frameMenu(for index: Int) -> some View {
-        Menu("Duration") {
+        Menu("Hold duration") {
             ForEach([50, 100, 125, 250, 500, 1000], id: \.self) { ms in
                 Button("\(ms) ms") { model.setFrameDuration(index, ms: ms) }
             }
         }
-        Button("Duplicate Frame") { model.goTo(index); model.duplicateFrame() }
-        Divider()
-        Button("Delete Frame", role: .destructive) {
+        Button("Duplicate") { model.pause(); model.goTo(index); model.duplicateFrame() }
+        Button("Delete", role: .destructive) {
+            model.pause()
             model.goTo(index)
             model.removeFrame()
         }
         .disabled(model.frameCount <= 1)
     }
-
-    // MARK: - Frame actions
-
-    private var frameActions: some View {
-        HStack(spacing: 4) {
-            Button { model.addFrame() } label: {
-                Image(systemName: "plus.rectangle.on.rectangle")
-            }
-            .help("Add frame")
-            Button { model.removeFrame() } label: {
-                Image(systemName: "trash")
-            }
-            .disabled(model.frameCount <= 1)
-            .foregroundColor(model.frameCount > 1 ? StudioTheme.textSecondary : StudioTheme.textDisabled)
-            .help("Delete frame")
-        }
-        .buttonStyle(.plain)
-        .foregroundColor(StudioTheme.textSecondary)
-    }
-
-    // MARK: - Playback settings
-
-    private var playbackSettings: some View {
-        HStack(spacing: 8) {
-            Menu {
-                ForEach([4, 8, 12, 24, 30, 60], id: \.self) { fps in
-                    Button("\(fps) FPS") { model.fps = Double(fps) }
-                }
-            } label: {
-                Text("\(Int(model.fps)) FPS")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundColor(StudioTheme.textSecondary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Playback speed (rescales frame durations)")
-
-            Menu {
-                Button { model.loopMode = .forward } label: {
-                    Label("Loop forward", systemImage: model.loopMode == .forward ? "checkmark" : "")
-                }
-                Button { model.loopMode = .reverse } label: {
-                    Label("Reverse", systemImage: model.loopMode == .reverse ? "checkmark" : "")
-                }
-                Button { model.loopMode = .pingPong } label: {
-                    Label("Ping-pong", systemImage: model.loopMode == .pingPong ? "checkmark" : "")
-                }
-            } label: {
-                Image(systemName: loopIcon)
-                    .font(.system(size: 11))
-                    .foregroundColor(StudioTheme.textSecondary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Loop mode")
-        }
-    }
-
-    private var loopIcon: String {
-        switch model.loopMode {
-        case .forward: return "repeat"
-        case .reverse: return "arrow.uturn.backward.circle"
-        case .pingPong: return "arrow.left.arrow.right"
-        }
-    }
 }
 
-// MARK: - Frame cell
-
 private struct FrameCell: View {
-    let index: Int
     let selected: Bool
-    let durationMs: Int
+    let targeted: Bool
     let image: CGImage?
     let width: Int
     let height: Int
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        VStack(spacing: 3) {
             PixelImageView(cgImage: image, width: width, height: height)
-                .frame(width: 56, height: 56)
+                .frame(width: 40, height: 40)
                 .background(CheckerboardView(cell: 5))
-
-            Text("\(index + 1)")
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 3)
-                .padding(.vertical, 1)
-                .background(Color.black.opacity(0.65))
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                .padding(3)
-
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
-                    Text(durationLabel)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(Color.black.opacity(0.65))
-                        .foregroundColor(.white.opacity(0.85))
-                        .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                        .padding(3)
-                }
-            }
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .overlay(RoundedRectangle(cornerRadius: 3)
+                    .strokeBorder(targeted ? StudioTheme.accent : StudioTheme.hairlineStrong,
+                                  lineWidth: targeted ? 2 : 1))
+            Capsule()
+                .fill(selected ? StudioTheme.accent : Color.clear)
+                .frame(height: 3)
         }
-        .frame(width: 56, height: 56)
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(selected ? StudioTheme.accent : StudioTheme.hairlineStrong, lineWidth: selected ? 2 : 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .scaleEffect(selected ? 1.04 : 1)
-        .animation(.easeInOut(duration: 0.12), value: selected)
-    }
-
-    private var durationLabel: String {
-        durationMs >= 1000 ? String(format: "%gs", Double(durationMs) / 1000) : "\(durationMs)ms"
+        .frame(width: 40, height: 48)
+        .contentShape(Rectangle())
     }
 }
 

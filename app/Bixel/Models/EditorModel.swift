@@ -747,6 +747,21 @@ final class EditorModel: ObservableObject {
         commitChange(allFrames: true)
     }
 
+    func reorderFrame(from: Int, to: Int) {
+        guard from >= 0, to >= 0, from < frameCount, to < frameCount, from != to else { return }
+        pause()
+        document.snapshot()
+        document.reorderFrame(from: from, to: to)
+        // Keep the selected artwork selected as its position changes.
+        let selected: Int
+        if frame == from { selected = to }
+        else if from < frame && frame <= to { selected = frame - 1 }
+        else if to <= frame && frame < from { selected = frame + 1 }
+        else { selected = frame }
+        goTo(selected)
+        commitChange(allFrames: true)
+    }
+
     func removeFrame() {
         guard document.frameCount > 1 else { return }
         document.snapshot()

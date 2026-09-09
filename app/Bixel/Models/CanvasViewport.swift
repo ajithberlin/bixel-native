@@ -22,6 +22,9 @@ final class CanvasViewport: ObservableObject {
     @Published var onionOpacity: Double = 0.32
     /// How many previous frames to ghost (1 or 2; the older one fades more).
     @Published var onionFrames: Int = 1
+    /// Width (points) reserved on the right by a docked side panel. The camera
+    /// centres within the remaining area instead of the full view.
+    var rightInset: CGFloat = 0
 
     static let minZoom: CGFloat = 0.25
     static let maxZoom: CGFloat = 64
@@ -34,6 +37,16 @@ final class CanvasViewport: ObservableObject {
 
     /// Forget the fit so the next draw re-centers (e.g. after switching project).
     func refit() { didFit = false }
+
+    /// Reserve horizontal room for a docked side panel and re-centre the
+    /// artwork within the remaining area (canvas itself is not resized).
+    func setRightInset(_ inset: CGFloat) {
+        let clamped = max(0, inset)
+        let delta = clamped - rightInset
+        guard delta != 0 else { return }
+        rightInset = clamped
+        pan = CGPoint(x: pan.x - delta / 2, y: pan.y)
+    }
 
     /// Zoom to fit using the last known view size.
     func zoomToFitCurrent(canvasWidth w: Int, height h: Int) {
@@ -49,7 +62,7 @@ final class CanvasViewport: ObservableObject {
     /// Bottom-left corner of the artboard in view points (AppKit coords, y-up).
     func artboardOrigin(viewSize: CGSize, canvasWidth w: Int, height h: Int) -> CGPoint {
         CGPoint(
-            x: viewSize.width / 2 + pan.x - CGFloat(w) * zoom / 2,
+            x: (viewSize.width - rightInset) / 2 + pan.x - CGFloat(w) * zoom / 2,
             y: viewSize.height / 2 + pan.y - CGFloat(h) * zoom / 2
         )
     }
@@ -70,8 +83,8 @@ final class CanvasViewport: ObservableObject {
     func zoomToFit(viewSize: CGSize, canvasWidth w: Int, height h: Int) {
         guard viewSize.width > 40, viewSize.height > 40, w > 0, h > 0 else { return }
         // Leave room for the floating chrome (top capsule, tool rail, panels,
-        // timeline) so the artboard never starts hidden underneath it.
-        let availW = viewSize.width - 260
+        // timeline, docked AI sidebar) so the artboard never starts hidden.
+        let availW = viewSize.width - 260 - rightInset
         let availH = viewSize.height - 220
         guard availW > 40, availH > 40 else { return }
         zoom = Self.clampZoom(min(availW / CGFloat(w), availH / CGFloat(h)))

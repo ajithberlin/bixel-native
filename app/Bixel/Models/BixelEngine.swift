@@ -211,6 +211,10 @@ final class Document: @unchecked Sendable {
         Int(bixel_doc_add_frame(handle, UInt32(durationMs)))
     }
 
+    func reorderFrame(from: Int, to: Int) {
+        bixel_doc_reorder_frame(handle, UInt32(from), UInt32(to))
+    }
+
     func removeFrame(_ index: Int) {
         bixel_doc_remove_frame(handle, UInt32(index))
     }

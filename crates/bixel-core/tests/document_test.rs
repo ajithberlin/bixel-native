@@ -171,6 +171,11 @@ fn reorder_frame_preserves_layers_timing_and_undo() {
     assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 12);
     for (index, frame) in doc.frames.iter().enumerate() {
         assert_eq!(frame.index, index);
+        for (layer_index, layer) in doc.layers.iter().enumerate() {
+            let cel = layer.cels[index].as_ref().unwrap();
+            assert_eq!(cel.frame_index, index);
+            assert_eq!(cel.layer_index, layer_index);
+        }
     }
     assert!(doc.undo());
     assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);

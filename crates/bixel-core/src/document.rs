@@ -353,6 +353,25 @@ impl AsepriteDoc {
         new_idx
     }
 
+    /// Move a complete frame, keeping timing and every layer's cel together.
+    /// Tags remain anchored to their timeline ranges.
+    pub fn reorder_frame(&mut self, from: usize, to: usize) {
+        if from >= self.frames.len() || to >= self.frames.len() || from == to {
+            return;
+        }
+        let frame = self.frames.remove(from);
+        self.frames.insert(to, frame);
+        for (index, frame) in self.frames.iter_mut().enumerate() {
+            frame.index = index;
+        }
+        for layer in &mut self.layers {
+            layer.cels.resize(self.frames.len(), None);
+            let cel = layer.cels.remove(from);
+            layer.cels.insert(to, cel);
+        }
+        self.sync_cel_indices();
+    }
+
     pub fn remove_frame(&mut self, frame_idx: usize) {
         if frame_idx >= self.frames.len() {
             return;

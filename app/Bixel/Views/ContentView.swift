@@ -22,12 +22,12 @@ struct ContentView: View {
     @State private var showLayers = true
     @State private var showColor = false
     @State private var showTimeline = false
-    @State private var timelineCollapsed = false
     @State private var assistantExpanded = false
     @Environment(\.scenePhase) private var scenePhase
 
     private var model: EditorModel { projects.editor }
     private var assistant: AssistantSession { projects.assistant }
+    private var aiPanelWidth: CGFloat { assistantExpanded ? 520 : 372 }
 
     var body: some View {
         ZStack {
@@ -79,8 +79,16 @@ struct ContentView: View {
         }
         .onChange(of: projects.current?.id) { _ in viewport.refit() }
         .onChange(of: projects.catalog.activeDocumentID) { _ in viewport.refit() }
-        .onChange(of: showAI) { _ in viewport.refit() }
-        .onChange(of: assistantExpanded) { _ in viewport.refit() }
+        .onChange(of: showAI) { isOpen in
+            if isOpen {
+                showLayers = false
+                showColor = false
+            }
+            viewport.setRightInset(isOpen ? aiPanelWidth : 0)
+        }
+        .onChange(of: assistantExpanded) { _ in
+            viewport.setRightInset(showAI ? aiPanelWidth : 0)
+        }
         .onChange(of: scenePhase) { phase in
             if phase != .active { flushProject() }
         }
@@ -106,13 +114,12 @@ struct ContentView: View {
 
     private var projectCanvasView: some View {
         ZStack {
-            HStack(spacing: 0) {
-                Group {
-                    // Infinite canvas, edge to edge.
-                    CanvasView(model: model, viewport: viewport)
-                        .id(projects.catalog.activeDocumentID)
-                        .allowsHitTesting(projects.activeDocument != nil)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Group {
+                // Infinite canvas, edge to edge.
+                CanvasView(model: model, viewport: viewport)
+                    .id(projects.catalog.activeDocumentID)
+                    .allowsHitTesting(projects.activeDocument != nil)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     // Left vertical brush dock, vertically centered.
                     HStack {
@@ -196,9 +203,9 @@ struct ContentView: View {
                         EditorOperationFeedback(model: model)
 
                         if showTimeline && projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
-                            TimelineBar(model: model, collapsed: $timelineCollapsed)
+                            TimelineBar(model: model)
                                 .padding(.horizontal, 16)
-                                .padding(.bottom, timelineCollapsed ? 4 : 14)
+                                .padding(.bottom, 12)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
@@ -206,33 +213,37 @@ struct ContentView: View {
                 .disabled(projects.current == nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // AI copilot as a docked right-side panel
+                // AI copilot docked against the right edge. It overlays the
+                // canvas (which keeps its size) instead of resizing the shell.
                 if showAI {
-                    AIPanel(
-                        model: model,
-                        session: assistant,
-                        onClose: { showAI = false },
-                        expanded: assistantExpanded,
-                        onExpand: { assistantExpanded.toggle() }
-                    )
+                    HStack(spacing: 0) {
+                        AIPanel(
+                            model: model,
+                            session: assistant,
+                            onClose: { showAI = false },
+                            expanded: assistantExpanded,
+                            onExpand: { assistantExpanded.toggle() }
+                        )
+                    }
                     .id(projects.current?.id)
-                    .frame(width: assistantExpanded ? 520 : 372)
+                    .frame(width: aiPanelWidth)
                     .frame(maxHeight: .infinity)
                     .background(
                         Rectangle().fill(.ultraThinMaterial)
                             .overlay(Rectangle().fill(StudioTheme.procreateGlass))
                     )
                     .overlay(alignment: .leading) {
-                        Rectangle().fill(StudioTheme.hairline).frame(width: 1)
+                        Rectangle().fill(StudioTheme.hairlineStrong).frame(width: 1)
                     }
+                    .padding(.top, 52)
+                    .padding(.bottom, 72)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
     }
 }
-
 extension Notification.Name {
     static let studioUndo = Notification.Name("studio.undo")
     static let studioRedo = Notification.Name("studio.redo")

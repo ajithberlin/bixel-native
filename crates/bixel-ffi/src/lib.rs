@@ -210,6 +210,11 @@ pub unsafe extern "C" fn bixel_doc_add_frame(ptr: *mut BixelDoc, duration_ms: u3
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn bixel_doc_reorder_frame(ptr: *mut BixelDoc, from: u32, to: u32) {
+    unsafe { doc(ptr) }.lock().unwrap().reorder_frame(from as usize, to as usize);
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn bixel_doc_remove_frame(ptr: *mut BixelDoc, idx: u32) {
     unsafe { doc(ptr) }.lock().unwrap().remove_frame(idx as usize);
 }
