@@ -1,6 +1,7 @@
 // ToolRail.swift
 //
-// Left tool rail: tool selection + brush size / opacity sliders, Procreate-style.
+// Floating left capsule: tool selection, a brush-size preview dot, and the
+// brush size / opacity sliders, Procreate-style.
 
 import SwiftUI
 
@@ -15,18 +16,28 @@ struct ToolRail: View {
                 }
             }
 
-            Spacer(minLength: 8)
+            Rectangle()
+                .fill(StudioTheme.hairline)
+                .frame(width: 28, height: 1)
+                .padding(.vertical, 4)
 
-            VStack(spacing: 10) {
-                StudioSlider(icon: "circle.lefthalf.filled", value: $model.brushSize, range: 1...32)
-                StudioSlider(icon: "drop.halffull", value: $model.opacity, range: 0...1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 10)
+            // Brush size preview
+            Circle()
+                .fill(StudioTheme.textPrimary.opacity(0.85))
+                .frame(width: max(3, min(22, CGFloat(model.brushSize))), height: max(3, min(22, CGFloat(model.brushSize))))
+                .frame(width: 24, height: 24)
         }
-        .padding(.vertical, 10)
-        .frame(width: 64)
-        .background(StudioTheme.panel.opacity(0.4))
+        .padding(.vertical, 12)
+        .padding(.horizontal, 6)
+        .frame(width: 60)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(StudioTheme.hairline, lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }
 
@@ -39,14 +50,14 @@ private struct ToolButton: View {
         Button(action: action) {
             VStack(spacing: 3) {
                 Image(systemName: tool.symbol)
-                    .font(.system(size: 18, weight: .medium))
+                    .font(.system(size: 17, weight: .medium))
                 Text(tool.label)
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: 8, weight: .medium))
             }
             .foregroundColor(selected ? StudioTheme.accent : StudioTheme.textSecondary)
-            .frame(width: 52, height: 44)
+            .frame(width: 48, height: 42)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(selected ? StudioTheme.accentSoft : Color.clear)
             )
         }

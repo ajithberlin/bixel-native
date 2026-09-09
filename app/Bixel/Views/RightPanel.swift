@@ -1,6 +1,7 @@
 // RightPanel.swift
 //
-// Right side panel with "Color" (disc + preset swatches) and "Layers" tabs.
+// Floating right panel: brush settings on top, then "Color" (disc + preset
+// swatches) and "Layers" tabs. Layers support inline rename (double-click).
 
 import SwiftUI
 
@@ -15,11 +16,21 @@ struct RightPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Brush
+            VStack(spacing: 8) {
+                StudioSlider(icon: "circle.lefthalf.filled", value: $model.brushSize, range: 1...32)
+                StudioSlider(icon: "drop.halffull", value: $model.opacity, range: 0...1)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
             Picker("", selection: $tab) {
                 ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .padding(10)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
 
             Divider().overlay(StudioTheme.hairline)
 
@@ -31,8 +42,8 @@ struct RightPanel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 260)
-        .background(StudioTheme.panel.opacity(0.55))
+        .frame(width: 260, height: 520)
+        .studioPanel()
     }
 
     private var colorTab: some View {
@@ -83,9 +94,11 @@ struct RightPanel: View {
                 Spacer()
                 Button { model.addLayer() } label: { Image(systemName: "plus") }.buttonStyle(.plain)
                     .foregroundColor(StudioTheme.textPrimary)
+                    .help("Add layer")
                 Button { model.deleteLayer() } label: { Image(systemName: "trash") }.buttonStyle(.plain)
                     .foregroundColor(model.document.layerCount > 1 ? StudioTheme.textPrimary : StudioTheme.textDisabled)
                     .disabled(model.document.layerCount <= 1)
+                    .help("Delete layer")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
@@ -99,7 +112,8 @@ struct RightPanel: View {
                             visible: layer.visible,
                             selected: layer.index == model.activeLayer,
                             onSelect: { model.activeLayer = layer.index },
-                            onToggle: { model.toggleLayerVisibility(layer.index) }
+                            onToggle: { model.toggleLayerVisibility(layer.index) },
+                            onRename: { model.renameLayer(layer.index, name: $0) }
                         )
                     }
                 }
@@ -120,6 +134,10 @@ private struct LayerRow: View {
     let selected: Bool
     let onSelect: () -> Void
     let onToggle: () -> Void
+    let onRename: (String) -> Void
+
+    @State private var editing = false
+    @State private var draft = ""
 
     var body: some View {
         HStack(spacing: 8) {
@@ -130,10 +148,25 @@ private struct LayerRow: View {
             }
             .buttonStyle(.plain)
 
-            Text(name)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                .foregroundColor(selected ? StudioTheme.textPrimary : StudioTheme.textSecondary)
-                .lineLimit(1)
+            if editing {
+                TextField("", text: $draft, onCommit: {
+                    onRename(draft)
+                    editing = false
+                })
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(StudioTheme.textPrimary)
+            } else {
+                Text(name)
+                    .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                    .foregroundColor(selected ? StudioTheme.textPrimary : StudioTheme.textSecondary)
+                    .lineLimit(1)
+                    .onTapGesture(count: 2) {
+                        draft = name
+                        editing = true
+                    }
+                    .onTapGesture(count: 1, perform: onSelect)
+            }
             Spacer()
         }
         .padding(.horizontal, 10)

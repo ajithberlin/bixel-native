@@ -19,6 +19,8 @@ thiserror = "1"
 regex = "1"
 
 [profile.release]
-lto = true
+lto = "fat"
 codegen-units = 1
 strip = true
+panic = "abort"
+opt-level = "z"

@@ -52,8 +52,8 @@ struct AIPanel: View {
                 Text(session.tokenCount > 0 ? "\(session.tokenCount.formatted()) tokens" : "Made for your canvas")
             }.font(.system(size: 9)).foregroundColor(StudioTheme.textDisabled).padding(.horizontal, 22).padding(.bottom, 10)
         }
-        .foregroundColor(StudioTheme.textPrimary).background(StudioTheme.panel)
-        .overlay(alignment: .leading) { Rectangle().fill(StudioTheme.hairline).frame(width: 1) }
+        .foregroundColor(StudioTheme.textPrimary)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget) { providers in
             for provider in providers.prefix(4) {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
