@@ -92,13 +92,12 @@ crates/
   bixel-ffi/               # C ABI over bixel-core + bixel-ai
     src/lib.rs             # extern "C" functions + opaque handles
 app/
-  Bixel/                   # SwiftUI + Metal frontend (Procreate-style)
+  Bixel/                   # SwiftUI + Core Animation frontend (Procreate-style)
     BixelApp.swift
     Theme.swift            # dark design system
     Models/                # Document/Timeline wrappers, EditorModel, AIService
-    Views/                 # ContentView, TopBar, ToolRail, CanvasView, RightPanel,
-                           #   ColorDisc, TimelineBar, AIPanel
-    Rendering/             # MetalRenderer + CanvasShaders.metal
+    Views/                 # ContentView, TopBar, ToolRail, CanvasView (Core Animation CALayer),
+                           #   RightPanel, ColorDisc, TimelineBar, AIPanel
     Support/               # bridging header
 skills/                    # skill manifests (JSON)
 scripts/
@@ -110,8 +109,6 @@ generated/                 # (gitignored) libbixel.a + bixel.h
 
 * **Rust** toolchain (`rustup` recommended, or `brew install rust`).
 * **cbindgen** — `cargo install cbindgen` (or `brew install cbindgen`).
-* **Xcode** with the **Metal toolchain** component
-  (`xcodebuild -downloadComponent MetalToolchain` if Metal builds fail).
 * **XcodeGen** — `brew install xcodegen`.
 
 ## AI assistant (goose + OpenRouter)

@@ -286,40 +286,81 @@ private struct FrameCell: View {
     }
 }
 
-/// Renders an RGBA buffer as a small bitmap image.
-struct PixelImageView: NSViewRepresentable {
-    let image: [UInt8]
-    let width: Int
-    let height: Int
+/// High-performance Core Animation backed pixel-art thumbnail view.
+final class FastPixelImageView: NSView {
+    var cgImage: CGImage? {
+        didSet {
+            if cgImage !== oldValue {
+                updateLayerContents()
+            }
+        }
+    }
 
-    func makeNSView(context: Context) -> NSImageView {
-        let view = NSImageView()
-        view.imageScaling = .scaleProportionallyUpOrDown
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        updateLayerContents()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        updateLayerContents()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        updateLayerContents()
+    }
+
+    private func updateLayerContents() {
+        wantsLayer = true
+        guard let l = layer else { return }
+        l.magnificationFilter = .nearest
+        l.minificationFilter = .nearest
+        l.contentsGravity = .resizeAspect
+        l.contents = cgImage
+    }
+}
+
+/// Renders a CGImage or RGBA buffer as a crisp pixel-art thumbnail.
+struct PixelImageView: NSViewRepresentable {
+    var cgImage: CGImage?
+    var image: [UInt8]?
+    var width: Int
+    var height: Int
+
+    init(cgImage: CGImage?, width: Int = 0, height: Int = 0) {
+        self.cgImage = cgImage
+        self.image = nil
+        self.width = width
+        self.height = height
+    }
+
+    init(image: [UInt8], width: Int, height: Int) {
+        self.cgImage = nil
+        self.image = image
+        self.width = width
+        self.height = height
+    }
+
+    func makeNSView(context: Context) -> FastPixelImageView {
+        let view = FastPixelImageView()
+        updateImage(on: view)
         return view
     }
 
-    func updateNSView(_ nsView: NSImageView, context: Context) {
-        guard let rep = bitmapRep else { return }
-        let nsImage = NSImage(size: NSSize(width: width, height: height))
-        nsImage.addRepresentation(rep)
-        nsView.image = nsImage
+    func updateNSView(_ nsView: FastPixelImageView, context: Context) {
+        updateImage(on: nsView)
     }
 
-    private var bitmapRep: NSBitmapImageRep? {
-        guard let dataProvider = CGDataProvider(data: Data(image) as CFData) else { return nil }
-        guard let cgImage = CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-            provider: dataProvider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        ) else { return nil }
-        return NSBitmapImageRep(cgImage: cgImage)
+    private func updateImage(on nsView: FastPixelImageView) {
+        if let cgImage = cgImage {
+            nsView.cgImage = cgImage
+        } else if let image = image, width > 0, height > 0 {
+            nsView.cgImage = makeCGImage(pixels: image, width: width, height: height)
+        } else {
+            nsView.cgImage = nil
+        }
     }
 }

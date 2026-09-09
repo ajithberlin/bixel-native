@@ -43,7 +43,7 @@ struct LayersPopover: View {
                         ProcreateLayerRow(
                             layer: layer,
                             selected: layer.index == model.activeLayer,
-                            thumbnail: model.layerThumbnail(layer.index),
+                            thumbnail: model.layerThumbnailCGImage(layer.index),
                             thumbWidth: model.width,
                             thumbHeight: model.height,
                             canDelete: model.layers.count > 1,
@@ -125,7 +125,7 @@ struct LayersPopover: View {
 struct ProcreateLayerRow: View {
     let layer: LayerInfo
     let selected: Bool
-    let thumbnail: [UInt8]
+    let thumbnail: CGImage?
     let thumbWidth: Int
     let thumbHeight: Int
     let canDelete: Bool
@@ -146,7 +146,7 @@ struct ProcreateLayerRow: View {
     var body: some View {
         HStack(spacing: 10) {
             // Layer Thumbnail
-            PixelImageView(image: thumbnail, width: thumbWidth, height: thumbHeight)
+            PixelImageView(cgImage: thumbnail, width: thumbWidth, height: thumbHeight)
                 .frame(width: 42, height: 42)
                 .background(CheckerboardView(cell: 5))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))

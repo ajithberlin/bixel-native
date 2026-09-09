@@ -106,12 +106,16 @@ final class EditorModel: ObservableObject {
 
     private func pixelsChanged(allFrames: Bool = false) {
         if allFrames { frameCache.removeAll() } else { frameCache[frame] = nil }
-        thumbCache.removeAll()
         canvasChanged.send()
     }
 
     private func commitChange(allFrames: Bool = false) {
         pixelsChanged(allFrames: allFrames)
+        if allFrames {
+            thumbCache.removeAll()
+        } else {
+            thumbCache[activeLayer * 1_000_000 + frame] = nil
+        }
         objectWillChange.send()
         onDocumentChanged?()
     }
@@ -287,17 +291,23 @@ final class EditorModel: ObservableObject {
         commitChange(allFrames: true)
     }
 
-    /// Thumbnail pixels for a layer at the current frame, cached per frame.
-    func layerThumbnail(_ layer: Int) -> [UInt8] {
+    /// Thumbnail CGImage for a layer at the current frame, cached per frame.
+    func layerThumbnailCGImage(_ layer: Int) -> CGImage? {
         let key = layer * 1_000_000 + frame
         if let cached = thumbCache[key] { return cached }
         let pixels = document.celRGBA(layer: layer, frame: frame)
-        if thumbCache.count > 64 { thumbCache.removeAll() }
-        thumbCache[key] = pixels
-        return pixels
+        guard let cg = makeCGImage(pixels: pixels, width: width, height: height) else { return nil }
+        if thumbCache.count > 128 { thumbCache.removeAll() }
+        thumbCache[key] = cg
+        return cg
     }
 
-    private var thumbCache: [Int: [UInt8]] = [:]
+    /// Raw thumbnail pixels for a layer at the current frame.
+    func layerThumbnail(_ layer: Int) -> [UInt8] {
+        document.celRGBA(layer: layer, frame: frame)
+    }
+
+    private var thumbCache: [Int: CGImage] = [:]
 
     // MARK: - Frame timing
 

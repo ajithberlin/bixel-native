@@ -7,6 +7,7 @@
 // "Swift sends a command, Rust processes a whole buffer" contract.
 
 import Foundation
+import CoreGraphics
 
 // MARK: - Document
 
@@ -355,6 +356,34 @@ extension BixelColor {
     init(hex: String) {
         self = bixel_hex_to_rgba(hex)
     }
+
+    var cgColor: CGColor {
+        CGColor(
+            red: CGFloat(r) / 255.0,
+            green: CGFloat(g) / 255.0,
+            blue: CGFloat(b) / 255.0,
+            alpha: CGFloat(a) / 255.0
+        )
+    }
+}
+
+/// Convert a raw RGBA byte buffer into an un-interpolated CGImage for pixel-art display.
+func makeCGImage(pixels: [UInt8], width: Int, height: Int) -> CGImage? {
+    guard width > 0, height > 0, pixels.count >= width * height * 4 else { return nil }
+    guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+    return CGImage(
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bitsPerPixel: 32,
+        bytesPerRow: width * 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+        provider: provider,
+        decode: nil,
+        shouldInterpolate: false,
+        intent: .defaultIntent
+    )
 }
 
 // MARK: - Tile layer
