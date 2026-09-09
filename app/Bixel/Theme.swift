@@ -26,6 +26,24 @@ enum StudioTheme {
     static let procreateGlass = Color(red: 0.13, green: 0.135, blue: 0.15).opacity(0.88)
     static let procreateRowInactive = Color(white: 0.20, opacity: 0.55)
 
+    // Bixel Brand Accents & Home Dashboard
+    static let bixelGreen = Color(red: 0.52, green: 0.88, blue: 0.34)          // #85E057
+    static let bixelGreenDark = Color(red: 0.32, green: 0.65, blue: 0.18)
+    static let bixelGreenSoft = Color(red: 0.52, green: 0.88, blue: 0.34).opacity(0.18)
+    static let homeDark = Color(red: 0.065, green: 0.07, blue: 0.08)          // Deep dark charcoal
+    static let homeCard = Color(red: 0.105, green: 0.112, blue: 0.128)        // Card surface
+    static let homeCardHover = Color(red: 0.14, green: 0.148, blue: 0.168)
+    static let homeCardBorder = Color.white.opacity(0.07)
+    static let homeBorderHover = Color.white.opacity(0.16)
+
+    // Asset Tag Badges
+    static let tagSpriteBg = Color(red: 0.12, green: 0.28, blue: 0.18)
+    static let tagSpriteText = Color(red: 0.48, green: 0.92, blue: 0.52)
+    static let tagAnimationBg = Color(red: 0.26, green: 0.16, blue: 0.42)
+    static let tagAnimationText = Color(red: 0.78, green: 0.58, blue: 0.98)
+    static let tagTilesetBg = Color(red: 0.14, green: 0.24, blue: 0.42)
+    static let tagTilesetText = Color(red: 0.46, green: 0.72, blue: 0.98)
+
     static let canvasBackground = Color(red: 0.11, green: 0.113, blue: 0.125)
 
     // Misc

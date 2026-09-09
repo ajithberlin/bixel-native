@@ -6,9 +6,15 @@
 
 import SwiftUI
 
+enum StudioScreen {
+    case home
+    case project
+}
+
 struct ContentView: View {
     @StateObject private var projects = ProjectStore()
     @StateObject private var viewport = CanvasViewport()
+    @State private var currentScreen: StudioScreen = .home
     @State private var showProjects = false
     @State private var showLibrary = false
     @State private var showNewDocument = false
@@ -25,148 +31,56 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Group {
-                // Infinite canvas, edge to edge.
-                CanvasView(model: model, viewport: viewport)
-                    .id(projects.catalog.activeDocumentID)
-                    .allowsHitTesting(projects.activeDocument != nil)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                // Left vertical brush dock, vertically centered.
-                HStack {
-                    LeftBrushDock(model: model)
-                        .padding(.leading, 14)
-                        .disabled(projects.activeDocument == nil)
-                    Spacer()
-                }
-
-                // Workspace Library (when opened)
-                if showLibrary {
-                    HStack {
-                        WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
-                            .id(projects.current?.id)
-                            .procreatePanel(radius: 16)
-                            .padding(.leading, 64)
-                            .padding(.top, 64)
-                            .padding(.bottom, 70)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                        Spacer()
-                    }
-                }
-
-                // Right floating popovers (Layers card & Color disc)
-                HStack(alignment: .top) {
-                    Spacer()
-
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Color.clear.frame(height: 52)
-
-                        if showLayers {
-                            LayersPopover(model: model)
-                                .padding(.trailing, 16)
-                                .transition(.asymmetric(
-                                    insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
-                                    removal: .opacity
-                                ))
-                        } else if showColor {
-                            ColorPopover(model: model)
-                                .padding(.trailing, 16)
-                                .transition(.asymmetric(
-                                    insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
-                                    removal: .opacity
-                                ))
+            if currentScreen == .home {
+                // Enhanced Home Page Dashboard
+                HomePageView(
+                    store: projects,
+                    onOpenProject: { project in
+                        projects.select(project)
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            currentScreen = .project
                         }
-
-                        Spacer()
+                    },
+                    onOpenWithAIPrompt: { prompt in
+                        let lower = prompt.lowercased()
+                        let kind: AssetKind = lower.contains("tile") ? .tileset : (lower.contains("anim") || lower.contains("walk")) ? .animation : .sprite
+                        let size = kind == .tileset ? 128 : (kind == .animation ? 64 : 32)
+                        let name = "AI: " + String(prompt.prefix(20)).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if let project = projects.createProject(name: name, kind: kind, width: size, height: size) {
+                            projects.assistant.input = prompt
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                currentScreen = .project
+                                showAI = true
+                            }
+                            projects.assistant.send(model: projects.editor)
+                        }
                     }
-                }
-
-                // Right floating AI panel (when opened via wand)
-                if showAI {
-                    HStack {
-                        Spacer()
-                        AIPanel(
-                            model: model,
-                            session: assistant,
-                            onClose: { showAI = false },
-                            expanded: assistantExpanded,
-                            onExpand: { assistantExpanded.toggle() }
-                        )
-                        .id(projects.current?.id)
-                        .frame(width: assistantExpanded ? 540 : 390)
-                        .frame(maxHeight: .infinity)
-                        .procreatePanel(radius: 16)
-                        .padding(.trailing, 16)
-                        .padding(.top, 56)
-                        .padding(.bottom, 70)
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-
-                // Top navigation bar & Bottom timeline
-                VStack(spacing: 0) {
-                    TopBar(
-                        model: model,
-                        viewport: viewport,
-                        projectName: projects.current?.name ?? "Bixel",
-                        onShowProjects: { showProjects = true },
-                        showLayers: $showLayers,
-                        showColor: $showColor,
-                        showAI: $showAI,
-                        showTimeline: $showTimeline,
-                        onNewDocument: { showNewDocument = true }
-                    )
-
-                    Spacer()
-
-                    if model.selectionRect != nil || model.transformRect != nil {
-                        SelectionTransformToolbar(model: model)
-                            .padding(.bottom, 16)
-                    }
-
-                    EditorOperationFeedback(model: model)
-
-                    if showTimeline && projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
-                        TimelineBar(model: model, collapsed: $timelineCollapsed)
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, timelineCollapsed ? 4 : 14)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                }
-            }
-            .disabled(projects.current == nil)
-
-            // Empty state.
-            if projects.current == nil {
-                VStack(spacing: 14) {
-                    Image(systemName: "square.grid.3x3.fill")
-                        .font(.system(size: 40))
-                        .foregroundColor(StudioTheme.accent)
-                    Text("Bixel Studio")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundColor(StudioTheme.textPrimary)
-                    Button("Create or Open Project") { showProjects = true }
-                        .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(StudioTheme.background.opacity(0.85))
+                )
+                .transition(.opacity)
+            } else {
+                // Project Canvas Editor Page
+                projectCanvasView
+                    .transition(.opacity)
             }
         }
-        .frame(minWidth: 920, minHeight: 620)
+        .frame(minWidth: 1040, minHeight: 680)
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: showAI)
         .animation(.easeInOut(duration: 0.2), value: showLayers)
         .animation(.easeInOut(duration: 0.2), value: showColor)
         .animation(.easeInOut(duration: 0.2), value: showTimeline)
+        .animation(.easeInOut(duration: 0.22), value: currentScreen)
         .sheet(isPresented: $showProjects) { ProjectPicker(store: projects) }
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .onAppear {
-            showProjects = projects.current == nil
+            currentScreen = .home
             showLayers = true
         }
         .onChange(of: projects.current?.id) { _ in viewport.refit() }
         .onChange(of: projects.catalog.activeDocumentID) { _ in viewport.refit() }
+        .onChange(of: showAI) { _ in viewport.refit() }
+        .onChange(of: assistantExpanded) { _ in viewport.refit() }
         .onChange(of: scenePhase) { phase in
             if phase != .active { flushProject() }
         }
@@ -186,6 +100,136 @@ struct ContentView: View {
 
     private func flushProject() {
         do { try projects.flush() } catch { projects.error = error.localizedDescription }
+    }
+
+    // MARK: - Project Canvas View
+
+    private var projectCanvasView: some View {
+        ZStack {
+            HStack(spacing: 0) {
+                Group {
+                    // Infinite canvas, edge to edge.
+                    CanvasView(model: model, viewport: viewport)
+                        .id(projects.catalog.activeDocumentID)
+                        .allowsHitTesting(projects.activeDocument != nil)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    // Left vertical brush dock, vertically centered.
+                    HStack {
+                        LeftBrushDock(model: model)
+                            .padding(.leading, 14)
+                            .disabled(projects.activeDocument == nil)
+                        Spacer()
+                    }
+
+                    // Workspace Library (when opened)
+                    if showLibrary {
+                        HStack {
+                            WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
+                                .id(projects.current?.id)
+                                .procreatePanel(radius: 16)
+                                .padding(.leading, 64)
+                                .padding(.top, 64)
+                                .padding(.bottom, 70)
+                                .transition(.move(edge: .leading).combined(with: .opacity))
+                            Spacer()
+                        }
+                    }
+
+                    // Right floating popovers (Layers card & Color disc)
+                    HStack(alignment: .top) {
+                        Spacer()
+
+                        VStack(alignment: .trailing, spacing: 0) {
+                            Color.clear.frame(height: 52)
+
+                            if showLayers {
+                                LayersPopover(model: model)
+                                    .padding(.trailing, 16)
+                                    .transition(.asymmetric(
+                                        insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
+                            } else if showColor {
+                                ColorPopover(model: model)
+                                    .padding(.trailing, 16)
+                                    .transition(.asymmetric(
+                                        insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
+                                        removal: .opacity
+                                    ))
+                            }
+
+                            Spacer()
+                        }
+                    }
+
+                    // Top navigation bar & Bottom timeline
+                    VStack(spacing: 0) {
+                        TopBar(
+                            model: model,
+                            viewport: viewport,
+                            projectName: projects.current?.name ?? "Bixel Project",
+                            onShowProjects: {
+                                withAnimation(.easeInOut(duration: 0.22)) {
+                                    currentScreen = .home
+                                }
+                            },
+                            onGoHome: {
+                                withAnimation(.easeInOut(duration: 0.22)) {
+                                    currentScreen = .home
+                                }
+                            },
+                            showLayers: $showLayers,
+                            showColor: $showColor,
+                            showAI: $showAI,
+                            showTimeline: $showTimeline,
+                            onNewDocument: { showNewDocument = true }
+                        )
+
+                        Spacer()
+
+                        if model.selectionRect != nil || model.transformRect != nil {
+                            SelectionTransformToolbar(model: model)
+                                .padding(.bottom, 16)
+                        }
+
+                        EditorOperationFeedback(model: model)
+
+                        if showTimeline && projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
+                            TimelineBar(model: model, collapsed: $timelineCollapsed)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, timelineCollapsed ? 4 : 14)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    }
+                }
+                .disabled(projects.current == nil)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                // AI copilot as a docked right-side panel
+                if showAI {
+                    AIPanel(
+                        model: model,
+                        session: assistant,
+                        onClose: { showAI = false },
+                        expanded: assistantExpanded,
+                        onExpand: { assistantExpanded.toggle() }
+                    )
+                    .id(projects.current?.id)
+                    .frame(width: assistantExpanded ? 520 : 372)
+                    .frame(maxHeight: .infinity)
+                    .background(
+                        Rectangle().fill(.ultraThinMaterial)
+                            .overlay(Rectangle().fill(StudioTheme.procreateGlass))
+                    )
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(StudioTheme.hairline).frame(width: 1)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 

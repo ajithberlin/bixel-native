@@ -251,7 +251,11 @@ final class EditorModel: ObservableObject {
 
     func endSelection() {
         selectionStart = nil
-        if let rect = selectionRect { transformRect = rect }
+        guard selectionRect != nil else { return }
+        transformRect = selectionRect
+        // Procreate-style: finishing a marquee hands the box straight to the
+        // Transform tool so its corner handles are immediately visible/draggable.
+        if tool == .selection { tool = .transform }
     }
 
     func clearSelection() {
@@ -417,29 +421,40 @@ final class EditorModel: ObservableObject {
 
     func commitTransform() {
         guard let source = selectionRect, let destination = transformRect else { return }
+        let unchanged = transformRotation == 0
+            && destination.origin.x == source.origin.x
+            && destination.origin.y == source.origin.y
+            && destination.width == source.width
+            && destination.height == source.height
+        guard !unchanged else { return }
         do {
             try document.transformRect(layer: activeLayer, frame: frame, source: source, destination: destination, rotation: transformRotation)
             selectionRect = destination
+            transformRotation = 0
             transformStart = nil; transformOrigin = nil
             endResize()
             commitChange()
         } catch { operationError = error.localizedDescription }
     }
 
+    /// Rotate the selected artwork 90° and commit it right away (Procreate /
+    /// Aseprite-style), instead of leaving a pending preview.
     func rotateSelection() {
-        guard let rect = transformRect ?? selectionRect else { return }
-        transformRotation = (transformRotation + 1) % 4
-        transformRect = CGRect(x: rect.midX - rect.height / 2, y: rect.midY - rect.width / 2,
-                               width: rect.height, height: rect.width)
-        endResize()
+        guard let source = selectionRect else { return }
+        let current = transformRect ?? source
+        transformRect = CGRect(x: current.midX - current.height / 2,
+                               y: current.midY - current.width / 2,
+                               width: current.height, height: current.width)
+        transformRotation = 1
+        commitTransform()
     }
 
     func fitSelectionToCanvas() {
-        guard let rect = selectionRect else { return }
+        guard let source = selectionRect else { return }
+        if source.width == CGFloat(width) && source.height == CGFloat(height) { return }
         transformRect = CGRect(x: 0, y: 0, width: width, height: height)
         transformRotation = 0
-        endResize()
-        if rect.width == CGFloat(width) && rect.height == CGFloat(height) { transformRect = rect }
+        commitTransform()
     }
 
     func resetTransform() { transformRect = selectionRect; transformRotation = 0; endResize() }

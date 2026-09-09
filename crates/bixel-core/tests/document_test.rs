@@ -151,3 +151,37 @@ fn flood_fill_bounded_region() {
     // Wall untouched.
     assert_eq!(doc.get_pixel(0, 0, 4, 4), rgba(255, 255, 255, 255));
 }
+
+#[test]
+fn reorder_frame_preserves_layers_timing_and_undo() {
+    let mut doc = AsepriteDoc::new(2, 2, &[]);
+    doc.add_layer(Some("overlay"));
+    doc.add_frame(250);
+    doc.add_frame(500);
+    for frame in 0..3 {
+        for layer in 0..2 {
+            doc.set_pixel(layer, frame, 0, 0, rgba((frame * 10 + layer + 1) as u8, 0, 0, 255));
+        }
+    }
+    doc.snapshot();
+    doc.reorder_frame(0, 2);
+    assert_eq!(doc.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), vec![250, 500, 125]);
+    assert_eq!(doc.get_pixel(0, 2, 0, 0).r, 1);
+    assert_eq!(doc.get_pixel(1, 2, 0, 0).r, 2);
+    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 12);
+    for (index, frame) in doc.frames.iter().enumerate() {
+        assert_eq!(frame.index, index);
+    }
+    assert!(doc.undo());
+    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
+    assert!(doc.redo());
+    assert_eq!(doc.get_pixel(1, 2, 0, 0).r, 2);
+    doc.reorder_frame(2, 0);
+    assert_eq!(doc.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), vec![125, 250, 500]);
+    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
+    doc.reorder_frame(0, 99);
+    doc.reorder_frame(99, 0);
+    doc.reorder_frame(0, 0);
+    assert_eq!(doc.frames.len(), 3);
+    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
+}

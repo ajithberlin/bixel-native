@@ -51,6 +51,15 @@ struct CanvasView: NSViewRepresentable {
                 view?.updateCanvasContents()
             }.store(in: &observations)
 
+            // Model publishes happen *before* the new values land, so refresh
+            // geometry on the next runloop tick — this guarantees the
+            // selection/transform box and handles repaint after toolbar actions
+            // (rotate, fit-to-canvas, auto-select) even if SwiftUI's representable
+            // update path is delayed.
+            model.objectWillChange.sink { [weak view] in
+                view?.scheduleGeometryRefresh()
+            }.store(in: &observations)
+
             viewport.objectWillChange.sink { [weak view] in
                 view?.updateArtboardGeometry()
                 view?.updateCanvasContents()
@@ -126,6 +135,9 @@ final class PixelCanvas: NSView {
     // Re-entrancy guards
     private var isUpdatingGeometry = false
     private var isUpdatingContents = false
+
+    // Coalesced geometry refresh (see scheduleGeometryRefresh)
+    private var geometryRefreshScheduled = false
 
     // Gesture state
     private var spaceDown = false
@@ -250,12 +262,21 @@ final class PixelCanvas: NSView {
         updateArtboardGeometry()
         updateCanvasContents()
     }
+    /// Redraw selection/handles geometry on the next main-queue tick, coalescing
+    /// bursts of model publishes into a single update.
+    func scheduleGeometryRefresh() {
+        guard !geometryRefreshScheduled else { return }
+        geometryRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.geometryRefreshScheduled = false
+            self?.updateArtboardGeometry()
+        }
+    }
 
     func updateArtboardGeometry() {
         guard !isUpdatingGeometry else { return }
         isUpdatingGeometry = true
         defer { isUpdatingGeometry = false }
-
         guard let coordinator else { return }
         let bounds = self.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }

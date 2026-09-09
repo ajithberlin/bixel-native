@@ -30,6 +30,7 @@ final class ProjectStore: ObservableObject {
         self.root = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bixel/Projects", isDirectory: true)
         refresh()
+        bootstrapSamplesIfEmpty()
         do {
             if let id = try ProjectStorage.read(base: self.root, path: "active.txt"),
                let project = projects.first(where: { $0.id == id }) { try open(project) }
@@ -42,13 +43,170 @@ final class ProjectStore: ObservableObject {
     }
 
     func create(name: String) {
-        guard !assistant.busy else { return }
+        _ = createProject(name: name, kind: .sprite, width: 32, height: 32)
+    }
+
+    @discardableResult
+    func createProject(name: String, kind: AssetKind = .sprite, width: Int = 32, height: Int = 32, pixels: [UInt8]? = nil) -> StudioProject? {
+        guard !assistant.busy else { return nil }
         do {
-            let value = try ProjectStorage.request(base: root, ["op": "create", "id": UUID().uuidString, "name": name])!
+            let id = UUID().uuidString
+            let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": name])!
             let project = try decode(StudioProject.self, value)
+            let base = root.appendingPathComponent(project.id)
+
+            let doc = WorkspaceDocument(name: name, kind: kind, width: width, height: height)
+            let editorModel = EditorModel(width: doc.pixelWidth, height: doc.pixelHeight)
+            if let pixels, pixels.count == doc.pixelWidth * doc.pixelHeight * 4 {
+                editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
+            }
+            try editorModel.document.save(base: base, path: doc.path)
+
+            var nextCatalog = WorkspaceCatalog()
+            nextCatalog.documents = [doc]
+            nextCatalog.activeDocumentID = doc.id
+            try writeCatalog(nextCatalog, base: base)
+
             refresh()
             try open(project)
-        } catch { self.error = error.localizedDescription }
+            return project
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    @discardableResult
+    func createFromTemplate(templateId: String) -> StudioProject? {
+        guard let item = SamplePixelArt.templates.first(where: { $0.id == templateId }) else { return nil }
+        let pixels = SamplePixelArt.generateSampleData(for: item.name, width: item.width, height: item.height)
+        return createProject(name: item.name, kind: item.kind, width: item.width, height: item.height, pixels: pixels)
+    }
+
+    func closeProject() {
+        guard !assistant.busy else { return }
+        do {
+            try flush()
+            current = nil
+            catalog = WorkspaceCatalog()
+            assets = []
+            _ = try? ProjectStorage.request(base: root, ["op": "write", "path": "active.txt", "text": ""])
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func deleteProject(_ project: StudioProject) {
+        guard !assistant.busy else { return }
+        if current?.id == project.id {
+            closeProject()
+        }
+        let base = root.appendingPathComponent(project.id)
+        try? FileManager.default.removeItem(at: base)
+        refresh()
+    }
+
+    func duplicateProject(_ project: StudioProject) {
+        guard !assistant.busy else { return }
+        let newName = "\(project.name) Copy"
+        let src = root.appendingPathComponent(project.id)
+        let newId = UUID().uuidString
+        let dst = root.appendingPathComponent(newId)
+        do {
+            try FileManager.default.copyItem(at: src, to: dst)
+            let meta: [String: Any] = [
+                "id": newId,
+                "name": newName,
+                "schema": 1,
+                "created": Date().timeIntervalSince1970
+            ]
+            let metaData = try JSONSerialization.data(withJSONObject: meta)
+            try metaData.write(to: dst.appendingPathComponent("project.json"))
+            refresh()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func renameProject(_ project: StudioProject, newName: String) {
+        let base = root.appendingPathComponent(project.id)
+        let file = base.appendingPathComponent("project.json")
+        do {
+            let meta: [String: Any] = [
+                "id": project.id,
+                "name": newName,
+                "schema": 1,
+                "created": project.created
+            ]
+            let metaData = try JSONSerialization.data(withJSONObject: meta)
+            try metaData.write(to: file)
+            refresh()
+            if current?.id == project.id {
+                current?.name = newName
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func metadata(for project: StudioProject) -> (kind: AssetKind, sizeText: String, timeText: String) {
+        let base = root.appendingPathComponent(project.id)
+        if let json = try? ProjectStorage.read(base: base, path: "workspace.json"),
+           let data = json.data(using: .utf8),
+           let catalog = try? JSONDecoder().decode(WorkspaceCatalog.self, from: data),
+           let active = catalog.documents.first(where: { $0.id == catalog.activeDocumentID }) ?? catalog.documents.first {
+            return (active.kind, "\(active.pixelWidth) × \(active.pixelHeight)", relativeTime(since: project.created))
+        }
+        return (.sprite, "32 × 32", relativeTime(since: project.created))
+    }
+
+    private func relativeTime(since timestamp: Double) -> String {
+        let diff = max(0, Date().timeIntervalSince1970 - timestamp)
+        if diff < 3600 { return "Edited 2h ago" }
+        if diff < 86400 { return "Edited \(max(1, Int(diff / 3600)))h ago" }
+        if diff < 604800 { return "Edited \(max(1, Int(diff / 86400)))d ago" }
+        return "Edited \(max(1, Int(diff / 604800)))w ago"
+    }
+
+    private func bootstrapSamplesIfEmpty() {
+        guard projects.isEmpty else { return }
+        let samples: [(name: String, kind: AssetKind, w: Int, h: Int)] = [
+            ("Slime Sprite", .sprite, 32, 32),
+            ("Character Walk", .animation, 64, 64),
+            ("Forest Tiles", .tileset, 128, 128),
+            ("Tokyo Street", .tileset, 128, 128),
+            ("UI Icons", .sprite, 32, 32),
+            ("NPC Portraits", .sprite, 64, 64)
+        ]
+        for s in samples {
+            let pixels = SamplePixelArt.generateSampleData(for: s.name, width: s.w, height: s.h)
+            _ = createProjectQuietly(name: s.name, kind: s.kind, width: s.w, height: s.h, pixels: pixels)
+        }
+        refresh()
+    }
+
+    private func createProjectQuietly(name: String, kind: AssetKind, width: Int, height: Int, pixels: [UInt8]?) -> StudioProject? {
+        do {
+            let id = UUID().uuidString
+            let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": name])!
+            let project = try decode(StudioProject.self, value)
+            let base = root.appendingPathComponent(project.id)
+
+            let doc = WorkspaceDocument(name: name, kind: kind, width: width, height: height)
+            let editorModel = EditorModel(width: doc.pixelWidth, height: doc.pixelHeight)
+            if let pixels, pixels.count == doc.pixelWidth * doc.pixelHeight * 4 {
+                editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
+            }
+            try editorModel.document.save(base: base, path: doc.path)
+
+            var nextCatalog = WorkspaceCatalog()
+            nextCatalog.documents = [doc]
+            nextCatalog.activeDocumentID = doc.id
+            try writeCatalog(nextCatalog, base: base)
+            return project
+        } catch {
+            return nil
+        }
     }
 
     func select(_ project: StudioProject) {

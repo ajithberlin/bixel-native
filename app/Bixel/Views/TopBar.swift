@@ -11,6 +11,7 @@ struct TopBar: View {
     @ObservedObject var viewport: CanvasViewport
     let projectName: String
     let onShowProjects: () -> Void
+    var onGoHome: (() -> Void)? = nil
     @Binding var showLayers: Bool
     @Binding var showColor: Bool
     @Binding var showAI: Bool
@@ -21,25 +22,36 @@ struct TopBar: View {
 
     var body: some View {
         HStack {
-            // LEFT CLUSTER: Gallery, Wrench, Wand, Selection, Transform
-            HStack(spacing: 16) {
-                // Gallery button
-                Button(action: onShowProjects) {
-                    Text("Gallery")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundColor(Color.white.opacity(0.92))
+            // LEFT CLUSTER: Home, Wrench, AI Chat, Selection, Transform
+            HStack(spacing: 14) {
+                // Home button with Bixel Slime logo
+                Button {
+                    if let onGoHome { onGoHome() } else { onShowProjects() }
+                } label: {
+                    HStack(spacing: 6) {
+                        BixelSlimeLogo(size: 18)
+                        Text("Home")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white.opacity(0.08))
+                    )
                 }
                 .buttonStyle(.plain)
-                .help("Open Gallery")
+                .help("Return to Bixel Home Gallery")
 
                 // Actions (Wrench)
                 Button {
                     showActions.toggle()
                 } label: {
                     Image(systemName: "wrench")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundColor(showActions ? StudioTheme.accent : Color.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
+                        .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
                 .help("Actions & Canvas settings")
@@ -53,19 +65,27 @@ struct TopBar: View {
                     )
                 }
 
-                // Adjustments / AI (Wand)
+                // AI Copilot / Chat (Wand)
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showAI.toggle()
                     }
                 } label: {
-                    Image(systemName: "wand.and.stars")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(showAI ? StudioTheme.accent : Color.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
+                    HStack(spacing: 5) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("AI Chat")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundColor(showAI ? .black : StudioTheme.bixelGreen)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(showAI ? StudioTheme.bixelGreen : StudioTheme.bixelGreenSoft)
+                    )
                 }
                 .buttonStyle(.plain)
-                .help("AI Copilot & Adjustments")
+                .help("Toggle AI Design & Creation Chat")
 
                 // Selection (Lasso)
                 Button {
@@ -94,7 +114,22 @@ struct TopBar: View {
 
             Spacer()
 
-            // RIGHT CLUSTER: Brush, Smudge, Eraser, Layers, Color
+            // CENTER: Project Title & Dimensions
+            HStack(spacing: 8) {
+                Text(projectName)
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                Text("\(model.width) × \(model.height)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(Color.white.opacity(0.06))
+                    )
+            }
+
+            Spacer()
             HStack(spacing: 16) {
                 // Brush (Paint)
                 Button {
