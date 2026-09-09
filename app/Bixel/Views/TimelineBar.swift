@@ -44,7 +44,7 @@ struct TimelineBar: View {
     private var frameStrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 5) {
+                LazyHStack(spacing: 5) {
                     ForEach(0..<model.frameCount, id: \.self) { index in
                         FrameCell(
                             index: index,

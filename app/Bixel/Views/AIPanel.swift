@@ -127,7 +127,7 @@ struct AIPanel: View {
                 }
             } else {
                 TextField("Search recent chats", text: $historySearch).textFieldStyle(.roundedBorder)
-                Text("This session").font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary)
+                Text("This project").font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {
                         Button { showHistory = false } label: { Label("Current conversation", systemImage: "bubble.left").frame(maxWidth: .infinity, alignment: .leading).padding(10) }

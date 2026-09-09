@@ -7,7 +7,7 @@ import SwiftUI
 @main
 struct BixelApp: App {
     var body: some Scene {
-        WindowGroup {
+        Window("Bixel Studio", id: "studio") {
             ContentView()
         }
         .windowStyle(.automatic)

@@ -1,11 +1,32 @@
 // Run with scripts/test-assistant.sh. No model requests or external network calls.
 import SwiftUI
 import AppKit
+import Combine
 
 @main
 struct AssistantSessionTests {
     @MainActor static func main() {
         _ = NSApplication.shared
+        let editor = EditorModel()
+        editor.brushSize = 1
+        var updates = 0
+        let observation = editor.objectWillChange.sink { updates += 1 }
+        editor.beginStroke(x: 1, y: 1)
+        for x in 2...20 { editor.continueStroke(x: x, y: 1) }
+        precondition(updates == 0, "Pointer samples must not refresh the whole SwiftUI hierarchy")
+        editor.endStroke(x: 21, y: 1)
+        precondition(updates == 1, "Refresh document controls once after a stroke")
+        precondition(editor.document.getPixel(layer: 0, frame: 0, x: 21, y: 1).a > 0)
+        let canvas = PixelCanvas(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
+        let canvasCoordinator = CanvasView.Coordinator(model: editor)
+        editor.tool = .line
+        canvasCoordinator.begin(at: CGPoint(x: 15, y: 295), in: canvas)
+        canvasCoordinator.end(at: CGPoint(x: 500, y: 295), in: canvas)
+        precondition(editor.document.getPixel(layer: 0, frame: 0, x: 31, y: 2).a == 255, "Mouse-up outside canvas must finish the line at its edge")
+        let afterEnd = updates
+        canvasCoordinator.drag(at: CGPoint(x: 100, y: 100), in: canvas)
+        precondition(updates == afterEnd, "Releasing outside must clear the active stroke")
+        withExtendedLifetime(observation) {}
         let session = AssistantSession()
         precondition(session.commands.count > 4, "Use the complete engine skill registry")
         let first = session.commands[0], second = session.commands[1]
@@ -49,6 +70,42 @@ struct AssistantSessionTests {
         let cancellation = AssistantCancellation()
         cancellation.stop()
         precondition(cancellation.isStopped)
+        let projectRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bixel-project-tests-\(UUID().uuidString)/Documents/Bixel/Projects")
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        let store = ProjectStore(root: projectRoot)
+        precondition(store.error == nil && store.projects.isEmpty)
+        store.create(name: "First")
+        precondition(store.error == nil, store.error ?? "")
+        let firstProject = store.current!
+        store.editor.brushSize = 1
+        store.editor.beginStroke(x: 7, y: 9)
+        store.editor.endStroke(x: 7, y: 9)
+        store.assistant.messages = [AssistantMessage(isUser: true, text: "A green knight")]
+        store.assistant.newChat()
+        precondition(store.assistant.history.count == 1)
+        store.assistant.messages = [AssistantMessage(isUser: true, text: "Give the knight a shield")]
+        let firstConversation = store.assistant.conversationID
+        store.create(name: "Second")
+        precondition(store.current?.id != firstProject.id)
+        precondition(store.assistant.messages.isEmpty && store.assistant.history.isEmpty)
+        precondition(store.editor.document.getPixel(layer: 0, frame: 0, x: 7, y: 9).a == 0)
+        store.select(firstProject)
+        precondition(store.assistant.messages.first?.text == "Give the knight a shield")
+        precondition(store.assistant.history.count == 1)
+        precondition(store.assistant.conversationID == firstConversation)
+        precondition(store.editor.document.getPixel(layer: 0, frame: 0, x: 7, y: 9).a == 255)
+        try! store.flush()
+        let reopened = ProjectStore(root: projectRoot)
+        precondition(reopened.error == nil, reopened.error ?? "")
+        precondition(reopened.current?.id == firstProject.id)
+        precondition(reopened.assistant.messages.first?.text == "Give the knight a shield")
+        precondition(reopened.editor.document.getPixel(layer: 0, frame: 0, x: 7, y: 9).a == 255)
+        reopened.assistant.busy = true
+        reopened.select(store.projects.first { $0.id != firstProject.id }!)
+        precondition(reopened.current?.id == firstProject.id, "Do not switch projects during generation")
+        reopened.assistant.busy = false
+        precondition(PixelCanvas().acceptsFirstMouse(for: nil))
+        print("PASS: project creation, isolation, reopen, layered persistence, first click, stroke refresh batching")
         print("PASS: inline token round-trip, registry, streaming order, generic tools, image association, failure, cancellation")
     }
 }

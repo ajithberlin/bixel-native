@@ -43,17 +43,33 @@ final class EditorModel: ObservableObject {
     @Published var currentColor: BixelColor = BixelColor(r: 24, g: 24, b: 24, a: 255)
 
     // Document state
-    @Published var frame: Int = 0
+    @Published var frame: Int = 0 { didSet { canvasChanged.send() } }
     @Published var playing: Bool = false
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
+
+    let canvasChanged = PassthroughSubject<Void, Never>()
+    var onDocumentChanged: (() -> Void)?
+    private var frameCache: [Int: [UInt8]] = [:]
+    private var strokeChanged = false
+
+    private func pixelsChanged(allFrames: Bool = false) {
+        if allFrames { frameCache.removeAll() } else { frameCache[frame] = nil }
+        canvasChanged.send()
+    }
+
+    private func commitChange(allFrames: Bool = false) {
+        pixelsChanged(allFrames: allFrames)
+        objectWillChange.send()
+        onDocumentChanged?()
+    }
 
     private var playbackTimer: Timer?
     private var lastPoint: (x: Int, y: Int)?
     private var strokeCommitted = false
 
-    init(width: Int = 32, height: Int = 32) {
-        let document = Document(width: width, height: height)
+    init(width: Int = 32, height: Int = 32, document restored: Document? = nil) {
+        let document = restored ?? Document(width: width, height: height)
         self.document = document
         self.timeline = Timeline(document: document)
         reloadLayers()
@@ -70,6 +86,7 @@ final class EditorModel: ObservableObject {
     func addLayer() {
         activeLayer = document.addLayer()
         reloadLayers()
+        commitChange(allFrames: true)
     }
 
     func deleteLayer() {
@@ -77,12 +94,14 @@ final class EditorModel: ObservableObject {
         document.removeLayer(activeLayer)
         activeLayer = max(0, activeLayer - 1)
         reloadLayers()
+        commitChange(allFrames: true)
     }
 
     func toggleLayerVisibility(_ index: Int) {
         let newValue = !document.isLayerVisible(index)
         document.setLayerVisible(index, newValue)
         reloadLayers()
+        commitChange(allFrames: true)
     }
 
     // MARK: - Drawing
@@ -102,13 +121,16 @@ final class EditorModel: ObservableObject {
     }
 
     func beginStroke(x: Int, y: Int) {
+        lastPoint = nil
+        strokeChanged = false
         switch tool {
         case .eyedropper:
             pick(x: x, y: y)
         case .fill:
             document.snapshot()
             document.floodFill(layer: activeLayer, frame: frame, x: x, y: y, drawColor)
-            objectWillChange.send()
+            strokeChanged = true
+            pixelsChanged()
         case .line:
             document.snapshot()
             lastPoint = (x, y)
@@ -117,17 +139,19 @@ final class EditorModel: ObservableObject {
             document.snapshot()
             lastPoint = (x, y)
             document.stroke(layer: activeLayer, frame: frame, points: [(x, y)], color: strokeColor, radius: brushRadius)
-            objectWillChange.send()
+            strokeChanged = true
+            pixelsChanged()
         }
     }
 
     func continueStroke(x: Int, y: Int) {
-        guard let last = lastPoint else { return }
+        guard let last = lastPoint, last.x != x || last.y != y else { return }
         switch tool {
         case .pencil, .eraser:
             document.stroke(layer: activeLayer, frame: frame, points: [last, (x, y)], color: strokeColor, radius: brushRadius)
             lastPoint = (x, y)
-            objectWillChange.send()
+            strokeChanged = true
+            pixelsChanged()
         case .line:
             // No live preview for line; committed on end.
             break
@@ -137,12 +161,18 @@ final class EditorModel: ObservableObject {
     }
 
     func endStroke(x: Int, y: Int) {
+        if tool == .pencil || tool == .eraser { continueStroke(x: x, y: y) }
         if tool == .line, let start = lastPoint, !strokeCommitted {
             document.stroke(layer: activeLayer, frame: frame, points: [start, (x, y)], color: strokeColor, radius: brushRadius)
             strokeCommitted = true
-            objectWillChange.send()
+            strokeChanged = true
+            pixelsChanged()
         }
         lastPoint = nil
+        if strokeChanged {
+            strokeChanged = false
+            commitChange()
+        }
     }
 
     private var strokeColor: BixelColor {
@@ -190,6 +220,7 @@ final class EditorModel: ObservableObject {
 
     func addFrame() {
         frame = document.addFrame(durationMs: 125)
+        commitChange(allFrames: true)
     }
 
     func duplicateFrame() {
@@ -198,10 +229,11 @@ final class EditorModel: ObservableObject {
         let newFrame = document.addFrame(durationMs: 125)
         document.loadImageData(src, width: width, height: height, layer: 0, frame: newFrame)
         frame = newFrame
+        commitChange(allFrames: true)
     }
 
-    func undo() { _ = document.undo(); objectWillChange.send() }
-    func redo() { _ = document.redo(); objectWillChange.send() }
+    func undo() { if document.undo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }
+    func redo() { if document.redo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }
 
     // MARK: - Canvas
 
@@ -210,11 +242,19 @@ final class EditorModel: ObservableObject {
     var frameCount: Int { document.frameCount }
 
     func compositeCurrentFrame() -> [UInt8] {
-        document.compositeRGBA(frame: frame)
+        compositeFrame(frame)
     }
 
     func compositeFrame(_ index: Int) -> [UInt8] {
-        document.compositeRGBA(frame: index)
+        if let cached = frameCache[index] { return cached }
+        let pixels = document.compositeRGBA(frame: index)
+        // Bound retained full-size frames for large imported AI images.
+        let limit = max(1, min(64, 32 * 1024 * 1024 / max(1, document.bytesPerFrame)))
+        if frameCache.count >= limit, let oldest = frameCache.keys.first(where: { $0 != frame }) ?? frameCache.keys.first {
+            frameCache[oldest] = nil
+        }
+        frameCache[index] = pixels
+        return pixels
     }
 
     // MARK: - AI result application
@@ -225,12 +265,13 @@ final class EditorModel: ObservableObject {
         document.loadImageData(rgba, width: width, height: height, layer: 0, frame: newFrame)
         frame = newFrame
         reloadLayers()
+        commitChange(allFrames: true)
     }
 
     /// Replace the current frame's base layer with an RGBA buffer.
     func applyImageToCurrentFrame(_ rgba: [UInt8], width: Int, height: Int) {
         document.snapshot()
         document.loadImageData(rgba, width: width, height: height, layer: 0, frame: frame)
-        objectWillChange.send()
+        commitChange(allFrames: true)
     }
 }

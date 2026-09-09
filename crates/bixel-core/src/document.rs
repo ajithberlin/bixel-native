@@ -6,9 +6,10 @@
 //! (Swift/Metal, WebGPU, …).
 
 use crate::color::Rgba;
+use serde::{Serialize, Deserialize};
 
 /// Layer blend mode. Only the modes Aseprite supports here are implemented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlendMode {
     Normal,
     Multiply,
@@ -49,7 +50,7 @@ impl BlendMode {
 }
 
 /// A single cel: one image on one layer at one frame. Pixels are packed RGBA.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cel {
     pub layer_index: usize,
     pub frame_index: usize,
@@ -108,7 +109,7 @@ impl Cel {
 }
 
 /// A layer in the document.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
     pub visible: bool,
@@ -135,7 +136,7 @@ impl Layer {
 }
 
 /// A single animation frame.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub index: usize,
     pub duration_ms: u32,
@@ -148,7 +149,7 @@ impl Frame {
 }
 
 /// A named range of frames (a "tag" in Aseprite terms).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tag {
     pub name: String,
     pub from: usize,
@@ -169,7 +170,7 @@ impl Tag {
 
 /// A serializable snapshot used by undo/redo. Kept separate from `AsepriteDoc`
 /// so a snapshot can never accidentally share the live document's stacks.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DocumentState {
     width: usize,
     height: usize,
@@ -200,6 +201,43 @@ impl Default for AsepriteDoc {
 }
 
 impl AsepriteDoc {
+    /// A copy for background persistence that excludes potentially large undo stacks.
+    pub fn persistence_copy(&self) -> Self {
+        let mut doc = Self::new(1, 1, &[]);
+        doc.restore_state(self.serialize_state());
+        doc
+    }
+
+    /// Versioned, lossless document persistence; undo buffers are intentionally excluded.
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string(&serde_json::json!({"schema":1,"document":self.serialize_state()})).map_err(|e| e.to_string())
+    }
+
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if value["schema"] != 1 { return Err("Unsupported document version".into()); }
+        let state: DocumentState = serde_json::from_value(value["document"].clone()).map_err(|e| e.to_string())?;
+        let bytes = state.width.checked_mul(state.height).and_then(|n| n.checked_mul(4)).ok_or("Invalid dimensions")?;
+        if state.width == 0 || state.height == 0 || bytes > 256 * 1024 * 1024 || state.layers.is_empty() || state.frames.is_empty() {
+            return Err("Invalid document dimensions or empty layers/frames".into());
+        }
+        for layer in &state.layers {
+            if layer.cels.len() > state.frames.len() || !layer.opacity.is_finite() { return Err("Invalid layer".into()); }
+            for cel in layer.cels.iter().flatten() {
+                if cel.width != state.width || cel.height != state.height || cel.data.len() != bytes { return Err("Invalid cel dimensions or data".into()); }
+            }
+        }
+        for (index, frame) in state.frames.iter().enumerate() {
+            if frame.index != index || frame.duration_ms == 0 { return Err("Invalid frame".into()); }
+        }
+        for tag in &state.tags {
+            if tag.from > tag.to || tag.to >= state.frames.len() { return Err("Invalid tag".into()); }
+        }
+        let mut doc = Self::new(1, 1, &[]);
+        doc.restore_state(state);
+        Ok(doc)
+    }
+
     pub fn new(width: usize, height: usize, palette: &[String]) -> Self {
         let width = width.max(1);
         let height = height.max(1);

@@ -49,3 +49,5 @@ pub use document::AsepriteDoc;
 pub use paths::PathJailError;
 pub use project::{Project, ProjectError};
 pub use sources::SourceError;
+
+pub mod storage;

@@ -49,8 +49,8 @@ type RealTimeline = TimelineController<Arc<Mutex<AsepriteDoc>>>;
 
 #[doc(hidden)]
 #[inline]
-unsafe fn doc<'a>(ptr: *mut BixelDoc) -> &'a mut RealDoc {
-    unsafe { &mut *(ptr as *mut RealDoc) }
+unsafe fn doc<'a>(ptr: *mut BixelDoc) -> &'a RealDoc {
+    unsafe { &*(ptr as *const RealDoc) }
 }
 
 #[doc(hidden)]
@@ -550,6 +550,8 @@ use std::sync::OnceLock;
 
 use bixel_ai::native_stream::{NativeEvent, NativeRequest};
 
+static AI_TURN: Mutex<()> = Mutex::new(());
+
 static AI_ENGINE: OnceLock<Result<bixel_ai::GooseAgent, String>> = OnceLock::new();
 
 fn ai_engine() -> Result<&'static bixel_ai::GooseAgent, String> {
@@ -577,10 +579,10 @@ pub extern "C" fn bixel_ai_load_env(path: *const c_char) {
     bixel_core::config::load_env(path.as_deref(), false);
 }
 
-/// True once a key is present and the OpenRouter provider has been built.
+/// Lightweight configuration check; provider/runtime startup belongs on the worker thread.
 #[no_mangle]
 pub extern "C" fn bixel_ai_available() -> bool {
-    ai_engine().is_ok()
+    bixel_ai::AiSettings::from_env_file().has_key()
 }
 
 /// JSON array of the available skills (id, name, description, params schema).
@@ -646,6 +648,7 @@ pub extern "C" fn bixel_ai_chat_stream(
         let Ok(value) = std::ffi::CString::new(json) else { return false; };
         callback(value.as_ptr(), context)
     };
+    let _turn = AI_TURN.lock().unwrap();
     let result = (|| {
         let request: NativeRequest = serde_json::from_str(&arg_str(request_json)).map_err(|e| e.to_string())?;
         ai_engine()?.chat_stream(request, emit).map_err(|e| e.to_string())
@@ -832,5 +835,46 @@ pub unsafe extern "C" fn bixel_ai_run_skill(
             r#"{{"error":{}}}"#,
             serde_json::to_string(&e.to_string()).unwrap_or_else(|_| r#""skill failed""#.into())
         )),
+    }
+}
+
+/// Host-owned filesystem operations. Returns {value:...} or {error:...}; free with bixel_string_free.
+#[no_mangle]
+pub extern "C" fn bixel_storage_request(base: *const c_char, request: *const c_char) -> *mut c_char {
+    let result = serde_json::from_str(&arg_str(request)).map_err(|e| e.to_string())
+        .and_then(|value| bixel_core::storage::request(std::path::Path::new(&arg_str(base)), &value));
+    out_cstr(match result {
+        Ok(value) => serde_json::json!({"value":value}),
+        Err(error) => serde_json::json!({"error":error}),
+    }.to_string())
+}
+
+/// Persist a complete document atomically under an explicit root, off the UI thread.
+/// Returns null on success or an owned error string.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_save(ptr: *const BixelDoc, base: *const c_char, path: *const c_char) -> *mut c_char {
+    if ptr.is_null() { return out_cstr("Missing document".into()); }
+    // Clone under the document lock, then release it before serialization and disk I/O.
+    let snapshot = unsafe { doc_ref(ptr) }.lock().unwrap().persistence_copy();
+    let result = snapshot.to_json().and_then(|text| bixel_core::storage::write(std::path::Path::new(&arg_str(base)), &arg_str(path), text.as_bytes()));
+    match result { Ok(()) => std::ptr::null_mut(), Err(e) => out_cstr(e) }
+}
+
+/// Restore a validated layered document. Null signals malformed input.
+#[no_mangle]
+pub extern "C" fn bixel_doc_from_json(json: *const c_char) -> *mut BixelDoc {
+    match AsepriteDoc::from_json(&arg_str(json)) {
+        Ok(document) => Box::into_raw(Box::new(Arc::new(Mutex::new(document)))) as *mut BixelDoc,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Write a caller-owned artifact buffer beneath the project root. Returns an owned error or null.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_storage_write(base: *const c_char, path: *const c_char, bytes: *const u8, len: u64) -> *mut c_char {
+    if bytes.is_null() || len > isize::MAX as u64 { return out_cstr("Invalid artifact buffer".into()); }
+    let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    match bixel_core::storage::write(std::path::Path::new(&arg_str(base)), &arg_str(path), data) {
+        Ok(()) => std::ptr::null_mut(), Err(e) => out_cstr(e),
     }
 }

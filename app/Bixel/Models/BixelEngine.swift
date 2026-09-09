@@ -11,11 +11,24 @@ import Foundation
 // MARK: - Document
 
 /// A sprite document backed by a Rust `AsepriteDoc`.
-final class Document {
-    fileprivate var handle: UnsafeMutablePointer<BixelDoc>?
+// The handle is immutable; Rust serializes every document access with a mutex.
+final class Document: @unchecked Sendable {
+    fileprivate let handle: UnsafeMutablePointer<BixelDoc>?
 
     init(width: Int, height: Int) {
         handle = bixel_doc_new(UInt32(width), UInt32(height))
+    }
+
+    init(json: String) throws {
+        guard let restored = bixel_doc_from_json(json) else { throw StorageError.message("The saved document is invalid or uses an unsupported version.") }
+        handle = restored
+    }
+
+    func save(base: URL, path: String) throws {
+        if let error = bixel_doc_save(handle, base.path, path) {
+            defer { bixel_string_free(error) }
+            throw StorageError.message(String(cString: error))
+        }
     }
 
     deinit {
@@ -222,4 +235,39 @@ final class TileLayer {
     func set(x: Int, y: Int, _ raw: UInt32) -> Bool { bixel_tilelayer_set(handle, Int32(x), Int32(y), raw) }
     @discardableResult
     func flood(x: Int, y: Int, _ raw: UInt32) -> Int { Int(bixel_tilelayer_flood(handle, Int32(x), Int32(y), raw)) }
+}
+
+
+// MARK: - Project filesystem gateway
+
+enum StorageError: LocalizedError {
+    case message(String)
+    var errorDescription: String? { if case .message(let text) = self { return text }; return nil }
+}
+
+enum ProjectStorage {
+    static func request(base: URL, _ request: [String: Any]) throws -> Any? {
+        let data = try JSONSerialization.data(withJSONObject: request)
+        guard let text = String(data: data, encoding: .utf8), let ptr = bixel_storage_request(base.path, text) else {
+            throw StorageError.message("Storage request failed.")
+        }
+        defer { bixel_string_free(ptr) }
+        let result = try JSONSerialization.jsonObject(with: Data(String(cString: ptr).utf8)) as? [String: Any]
+        if let error = result?["error"] as? String { throw StorageError.message(error) }
+        return result?["value"]
+    }
+
+    static func read(base: URL, path: String) throws -> String? {
+        try request(base: base, ["op": "read", "path": path]) as? String
+    }
+
+    static func write(base: URL, path: String, data: Data) throws {
+        let error = data.withUnsafeBytes { raw in
+            bixel_storage_write(base.path, path, raw.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt64(data.count))
+        }
+        if let error {
+            defer { bixel_string_free(error) }
+            throw StorageError.message(String(cString: error))
+        }
+    }
 }

@@ -12,7 +12,7 @@ xcrun swiftc -module-name BixelAssistantTests \
     -target "$(uname -m)-apple-macos13.0" \
     -sdk "$(xcrun --show-sdk-path)" \
     -import-objc-header app/Bixel/Support/Bixel-Bridging-Header.h \
-    -I generated -L generated -lbixel \
+    -I generated -L "${BIXEL_TEST_LIBRARY_DIR:-generated}" -lbixel \
     -framework Security -framework CoreFoundation -framework SystemConfiguration \
     -module-cache-path "$TEST_DIR/cache" \
     "${SOURCES[@]}" tests/AssistantSessionTests.swift -o "$TEST_DIR/tests"

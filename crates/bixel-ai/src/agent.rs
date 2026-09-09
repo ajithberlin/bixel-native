@@ -26,7 +26,7 @@ use crate::skill_server::{self, Artifact, SkillRuntime};
 pub struct GooseAgent {
     agent: Agent,
     runtime: tokio::runtime::Runtime,
-    session_id: Mutex<Option<String>>,
+    session_id: Mutex<HashMap<String, String>>,
     settings: AiSettings,
 }
 
@@ -72,7 +72,7 @@ impl GooseAgent {
         Ok(GooseAgent {
             agent,
             runtime,
-            session_id: Mutex::new(None),
+            session_id: Mutex::new(HashMap::new()),
             settings,
         })
     }
@@ -84,13 +84,13 @@ impl GooseAgent {
     /// Forget the current conversation so the next `chat_stream` starts a fresh
     /// goose session.
     pub fn reset(&self) {
-        *self.session_id.lock().unwrap() = None;
+        self.session_id.lock().unwrap().clear();
     }
 
     fn ensure_session(&self, base: &str) -> Result<String, AiError> {
         let mut guard = self.session_id.lock().unwrap();
-        if let Some(id) = guard.clone() {
-            return Ok(id);
+        if let Some(id) = guard.get(base) {
+            return Ok(id.clone());
         }
         let sm = self.agent.config.session_manager.clone();
         let working_dir = PathBuf::from(base);
@@ -104,7 +104,7 @@ impl GooseAgent {
             ))
             .map_err(|e| AiError::Provider(e.to_string()))?;
         let id = session.id.clone();
-        *guard = Some(id.clone());
+        guard.insert(base.to_string(), id.clone());
         Ok(id)
     }
 
@@ -194,7 +194,7 @@ impl GooseAgent {
         let session_config = SessionConfig {
             id: session_id,
             schedule_id: None,
-            max_turns: None,
+            max_turns: Some(20),
             retry_config: None,
         };
 
@@ -349,4 +349,24 @@ fn tool_display_name(
         }
     }
     base
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn conversations_reuse_only_their_own_workspace_session() {
+        let settings = AiSettings { api_key: "dummy-no-network".into(), ..Default::default() };
+        let agent = GooseAgent::new(settings).unwrap();
+        let base = std::env::temp_dir().join(format!("bixel-context-{}", std::process::id()));
+        let a = base.join("project-a/chat-a").to_string_lossy().into_owned();
+        let b = base.join("project-b/chat-a").to_string_lossy().into_owned();
+        let a_id = agent.ensure_session(&a).unwrap();
+        let b_id = agent.ensure_session(&b).unwrap();
+        assert_ne!(a_id, b_id, "Projects must not share model context or working directories");
+        assert_eq!(a_id, agent.ensure_session(&a).unwrap());
+        agent.reset();
+        assert_ne!(a_id, agent.ensure_session(&a).unwrap());
+    }
 }

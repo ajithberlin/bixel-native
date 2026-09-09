@@ -147,10 +147,13 @@ impl SkillServer {
         let mut text = output.text.clone();
         let mut saved = Vec::new();
         let push = |img: &RgbaImage, tag: &str| -> Result<String, String> {            let png = image::encode_png(img).map_err(|e| e.to_string())?;
-            let name = format!("{}_{}.png", tag, counter());
-            if let Some(ws) = &workspace {
-                std::fs::write(ws.join(&name), &png).map_err(|e| e.to_string())?;
-            }
+            let name = loop {
+                let name = format!("{}_{}.png", tag, counter());
+                if let Some(ws) = &workspace {
+                    if !bixel_core::storage::write_new(ws, &name, &png)? { continue; }
+                }
+                break name;
+            };
             let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
             runtime.artifacts.lock().unwrap().push(Artifact {
                 name: name.clone(),
@@ -224,7 +227,7 @@ fn decode_input_image(value: Option<&str>, workspace: Option<&std::path::Path>) 
     }
 
     if let Some(ws) = workspace {
-        let path = ws.join(value);
+        let path = bixel_core::paths::safe_resolve(value, ws).map_err(|e| AiError::Image(e.to_string()))?;
         if path.is_file() {
             let bytes = std::fs::read(&path).map_err(|e| AiError::Image(e.to_string()))?;
             return Ok(Some(crate::image::decode_any(&bytes)?));
