@@ -53,7 +53,6 @@ struct AIPanel: View {
             }.font(.system(size: 9)).foregroundColor(StudioTheme.textDisabled).padding(.horizontal, 22).padding(.bottom, 10)
         }
         .foregroundColor(StudioTheme.textPrimary)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget) { providers in
             for provider in providers.prefix(4) {
                 _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -64,8 +63,8 @@ struct AIPanel: View {
         }
         .overlay {
             if dropTarget {
-                RoundedRectangle(cornerRadius: 14).fill(StudioTheme.accentSoft)
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(StudioTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6])))
+                Rectangle().fill(StudioTheme.accentSoft)
+                    .overlay(Rectangle().strokeBorder(StudioTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [6])))
                     .overlay(Label("Drop files to attach", systemImage: "paperclip")).padding(8).allowsHitTesting(false)
             }
         }
@@ -82,7 +81,15 @@ struct AIPanel: View {
             iconButton("New chat", "square.and.pencil") { session.newChat(); showHistory = false; archived = nil }.disabled(session.busy)
             iconButton(expanded ? "Reduce sidebar" : "Expand sidebar", expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: onExpand)
             iconButton("Close assistant", "xmark", action: onClose)
-        }.padding(.horizontal, 16).padding(.vertical, 15)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .frame(height: 52)
+        .background(
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(Rectangle().fill(StudioTheme.procreateGlass))
+        )
     }
 
     private var transcript: some View {
@@ -384,6 +391,11 @@ private struct AssistantArtifactCard: View {
     @ObservedObject var model: EditorModel
     @State private var showImage = false
     @State private var applied = false
+
+    private var isSpriteSheet: Bool {
+        artifact.name.lowercased().contains("sheet") || (artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let image = NSImage(data: artifact.data) {
@@ -393,19 +405,36 @@ private struct AssistantArtifactCard: View {
                 }.buttonStyle(.plain).help("View image or drag onto the canvas")
                 .onDrag { imageProvider(artifact.data) }
             }
-            HStack {
+            HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(artifact.name).font(.system(size: 10, weight: .medium)).lineLimit(1)
                     if artifact.width > 0 { Text("\(artifact.width) × \(artifact.height)").font(.system(size: 9)).foregroundColor(StudioTheme.textSecondary) }
                 }
-                Spacer()
+                Spacer(minLength: 4)
+
                 Button("View") { showImage = true }.buttonStyle(.plain).font(.system(size: 10))
+
+                if isSpriteSheet {
+                    Button(applied ? "Imported" : "Import sheet") {
+                        model.importSheet(artifact.data, name: artifact.name)
+                        applied = true
+                    }
+                    .font(.system(size: 10))
+                    .disabled(applied)
+                    .help("Import all frames from this spritesheet into the animation timeline")
+                }
+
                 Button(applied ? "Added" : "Add frame") {
                     if let decoded = AIService.pngToRGBA(artifact.data) {
-                        model.applyImageToNewFrame(decoded.rgba, width: decoded.width, height: decoded.height); applied = true
+                        model.applyImageToNewFrame(decoded.rgba, width: decoded.width, height: decoded.height)
+                        applied = true
                     }
-                }.font(.system(size: 10)).disabled(applied || artifact.width != model.width || artifact.height != model.height)
-                .help("Frames must match this document. Use the library to open a different-sized image.")
+                }
+                .font(.system(size: 10))
+                .disabled(applied)
+                .help(artifact.width > 0 && (artifact.width != model.width || artifact.height != model.height) ?
+                      "Add as a new frame (auto-fits to \(model.width) × \(model.height))" :
+                      "Add as a new frame to the animation")
             }
         }.padding(10).background(StudioTheme.panelElevated.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         .sheet(isPresented: $showImage) {

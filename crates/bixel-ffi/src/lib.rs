@@ -34,6 +34,12 @@ pub struct BixelTileLayer {
     _private: [u8; 0],
 }
 
+/// Opaque handle to a tile map (`Arc<Mutex<TileMap>>`).
+#[repr(C)]
+pub struct BixelMap {
+    _private: [u8; 0],
+}
+
 /// Opaque handle to an animation controller (`TimelineController<...>`).
 #[repr(C)]
 pub struct BixelTimeline {
@@ -44,6 +50,8 @@ pub struct BixelTimeline {
 type RealDoc = Arc<Mutex<AsepriteDoc>>;
 #[doc(hidden)]
 type RealTileLayer = Mutex<bixel_core::tilemap::TileLayer>;
+#[doc(hidden)]
+type RealMap = Arc<Mutex<bixel_core::map::TileMap>>;
 #[doc(hidden)]
 type RealTimeline = TimelineController<Arc<Mutex<AsepriteDoc>>>;
 
@@ -69,6 +77,18 @@ unsafe fn tilelayer<'a>(ptr: *mut BixelTileLayer) -> &'a mut RealTileLayer {
 #[inline]
 unsafe fn tilelayer_ref<'a>(ptr: *const BixelTileLayer) -> &'a RealTileLayer {
     unsafe { &*(ptr as *const RealTileLayer) }
+}
+
+#[doc(hidden)]
+#[inline]
+unsafe fn map<'a>(ptr: *mut BixelMap) -> &'a RealMap {
+    unsafe { &*(ptr as *const RealMap) }
+}
+
+#[doc(hidden)]
+#[inline]
+unsafe fn map_ref<'a>(ptr: *const BixelMap) -> &'a RealMap {
+    unsafe { &*(ptr as *const RealMap) }
 }
 
 #[doc(hidden)]
@@ -1054,4 +1074,621 @@ pub unsafe extern "C" fn bixel_storage_write(base: *const c_char, path: *const c
     match bixel_core::storage::write(std::path::Path::new(&arg_str(base)), &arg_str(path), data) {
         Ok(()) => std::ptr::null_mut(), Err(e) => out_cstr(e),
     }
+}
+
+// ----------------------------------------------------------------- tile map
+//
+// The TileMap designer (`.map` documents are Tiled 1.10 JSON). Same contract
+// as `BixelDoc`: opaque `Arc<Mutex<TileMap>>`, bulk data via caller buffers,
+// strings freed with `bixel_string_free`.
+
+use bixel_core::map::{MapLayer, Property, TileMap};
+
+// ------------------------------------------------------------- lifecycle
+
+#[no_mangle]
+pub extern "C" fn bixel_map_new(width: u32, height: u32, tile_width: u32, tile_height: u32) -> *mut BixelMap {
+    let real = Arc::new(Mutex::new(TileMap::new(
+        width.max(1) as usize,
+        height.max(1) as usize,
+        tile_width.max(1) as usize,
+        tile_height.max(1) as usize,
+    )));
+    Box::into_raw(Box::new(real)) as *mut BixelMap
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_free(ptr: *mut BixelMap) {
+    if !ptr.is_null() {
+        unsafe { drop(Box::from_raw(ptr as *mut RealMap)) };
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_from_json(json: *const c_char) -> *mut BixelMap {
+    match TileMap::from_tiled_json(&arg_str(json)) {
+        Ok(map) => Box::into_raw(Box::new(Arc::new(Mutex::new(map)))) as *mut BixelMap,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Persist the map atomically under an explicit root (mirrors `bixel_doc_save`).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_save(ptr: *const BixelMap, base: *const c_char, path: *const c_char) -> *mut c_char {
+    if ptr.is_null() {
+        return out_cstr("Missing map".into());
+    }
+    let snapshot = unsafe { map_ref(ptr) }.lock().unwrap().clone();
+    let result = snapshot
+        .to_tiled_json()
+        .and_then(|text| bixel_core::storage::write(std::path::Path::new(&arg_str(base)), &arg_str(path), text.as_bytes()));
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_to_json(ptr: *const BixelMap) -> *mut c_char {
+    let text = unsafe { map_ref(ptr) }.lock().unwrap().to_tiled_json().unwrap_or_default();
+    out_cstr(text)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_width(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().tile_width as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_height(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().tile_height as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_count_x(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().width as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_count_y(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().height as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_pixel_width(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().pixel_width() as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_pixel_height(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().pixel_height() as u32
+}
+
+// ------------------------------------------------------------ tilesets
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_add_tileset(
+    ptr: *mut BixelMap,
+    name: *const c_char,
+    image_rel: *const c_char,
+    rgba: *const u8,
+    img_w: u32,
+    img_h: u32,
+    tw: u32,
+    th: u32,
+    margin: u32,
+    spacing: u32,
+) -> i32 {
+    let mut map = unsafe { map(ptr) }.lock().unwrap();
+    let name = arg_str(name);
+    let image = arg_str(image_rel);
+    let index = match map.add_tileset(&name, &image, img_w, img_h, tw, th, margin, spacing) {
+        Ok(i) => i,
+        Err(_) => return -1,
+    };
+    if !rgba.is_null() {
+        let len = img_w as usize * img_h as usize * 4;
+        let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
+        map.set_tileset_pixels(index, pixels);
+    }
+    index as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_remove_tileset(ptr: *mut BixelMap, index: u32) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().remove_tileset(index as usize)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_tileset_count(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().tilesets.len() as u32
+}
+
+/// JSON array describing every tileset (index, first_gid, geometry, image rel).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_tilesets_json(ptr: *const BixelMap) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let list: Vec<serde_json::Value> = map
+        .tilesets
+        .iter()
+        .enumerate()
+        .map(|(i, ts)| {
+            serde_json::json!({
+                "index": i,
+                "firstGid": ts.first_gid,
+                "name": ts.name,
+                "image": ts.image,
+                "imageWidth": ts.image_width,
+                "imageHeight": ts.image_height,
+                "tileWidth": ts.tile_width,
+                "tileHeight": ts.tile_height,
+                "margin": ts.margin,
+                "spacing": ts.spacing,
+                "columns": ts.columns,
+                "tileCount": ts.tile_count,
+            })
+        })
+        .collect();
+    out_cstr(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_tileset_pixels(ptr: *mut BixelMap, index: u32, rgba: *const u8, len: usize) -> bool {
+    if rgba.is_null() {
+        return false;
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
+    unsafe { map(ptr) }.lock().unwrap().set_tileset_pixels(index as usize, pixels)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_tileset_pixels(ptr: *const BixelMap, index: u32, out: *mut u8, out_len: usize) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    let mut buf = vec![0u8; out_len];
+    let ok = unsafe { map_ref(ptr) }.lock().unwrap().tileset_pixels(index as usize, &mut buf);
+    if ok {
+        unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    }
+    ok
+}
+
+/// `local` of -1 clears the autotile slot for `mask`.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_autotile(ptr: *mut BixelMap, tileset: u32, mask: u8, local: i32) -> bool {
+    let local = if local < 0 { None } else { Some(local as u32) };
+    unsafe { map(ptr) }.lock().unwrap().set_autotile(tileset as usize, mask, local)
+}
+
+/// Fill `out` with the 16 autotile slots as `i64` local tile ids (-1 = empty).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_autotile_slots(ptr: *const BixelMap, tileset: u32, out: *mut i64, out_len: usize) -> u32 {
+    if out.is_null() || out_len == 0 {
+        return 0;
+    }
+    let slots = unsafe { map_ref(ptr) }.lock().unwrap().autotile_slots(tileset as usize);
+    for (i, slot) in slots.iter().enumerate().take(out_len) {
+        unsafe {
+            *out.add(i) = slot.map(i64::from).unwrap_or(-1);
+        }
+    }
+    slots.len() as u32
+}
+
+/// Re-resolve a painted region's borders; returns changed cell count.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_autotile(ptr: *mut BixelMap, layer: u32, tileset: u32, x: u32, y: u32, w: u32, h: u32) -> u32 {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .autotile(layer as usize, tileset as usize, x as usize, y as usize, w as usize, h as usize) as u32
+}
+
+// ------------------------------------------------------------- layers
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_layer_count(ptr: *const BixelMap) -> u32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().layers.len() as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_add_layer(ptr: *mut BixelMap, name: *const c_char) -> u32 {
+    let name = arg_str(name);
+    let name = if name.is_empty() { None } else { Some(name.as_str()) };
+    unsafe { map(ptr) }.lock().unwrap().add_tile_layer(name) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_add_object_layer(ptr: *mut BixelMap, name: *const c_char) -> u32 {
+    let name = arg_str(name);
+    let name = if name.is_empty() { None } else { Some(name.as_str()) };
+    unsafe { map(ptr) }.lock().unwrap().add_object_layer(name) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_remove_layer(ptr: *mut BixelMap, index: u32) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().remove_layer(index as usize)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_rename_layer(ptr: *mut BixelMap, index: u32, name: *const c_char) -> bool {
+    let name = arg_str(name);
+    unsafe { map(ptr) }.lock().unwrap().rename_layer(index as usize, &name)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_reorder_layer(ptr: *mut BixelMap, from: u32, to: u32) -> bool {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .reorder_layer(from as usize, to as usize)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_layer_visible(ptr: *mut BixelMap, index: u32, visible: bool) {
+    if let Some(layer) = unsafe { map(ptr) }.lock().unwrap().layers.get_mut(index as usize) {
+        layer.set_visible(visible);
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_layer_opacity(ptr: *mut BixelMap, index: u32, opacity: f32) {
+    if let Some(layer) = unsafe { map(ptr) }.lock().unwrap().layers.get_mut(index as usize) {
+        layer.set_opacity(opacity);
+    }
+}
+
+/// One bulk call describing every layer for the layers panel.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_layers_json(ptr: *const BixelMap) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let list: Vec<serde_json::Value> = map
+        .layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| {
+            let mut base = serde_json::json!({
+                "index": index,
+                "id": layer.id(),
+                "name": layer.name(),
+                "visible": layer.visible(),
+                "opacity": layer.opacity(),
+                "type": if layer.is_objects() { "object" } else { "tile" },
+            });
+            match layer {
+                MapLayer::Tile(data) => {
+                    base["width"] = serde_json::json!(data.layer.width);
+                    base["height"] = serde_json::json!(data.layer.height);
+                }
+                MapLayer::Objects(data) => {
+                    base["objectCount"] = serde_json::json!(data.objects.len());
+                }
+            }
+            base
+        })
+        .collect();
+    out_cstr(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
+}
+
+// ------------------------------------------------------- editing (tiles)
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_tile(ptr: *mut BixelMap, layer: u32, x: i32, y: i32, gid: u32) -> bool {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .set_tile(layer as usize, x as isize, y as isize, gid)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_get_tile(ptr: *const BixelMap, layer: u32, x: i32, y: i32) -> u32 {
+    unsafe { map_ref(ptr) }
+        .lock()
+        .unwrap()
+        .get_tile(layer as usize, x as isize, y as isize)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_stamp(
+    ptr: *mut BixelMap,
+    layer: u32,
+    x: i32,
+    y: i32,
+    gids: *const u32,
+    w: u32,
+    h: u32,
+    skip_empty: bool,
+) -> u32 {
+    if gids.is_null() || w == 0 || h == 0 {
+        return 0;
+    }
+    let tiles = unsafe { std::slice::from_raw_parts(gids, w as usize * h as usize) };
+    let pattern = bixel_core::tilemap::Pattern {
+        w: w as usize,
+        h: h as usize,
+        tiles: tiles.to_vec(),
+    };
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .stamp(layer as usize, x.max(0) as usize, y.max(0) as usize, &pattern, skip_empty) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_fill(ptr: *mut BixelMap, layer: u32, x: i32, y: i32, gid: u32) -> u32 {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .fill(layer as usize, x as isize, y as isize, gid) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_paint_rect(
+    ptr: *mut BixelMap, layer: u32, x0: i32, y0: i32, x1: i32, y1: i32, gid: u32,
+) -> u32 {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .paint_rect(layer as usize, x0 as isize, y0 as isize, x1 as isize, y1 as isize, gid) as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_paint_line(
+    ptr: *mut BixelMap, layer: u32, x0: i32, y0: i32, x1: i32, y1: i32, gid: u32,
+) -> u32 {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .paint_line(layer as usize, x0 as isize, y0 as isize, x1 as isize, y1 as isize, gid) as u32
+}
+
+/// Copy a region into a caller-owned `w*h` u32 buffer; returns tiles written.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_read_region(
+    ptr: *const BixelMap,
+    layer: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    out: *mut u32,
+) -> u32 {
+    if out.is_null() || w == 0 || h == 0 {
+        return 0;
+    }
+    let pattern = unsafe { map_ref(ptr) }
+        .lock()
+        .unwrap()
+        .read_region(layer as usize, x as usize, y as usize, w as usize, h as usize);
+    let count = pattern.w * pattern.h;
+    if count > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(pattern.tiles.as_ptr(), out, count) };
+    }
+    count as u32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_replace(
+    ptr: *mut BixelMap, layer: u32, x: u32, y: u32, w: u32, h: u32, from: u32, to: u32,
+) -> u32 {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .replace(layer as usize, x as usize, y as usize, w as usize, h as usize, from, to) as u32
+}
+
+/// Magic-wand same-tile mask into a caller-owned `width*height` byte buffer.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_wand_mask(
+    ptr: *const BixelMap, layer: u32, x: i32, y: i32, out: *mut u8, out_len: usize,
+) -> u32 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut mask = vec![0u8; out_len];
+    let count = unsafe { map_ref(ptr) }
+        .lock()
+        .unwrap()
+        .wand_mask(layer as usize, x as isize, y as isize, &mut mask);
+    if count > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(mask.as_ptr(), out, mask.len()) };
+    }
+    count as u32
+}
+
+// ------------------------------------------------------- editing (objects)
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_add_object(
+    ptr: *mut BixelMap, layer: u32, name: *const c_char, kind: *const c_char,
+    x: f64, y: f64, w: f64, h: f64,
+) -> i64 {
+    let name = arg_str(name);
+    let kind = arg_str(kind);
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .add_object(layer as usize, &name, &kind, x, y, w, h)
+        .map(i64::from)
+        .unwrap_or(-1)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_remove_object(ptr: *mut BixelMap, layer: u32, object_id: u32) -> bool {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .remove_object(layer as usize, object_id)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_object(
+    ptr: *mut BixelMap, layer: u32, object_id: u32, name: *const c_char, kind: *const c_char,
+    x: f64, y: f64, w: f64, h: f64,
+) -> bool {
+    let name = arg_str(name);
+    let kind = arg_str(kind);
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .set_object(layer as usize, object_id, &name, &kind, x, y, w, h)
+}
+
+/// JSON array of an object layer's objects.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_objects_json(ptr: *const BixelMap, layer: u32) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let list: Vec<serde_json::Value> = map
+        .object_layer(layer as usize)
+        .map(|l| {
+            l.objects
+                .iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "id": o.id,
+                        "name": o.name,
+                        "type": o.kind,
+                        "x": o.x,
+                        "y": o.y,
+                        "width": o.width,
+                        "height": o.height,
+                        "visible": o.visible,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out_cstr(serde_json::to_string(&list).unwrap_or_else(|_| "[]".into()))
+}
+
+// ------------------------------------------------------------ properties
+
+fn props_json(props: &[Property]) -> serde_json::Value {
+    serde_json::Value::Array(
+        props
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "name": p.name,
+                    "type": if p.kind.is_empty() { "string".to_string() } else { p.kind.clone() },
+                    "value": p.value.clone(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn props_from_value(value: Option<&serde_json::Value>) -> Vec<Property> {
+    let mut out = Vec::new();
+    if let Some(arr) = value.and_then(serde_json::Value::as_array) {
+        for p in arr {
+            let name = p.get("name").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+            if name.is_empty() {
+                continue;
+            }
+            let kind = p.get("type").and_then(serde_json::Value::as_str).unwrap_or("string").to_string();
+            let value = p.get("value").cloned().unwrap_or(serde_json::Value::Null);
+            out.push(Property { name, kind, value });
+        }
+    }
+    out
+}
+
+/// target: 0 = map, 1 = layer, 2 = object. `layer`/`object_id` ignored when unused.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_properties(
+    ptr: *mut BixelMap,
+    target: u8,
+    layer: i32,
+    object_id: i64,
+    props: *const c_char,
+) -> bool {
+    let value: serde_json::Value = match serde_json::from_str(&arg_str(props)) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let props = props_from_value(Some(&value));
+    let layer = if layer >= 0 { Some(layer as usize) } else { None };
+    let object_id = if object_id >= 0 { Some(object_id as u32) } else { None };
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .set_properties(target, layer, object_id, props)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_properties_json(ptr: *const BixelMap, target: u8, layer: i32, object_id: i64) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let props: Vec<Property> = match target {
+        0 => map.map_properties().to_vec(),
+        1 if layer >= 0 => map.layer_properties(layer as usize).unwrap_or(&[]).to_vec(),
+        2 if layer >= 0 && object_id >= 0 => {
+            map.object_properties(layer as usize, object_id as u32).unwrap_or(&[]).to_vec()
+        }
+        _ => Vec::new(),
+    };
+    out_cstr(serde_json::to_string(&props_json(&props)).unwrap_or_else(|_| "[]".into()))
+}
+
+// -------------------------------------------------------------- resize
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_resize(ptr: *mut BixelMap, width: u32, height: u32) {
+    unsafe { map(ptr) }
+        .lock()
+        .unwrap()
+        .resize(width.max(1) as usize, height.max(1) as usize);
+}
+
+// ------------------------------------------------------------- history
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_snapshot(ptr: *mut BixelMap) {
+    unsafe { map(ptr) }.lock().unwrap().snapshot();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_undo(ptr: *mut BixelMap) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().undo()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_redo(ptr: *mut BixelMap) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().redo()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_can_undo(ptr: *const BixelMap) -> bool {
+    unsafe { map_ref(ptr) }.lock().unwrap().can_undo()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_can_redo(ptr: *const BixelMap) -> bool {
+    unsafe { map_ref(ptr) }.lock().unwrap().can_redo()
+}
+
+// ------------------------------------------------------- render / export
+
+/// Composite the visible tile layers into a caller-owned RGBA buffer of
+/// `pixel_width * pixel_height * 4` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_composite(ptr: *const BixelMap, out: *mut u8, out_len: usize) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let buf = map.composite();
+    if buf.len() > out_len || buf.is_empty() {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    true
+}
+
+/// A tile layer's GIDs as a CSV string (free with `bixel_string_free`).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -> *mut c_char {
+    let csv = unsafe { map_ref(ptr) }.lock().unwrap().layer_to_csv(layer as usize);
+    out_cstr(csv)
 }

@@ -19,6 +19,28 @@ struct BixelApp: App {
                 Button("Redo") { post(.studioRedo) }
                     .keyboardShortcut("z", modifiers: [.command, .shift])
             }
+            CommandGroup(replacing: .pasteboard) {
+                Button("Cut") { post(.studioCut) }
+                    .keyboardShortcut("x", modifiers: .command)
+                Button("Copy") { post(.studioCopy) }
+                    .keyboardShortcut("c", modifiers: .command)
+                Button("Paste") { post(.studioPaste) }
+                    .keyboardShortcut("v", modifiers: .command)
+                Divider()
+                Button("Delete") { post(.studioDelete) }
+                Divider()
+                Button("Flip Horizontal") { post(.studioFlipH) }
+                    .keyboardShortcut("x", modifiers: [.command])
+                Button("Flip Vertical") { post(.studioFlipV) }
+                    .keyboardShortcut("y", modifiers: [.command])
+                Button("Rotate Clockwise") { post(.studioRotate) }
+                    .keyboardShortcut("c", modifiers: [.command])
+                Divider()
+                Button("Resize Map…") { post(.studioMapResize) }
+                Button("Export Tiled JSON…") { post(.studioExportTiledJSON) }
+                Button("Export Map CSV…") { post(.studioExportCSV) }
+                Button("Export Map PNG…") { post(.studioExportMapPNG) }
+            }
             CommandGroup(after: .sidebar) {
                 Divider()
                 Button("Zoom In") { post(.studioZoomIn) }

@@ -1,11 +1,10 @@
 // HomePageView.swift
 //
 // Native macOS Home Page & Dashboard for Bixel Studio:
-// - Top Bar: Bixel logo, search bar with ⌘K, cloud sync status, notifications, settings, avatar
+// - Top Bar: Bixel logo, search bar with ⌘K
 // - Hero Banner: Pixel art forest scene with glowing moon, headline, and quick action bar
 // - AI Studio Creator: High-end conversational AI prompt composer with modes, sizes, and instant creation
 // - Recent Projects Grid: Pixel art thumbnail previews, tag badges, dimensions, and click-to-open
-// - Right Column: Sync & Storage card, Recent Activity card
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
 
 import SwiftUI
@@ -54,7 +53,6 @@ struct HomePageView: View {
 
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
-    @State private var showSettingsSheet = false
     @State private var aiPrompt = ""
     @State private var selectedAIMode: AIMode = .sprite
     @State private var selectedSize: Int = 32
@@ -83,19 +81,8 @@ struct HomePageView: View {
                     // 2. High-End AI Studio Creator (Redesigned, no extra AI Chat button)
                     aiCreatorHub
 
-                    // 3. Middle Section: Recent Projects & Right Column (Storage + Activity)
-                    HStack(alignment: .top, spacing: 24) {
-                        // Recent Projects Grid
-                        recentProjectsSection
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        // Right Column (Sync & Storage + Activity)
-                        VStack(spacing: 16) {
-                            syncStorageCard
-                            recentActivityCard
-                        }
-                        .frame(width: 300)
-                    }
+                    // 3. Middle Section: Recent Projects
+                    recentProjectsSection
 
                     // 4. Bottom Section: Templates & Inspirations + Quote
                     HStack(alignment: .top, spacing: 24) {
@@ -131,26 +118,8 @@ struct HomePageView: View {
     // MARK: - Top Header Bar
 
     private var topHeaderBar: some View {
-        HStack(spacing: 20) {
-            // Brand Logo & Title
-            HStack(spacing: 10) {
-                BixelSlimeLogo(size: 28)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Bixel Studio")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("PIXEL ART FOR BIG IDEAS")
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                        .foregroundColor(StudioTheme.textSecondary)
-                        .tracking(1.4)
-                }
-            }
-            .padding(.leading, 24)
-
-            Spacer()
-
-            // Search Bar with ⌘K
+        ZStack {
+            // Centered Search Bar with ⌘K
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .medium))
@@ -194,60 +163,23 @@ struct HomePageView: View {
                     )
             )
 
-            Spacer()
+            // Leading: Brand Logo & Title
+            HStack(spacing: 10) {
+                BixelSlimeLogo(size: 28)
 
-            // Status & User Actions
-            HStack(spacing: 14) {
-                // Cloud Sync Status
-                HStack(spacing: 6) {
-                    Image(systemName: "cloud.fill")
-                        .font(.system(size: 14))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Bixel Studio")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    Text("PIXEL ART FOR BIG IDEAS")
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
                         .foregroundColor(StudioTheme.textSecondary)
-                    Circle()
-                        .fill(StudioTheme.bixelGreen)
-                        .frame(width: 6, height: 6)
-                }
-                .help("Storage synced to local library")
-
-                // Notification Bell
-                Button {} label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "bell")
-                            .font(.system(size: 14))
-                            .foregroundColor(StudioTheme.textSecondary)
-                        Circle()
-                            .fill(StudioTheme.bixelGreen)
-                            .frame(width: 5, height: 5)
-                            .offset(x: 2, y: -2)
-                    }
-                    .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-
-                // Settings
-                Button { showSettingsSheet.toggle() } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14))
-                        .foregroundColor(StudioTheme.textSecondary)
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showSettingsSheet) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Bixel Studio").font(.headline)
-                        Text("Native macOS Pixel Art Studio").font(.caption).foregroundColor(.secondary)
-                        Divider()
-                        Text("Version 0.1.0 (Metal + Rust)").font(.caption2).foregroundColor(.secondary)
-                        Text("Storage: ~/Documents/Bixel/Projects").font(.caption2).foregroundColor(.secondary)
-                    }
-                    .padding(16)
-                    .frame(width: 240)
+                        .tracking(1.4)
                 }
 
-                // Pixel Avatar
-                PixelAvatarView(size: 30)
+                Spacer()
             }
-            .padding(.trailing, 24)
+            .padding(.leading, 24)
         }
     }
 
@@ -702,115 +634,6 @@ struct HomePageView: View {
         return store.projects.filter { $0.name.lowercased().contains(query) }
     }
 
-    // MARK: - Right Column: Sync & Storage + Recent Activity
-
-    private var syncStorageCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Title & Status
-            HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(StudioTheme.homeCardBorder)
-                        .frame(width: 32, height: 32)
-                    Image(systemName: "cloud.fill")
-                        .font(.system(size: 14))
-                        .foregroundColor(StudioTheme.textSecondary)
-                    Circle()
-                        .fill(StudioTheme.bixelGreen)
-                        .frame(width: 6, height: 6)
-                        .offset(x: 10, y: -8)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Sync & Storage")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.white)
-                    Text("Synced just now")
-                        .font(.system(size: 10))
-                        .foregroundColor(StudioTheme.textSecondary)
-                }
-
-                Spacer()
-            }
-
-            // Storage Progress Bar
-            VStack(alignment: .leading, spacing: 6) {
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.08))
-                            .frame(height: 6)
-
-                        Capsule()
-                            .fill(StudioTheme.bixelGreen)
-                            .frame(width: geo.size.width * 0.24, height: 6)
-                    }
-                }
-                .frame(height: 6)
-
-                Text("2.4 GB of 10 GB used")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(StudioTheme.textSecondary)
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(StudioTheme.homeCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1)
-                )
-        )
-    }
-
-    private var recentActivityCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // Header
-            HStack(spacing: 8) {
-                Image(systemName: "clock")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(StudioTheme.textSecondary)
-                Text("Recent Activity")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundColor(.white)
-                Spacer()
-            }
-
-            // Items
-            VStack(spacing: 10) {
-                ForEach(SamplePixelArt.sampleActivities) { item in
-                    HStack(spacing: 10) {
-                        // Mini thumbnail preview
-                        PixelPreviewThumb(name: item.projectName, size: 36)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.action)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
-                            Text(item.timeAgo)
-                                .font(.system(size: 10))
-                                .foregroundColor(StudioTheme.textDisabled)
-                        }
-
-                        Spacer()
-                    }
-                }
-            }
-        }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(StudioTheme.homeCard)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1)
-                )
-        )
-    }
-
     // MARK: - Bottom Section: Templates & Inspirations + Quote
 
     private var templatesSection: some View {
@@ -1128,27 +951,6 @@ struct BixelSlimeLogo: View {
     }
 }
 
-// MARK: - Pixel Avatar View
-
-struct PixelAvatarView: View {
-    let size: CGFloat
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .fill(Color(red: 0.2, green: 0.35, blue: 0.25))
-                .frame(width: size, height: size)
-
-            if let img = SamplePixelArt.makePreviewImage(for: "portrait", width: 24, height: 24) {
-                Image(decorative: img, scale: 1.0)
-                    .resizable()
-                    .interpolation(.none)
-                    .clipShape(Circle())
-                    .frame(width: size - 2, height: size - 2)
-            }
-        }
-    }
-}
 
 // MARK: - Hero Pixel Landscape Graphic
 
@@ -1261,6 +1063,7 @@ struct NewProjectQuickDialog: View {
     @State private var kind: AssetKind = .sprite
     @State private var width = 32
     @State private var height = 32
+    @State private var cellSize = 16
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1280,6 +1083,7 @@ struct NewProjectQuickDialog: View {
                     Text("Sprite").tag(AssetKind.sprite)
                     Text("Animation").tag(AssetKind.animation)
                     Text("Tileset").tag(AssetKind.tileset)
+                    Text("Map").tag(AssetKind.map)
                     Text("Image").tag(AssetKind.image)
                 }
                 .pickerStyle(.segmented)
@@ -1287,29 +1091,42 @@ struct NewProjectQuickDialog: View {
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Width (px)").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                    Text(kind == .map ? "Columns" : "Width (px)")
+                        .font(.caption).foregroundColor(StudioTheme.textSecondary)
                     TextField("", value: $width, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 80)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Height (px)").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                    Text(kind == .map ? "Rows" : "Height (px)")
+                        .font(.caption).foregroundColor(StudioTheme.textSecondary)
                     TextField("", value: $height, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 80)
                 }
 
+                if kind == .map {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tile (px)").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                        TextField("", value: $cellSize, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                    }
+                }
+
                 Spacer()
 
                 // Quick presets
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Presets").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                    HStack(spacing: 6) {
-                        presetButton("16²") { width = 16; height = 16 }
-                        presetButton("32²") { width = 32; height = 32 }
-                        presetButton("64²") { width = 64; height = 64 }
-                        presetButton("128²") { width = 128; height = 128 }
+                if kind != .map {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("Presets").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                        HStack(spacing: 6) {
+                            presetButton("16²") { width = 16; height = 16 }
+                            presetButton("32²") { width = 32; height = 32 }
+                            presetButton("64²") { width = 64; height = 64 }
+                            presetButton("128²") { width = 128; height = 128 }
+                        }
                     }
                 }
             }
@@ -1325,7 +1142,13 @@ struct NewProjectQuickDialog: View {
                 Button("Create Project") {
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
-                    if let project = store.createProject(name: projName, kind: kind, width: width, height: height) {
+                    if kind == .map {
+                        if let project = store.createProject(name: projName, kind: .map,
+                                                             width: max(1, width), height: max(1, height),
+                                                             cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
+                            onCreated(project)
+                        }
+                    } else if let project = store.createProject(name: projName, kind: kind, width: width, height: height) {
                         onCreated(project)
                     }
                 }
@@ -1338,6 +1161,15 @@ struct NewProjectQuickDialog: View {
         .padding(24)
         .frame(width: 440)
         .background(StudioTheme.homeDark)
+        .onChange(of: kind) { value in
+            if value == .map {
+                width = 40
+                height = 25
+            } else if width == 40 && height == 25 {
+                width = 32
+                height = 32
+            }
+        }
     }
 
     private func presetButton(_ label: String, action: @escaping () -> Void) -> some View {

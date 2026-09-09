@@ -36,6 +36,7 @@ pub mod color;
 pub mod config;
 pub mod document;
 pub mod jobs;
+pub mod map;
 pub mod map_validate;
 pub mod palette;
 pub mod paths;

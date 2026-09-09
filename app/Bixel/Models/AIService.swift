@@ -160,6 +160,46 @@ enum AIService {
         ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         return (rgba, w, h)
     }
+
+    /// Resamples an RGBA image to target dimensions using nearest-neighbor pixel art scaling.
+    /// Preserves aspect ratio by centering on a transparent canvas if aspect ratios differ.
+    static func fitToFrame(rgba: [UInt8], srcWidth: Int, srcHeight: Int, dstWidth: Int, dstHeight: Int) -> [UInt8] {
+        guard srcWidth > 0, srcHeight > 0, dstWidth > 0, dstHeight > 0 else { return [] }
+        if srcWidth == dstWidth && srcHeight == dstHeight { return rgba }
+
+        var dst = [UInt8](repeating: 0, count: dstWidth * dstHeight * 4)
+
+        let scaleX = Double(dstWidth) / Double(srcWidth)
+        let scaleY = Double(dstHeight) / Double(srcHeight)
+        let scale = min(scaleX, scaleY)
+
+        let scaledW = max(1, Int(round(Double(srcWidth) * scale)))
+        let scaledH = max(1, Int(round(Double(srcHeight) * scale)))
+
+        let offsetX = (dstWidth - scaledW) / 2
+        let offsetY = (dstHeight - scaledH) / 2
+
+        for dy in 0..<scaledH {
+            let sy = min(srcHeight - 1, (dy * srcHeight) / scaledH)
+            let dstY = offsetY + dy
+            guard dstY >= 0 && dstY < dstHeight else { continue }
+
+            for dx in 0..<scaledW {
+                let sx = min(srcWidth - 1, (dx * srcWidth) / scaledW)
+                let dstX = offsetX + dx
+                guard dstX >= 0 && dstX < dstWidth else { continue }
+
+                let srcOffset = (sy * srcWidth + sx) * 4
+                let dstOffset = (dstY * dstWidth + dstX) * 4
+
+                dst[dstOffset] = rgba[srcOffset]
+                dst[dstOffset + 1] = rgba[srcOffset + 1]
+                dst[dstOffset + 2] = rgba[srcOffset + 2]
+                dst[dstOffset + 3] = rgba[srcOffset + 3]
+            }
+        }
+        return dst
+    }
 }
 
 struct SkillInfo: Decodable, Identifiable {

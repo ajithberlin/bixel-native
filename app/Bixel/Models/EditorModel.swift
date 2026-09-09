@@ -75,9 +75,6 @@ final class EditorModel: ObservableObject {
     var cellWidth = 16
     var cellHeight = 16
     @Published var operationError: String?
-    @Published var tileName: String?
-    private var tileStamp: (rgba: [UInt8], width: Int, height: Int)?
-    private var lastTile: (x: Int, y: Int)?
 
     // Tool + brush state
     @Published var tool: Tool = .pencil
@@ -613,12 +610,6 @@ final class EditorModel: ObservableObject {
     func beginStroke(x: Int, y: Int) {
         lastPoint = nil
         strokeChanged = false
-        if assetKind == .map, tileStamp != nil, tool == .pencil {
-            document.snapshot()
-            lastTile = nil
-            paintTile(x: x, y: y)
-            return
-        }
         switch tool {
         case .eyedropper:
             pick(x: x, y: y)
@@ -645,7 +636,6 @@ final class EditorModel: ObservableObject {
     }
 
     func continueStroke(x: Int, y: Int) {
-        if assetKind == .map, tileStamp != nil, tool == .pencil { paintTile(x: x, y: y); return }
         guard let last = lastPoint, last.x != x || last.y != y else { return }
         switch tool {
         case .pencil, .eraser:
@@ -666,7 +656,6 @@ final class EditorModel: ObservableObject {
     func endStroke(x: Int, y: Int) {
         if tool == .pencil || tool == .eraser || tool == .smudge { continueStroke(x: x, y: y) }
         lastPoint = nil
-        lastTile = nil
         if strokeChanged {
             strokeChanged = false
             lastStrokeEnd = (x, y)
@@ -908,42 +897,35 @@ final class EditorModel: ObservableObject {
         } catch { operationError = error.localizedDescription }
     }
 
-    func selectTile(_ data: Data, name: String) {
-        guard let image = AIService.pngToRGBA(data), image.width == cellWidth, image.height == cellHeight else {
-            operationError = "Select a tile matching this map's cell dimensions."; return
-        }
-        tileStamp = image; tileName = name; tool = .pencil
-    }
-
-    func clearTile() { tileStamp = nil; tileName = nil; lastTile = nil }
-
-    private func paintTile(x: Int, y: Int) {
-        guard let tileStamp else { return }
-        let tile = (x: x / max(1, cellWidth), y: y / max(1, cellHeight))
-        if let lastTile, tile == lastTile { return }
-        do {
-            try document.stampImageData(tileStamp.rgba, width: tileStamp.width, height: tileStamp.height,
-                                        x: tile.x * cellWidth, y: tile.y * cellHeight, layer: activeLayer, frame: frame)
-            lastTile = tile; strokeChanged = true; pixelsChanged()
-        } catch { operationError = error.localizedDescription }
-    }
-
-    /// Image frames must match this document; generation must never resize it.
+    /// Apply an image to a new animation frame, auto-fitting to document dimensions if needed.
     func applyImageToNewFrame(_ rgba: [UInt8], width: Int, height: Int) {
-        guard width == self.width, height == self.height else {
-            operationError = "This image is \(width) × \(height). Prepare it to \(self.width) × \(self.height), or open it as its own document from the library."
+        guard width > 0, height > 0 else {
+            operationError = "Invalid image dimensions."
             return
+        }
+        let targetData: [UInt8]
+        if width == self.width && height == self.height {
+            targetData = rgba
+        } else {
+            targetData = AIService.fitToFrame(rgba: rgba, srcWidth: width, srcHeight: height, dstWidth: self.width, dstHeight: self.height)
         }
         document.snapshot()
         let newFrame = document.addFrame(durationMs: 125)
-        document.loadImageData(rgba, width: width, height: height, layer: 0, frame: newFrame)
+        document.loadImageData(targetData, width: self.width, height: self.height, layer: 0, frame: newFrame)
         frame = newFrame; reloadLayers(); commitChange(allFrames: true)
     }
 
+    /// Apply an image to the active layer of current frame, auto-fitting to document dimensions if needed.
     func applyImageToCurrentFrame(_ rgba: [UInt8], width: Int, height: Int) {
-        guard width == self.width, height == self.height else { operationError = "Image dimensions must match this document."; return }
+        guard width > 0, height > 0 else { operationError = "Invalid image dimensions."; return }
+        let targetData: [UInt8]
+        if width == self.width && height == self.height {
+            targetData = rgba
+        } else {
+            targetData = AIService.fitToFrame(rgba: rgba, srcWidth: width, srcHeight: height, dstWidth: self.width, dstHeight: self.height)
+        }
         document.snapshot()
-        document.loadImageData(rgba, width: width, height: height, layer: activeLayer, frame: frame)
+        document.loadImageData(targetData, width: self.width, height: self.height, layer: activeLayer, frame: frame)
         commitChange(allFrames: true)
     }
 }

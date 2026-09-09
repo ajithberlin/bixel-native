@@ -276,7 +276,13 @@ final class AssistantSession: ObservableObject {
             }
         case "artifact":
             if let png = event.png, let data = Data(base64Encoded: png) {
-                let artifact = AssistantArtifact(id: id, name: event.name ?? "Image", data: data, width: event.width ?? 0, height: event.height ?? 0)
+                var w = event.width ?? 0
+                var h = event.height ?? 0
+                if (w == 0 || h == 0), let decoded = AIService.pngToRGBA(data) {
+                    w = decoded.width
+                    h = decoded.height
+                }
+                let artifact = AssistantArtifact(id: id, name: event.name ?? "Image", data: data, width: w, height: h)
                 if let index = blocks.firstIndex(where: { $0.id == event.parent_id }) { blocks[index].artifacts.append(artifact) }
             }
         case "error":

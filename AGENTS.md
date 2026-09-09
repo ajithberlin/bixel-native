@@ -61,6 +61,7 @@ Module → original Python/JS source (porting reference):
 | `palette.rs` | `web/aseprite/palette.js` |
 | `timeline.rs` | `web/aseprite/timeline.js` |
 | `tilemap.rs` | `web/mapcore.js` |
+| `map.rs` | *(new — Tilemap Designer: Tiled JSON editor engine, no web origin)* |
 | `atlas.rs` | `core/atlases.py` |
 | `map_validate.rs` | `core/maps.py` |
 | `paths.rs` | `core/paths.py` |
@@ -88,6 +89,9 @@ call the OpenRouter image endpoints (`image_gen.rs`).
 
 Rules: keep `bixel-core` free of goose/network deps; all AI/network code stays in
 `bixel-ai`. FFI for AI is in `crates/bixel-ffi/src/lib.rs` (search `bixel_ai_`).
+The Tilemap Designer's whole `bixel_map_*` FFI family also lives there (map.rs →
+`BixelMap` opaque handle); its Swift model is `Models/TileMapModel.swift` with the
+CALayer canvas and chrome under `Views/TileMap/`.
 
 
 ## Commands

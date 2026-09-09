@@ -48,20 +48,6 @@ enum SamplePixelArt {
         )
     ]
 
-    struct ActivityItem: Identifiable {
-        let id = UUID()
-        let projectName: String
-        let action: String
-        let timeAgo: String
-        let iconName: String
-    }
-
-    static let sampleActivities: [ActivityItem] = [
-        ActivityItem(projectName: "Slime Sprite", action: "Edited Slime Sprite", timeAgo: "2 hours ago", iconName: "slime"),
-        ActivityItem(projectName: "Forest Tiles", action: "Created Forest Tiles", timeAgo: "1 day ago", iconName: "forest"),
-        ActivityItem(projectName: "Tokyo Street", action: "Edited Tokyo Street", timeAgo: "4 days ago", iconName: "tokyo")
-    ]
-
     // MARK: - Pixel Buffer Generation
 
     static func generateSampleData(for name: String, width: Int, height: Int) -> [UInt8] {

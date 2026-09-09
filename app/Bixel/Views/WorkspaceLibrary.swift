@@ -100,8 +100,6 @@ private struct AssetPreview: View {
     let asset: ProjectAssetFile
     let data: Data
     @ObservedObject var store: ProjectStore
-    @State private var tileX = 0
-    @State private var tileY = 0
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if asset.isImage, let bitmap = NSBitmapImageRep(data: data), let cg = bitmap.cgImage {
@@ -113,26 +111,13 @@ private struct AssetPreview: View {
                 Text("\(cg.width) × \(cg.height) px · Drag to canvas").font(.caption2).foregroundColor(.secondary)
                 HStack {
                     Button("Open image") { store.openImageAsset(asset) }.disabled(store.assistant.busy)
-                    Button("Add layer") { store.editor.placeAsset(data, name: asset.name) }.disabled(store.activeDocument == nil)
+                    Button("Add layer") { store.editor.placeAsset(data, name: asset.name) }.disabled(store.activeDocument == nil || store.isMapActive)
                     Button("Use as reference") {
                         guard store.assistant.attachments.count < 4 else { return }
                         store.assistant.attachments.append(AssistantAttachment(name: asset.name, data: data, text: nil))
                     }.disabled(data.count > 5_000_000 || store.assistant.busy || store.assistant.attachments.count >= 4)
                 }.font(.caption2)
-                if let document = store.activeDocument, document.kind == .map {
-                    HStack {
-                        Stepper("Column \(tileX + 1)", value: $tileX, in: 0...max(0, cg.width / document.cellWidth - 1))
-                        Stepper("Row \(tileY + 1)", value: $tileY, in: 0...max(0, cg.height / document.cellHeight - 1))
-                    }.font(.caption2)
-                    Button("Paint with this tile") {
-                        let rect = CGRect(x: tileX * document.cellWidth, y: tileY * document.cellHeight,
-                                          width: document.cellWidth, height: document.cellHeight)
-                        if let tile = cg.cropping(to: rect), let png = NSBitmapImageRep(cgImage: tile).representation(using: .png, properties: [:]) {
-                            store.editor.selectTile(png, name: asset.name)
-                        }
-                    }.font(.caption).disabled(cg.width < document.cellWidth || cg.height < document.cellHeight)
-                }
-                if let document = store.activeDocument, document.kind == .animation || document.kind == .sprite {
+                if let document = store.activeDocument, document.kind == .sprite || document.kind == .animation {
                     Button("Slice into \(store.editor.width) × \(store.editor.height) animation frames") {
                         store.editor.importSheet(data, name: asset.name)
                     }.font(.caption).disabled(cg.width % store.editor.width != 0 || cg.height % store.editor.height != 0)
@@ -206,12 +191,7 @@ struct EditorOperationFeedback: View {
     @ObservedObject var model: EditorModel
     var body: some View {
         Group {
-            if let name = model.tileName {
-                HStack {
-                    Label("Tile brush: \(name)", systemImage: "square.grid.2x2")
-                    Button("Clear tile brush") { model.clearTile() }
-                }.font(.caption).padding(8).background(.regularMaterial, in: Capsule())
-            } else { Color.clear.frame(height: 1) }
+            Color.clear.frame(height: 1)
         }
         .alert("Asset could not be applied", isPresented: Binding(get: { model.operationError != nil }, set: { if !$0 { model.operationError = nil } })) {
             Button("OK") { model.operationError = nil }

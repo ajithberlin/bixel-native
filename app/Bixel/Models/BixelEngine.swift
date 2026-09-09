@@ -412,6 +412,424 @@ final class TileLayer {
 }
 
 
+// MARK: - Tile map
+
+/// A raw-GID rectangle brush / clipboard payload for tile maps.
+struct MapTilePattern {
+    var width: Int = 0
+    var height: Int = 0
+    var tiles: [UInt32] = []
+    var isEmpty: Bool { width <= 0 || height <= 0 || tiles.isEmpty }
+
+    init(width: Int, height: Int, tiles: [UInt32]) {
+        self.width = width
+        self.height = height
+        self.tiles = tiles
+    }
+
+    init() {}
+
+    /// Flip the pattern horizontally in place.
+    mutating func flipH() {
+        guard width > 0 else { return }
+        for y in 0..<height {
+            for x in 0..<(width / 2) {
+                let a = y * width + x
+                let b = y * width + (width - 1 - x)
+                tiles.swapAt(a, b)
+            }
+        }
+    }
+
+    /// Flip the pattern vertically in place.
+    mutating func flipV() {
+        guard height > 0 else { return }
+        for x in 0..<width {
+            for y in 0..<(height / 2) {
+                let a = y * width + x
+                let b = (height - 1 - y) * width + x
+                tiles.swapAt(a, b)
+            }
+        }
+    }
+
+    /// Rotate clockwise in place.
+    mutating func rotateCW() {
+        guard width > 0, height > 0 else { return }
+        var out = [UInt32](repeating: 0, count: width * height)
+        let (w, h) = (width, height)
+        for y in 0..<h {
+            for x in 0..<w {
+                out[x * h + (h - 1 - y)] = tiles[y * w + x]
+            }
+        }
+        tiles = out
+        swap(&width, &height)
+    }
+
+    /// Rotate counter-clockwise in place.
+    mutating func rotateCCW() {
+        guard width > 0, height > 0 else { return }
+        var out = [UInt32](repeating: 0, count: width * height)
+        let (w, h) = (width, height)
+        for y in 0..<h {
+            for x in 0..<w {
+                out[(w - 1 - x) * h + y] = tiles[y * w + x]
+            }
+        }
+        tiles = out
+        swap(&width, &height)
+    }
+}
+
+/// Tileset metadata surfaced to the tileset panel.
+struct MapTilesetInfo: Codable {
+    var index: Int
+    var firstGid: UInt32
+    var name: String
+    var image: String
+    var imageWidth: Int
+    var imageHeight: Int
+    var tileWidth: Int
+    var tileHeight: Int
+    var margin: Int
+    var spacing: Int
+    var columns: Int
+    var tileCount: Int
+}
+
+/// One row for the map layers panel (tile or object layer).
+struct MapLayerRow: Codable, Identifiable {
+    var index: Int
+    var id: Int
+    var name: String
+    var visible: Bool
+    var opacity: Double
+    var type: String
+    var width: Int?
+    var height: Int?
+    var objectCount: Int?
+}
+
+/// One map object on an object layer (rect or point, in tile-pixels).
+struct MapObjectRow: Codable {
+    var id: Int
+    var name: String
+    var type: String
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var visible: Bool
+}
+
+/// Tiled GID flip flags mirrored from `crates/bixel-core/src/map.rs`.
+enum GIDFlag {
+    static let horizontal: UInt32 = 0x8000_0000
+    static let vertical: UInt32 = 0x4000_0000
+    static let diagonal: UInt32 = 0x2000_0000
+}
+
+/// A tile map document backed by a Rust `TileMap` (Tiled 1.10 JSON on disk).
+final class TileMap: @unchecked Sendable {
+    fileprivate let handle: UnsafeMutablePointer<BixelMap>?
+
+    init(width: Int, height: Int, tileWidth: Int, tileHeight: Int) {
+        handle = bixel_map_new(UInt32(max(1, width)), UInt32(max(1, height)),
+                               UInt32(max(1, tileWidth)), UInt32(max(1, tileHeight)))
+    }
+
+    init(json: String) throws {
+        guard let restored = bixel_map_from_json(json) else {
+            throw StorageError.message("The saved map is invalid or uses an unsupported Tiled version.")
+        }
+        handle = restored
+    }
+
+    func save(base: URL, path: String) throws {
+        if let error = bixel_map_save(handle, base.path, path) {
+            defer { bixel_string_free(error) }
+            throw StorageError.message(String(cString: error))
+        }
+    }
+
+    deinit {
+        if let handle { bixel_map_free(handle) }
+    }
+
+    func toJSON() -> String {
+        let ptr = bixel_map_to_json(handle)
+        defer { bixel_string_free(ptr) }
+        return ptr.map { String(cString: $0) } ?? ""
+    }
+
+    var cellWidth: Int { Int(bixel_map_cell_width(handle)) }
+    var cellHeight: Int { Int(bixel_map_cell_height(handle)) }
+    var columns: Int { Int(bixel_map_cell_count_x(handle)) }
+    var rows: Int { Int(bixel_map_cell_count_y(handle)) }
+    var pixelWidth: Int { Int(bixel_map_pixel_width(handle)) }
+    var pixelHeight: Int { Int(bixel_map_pixel_height(handle)) }
+
+    // MARK: Tilesets
+
+    @discardableResult
+    func addTileset(name: String, image: String, rgba: [UInt8],
+                    imageWidth: Int, imageHeight: Int,
+                    tileWidth: Int, tileHeight: Int,
+                    margin: Int = 0, spacing: Int = 0) throws -> Int {
+        let index = rgba.withUnsafeBufferPointer { raw in
+            bixel_map_add_tileset(handle, name, image,
+                                  raw.baseAddress,
+                                  UInt32(imageWidth), UInt32(imageHeight),
+                                  UInt32(tileWidth), UInt32(tileHeight),
+                                  UInt32(margin), UInt32(spacing))
+        }
+        guard index >= 0 else {
+            throw StorageError.message("Cannot add this tileset. Check the image size against the tile size, margin and spacing.")
+        }
+        return Int(index)
+    }
+
+    func setTilesetPixels(_ index: Int, rgba: [UInt8]) -> Bool {
+        rgba.withUnsafeBufferPointer { raw in
+            bixel_map_set_tileset_pixels(handle, UInt32(index), raw.baseAddress, UInt(raw.count))
+        }
+    }
+
+    func removeTileset(_ index: Int) {
+        bixel_map_remove_tileset(handle, UInt32(index))
+    }
+
+    /// Read a tileset's RGBA pixels back out of the engine (for the panel after
+    /// an undo/redo or a freshly parsed file whose image the host uploaded).
+    func tilesetPixels(index: Int) -> [UInt8] {
+        let info = tilesetsInfo()
+        guard index >= 0, index < info.count else { return [] }
+        let w = info[index].imageWidth, h = info[index].imageHeight
+        guard w > 0, h > 0 else { return [] }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buf.withUnsafeMutableBufferPointer {
+            bixel_map_tileset_pixels(handle, UInt32(index), $0.baseAddress, UInt($0.count))
+        }
+        return ok ? buf : []
+    }
+
+    var tilesetCount: Int { Int(bixel_map_tileset_count(handle)) }
+
+    func tilesetsInfo() -> [MapTilesetInfo] {
+        let ptr = bixel_map_tilesets_json(handle)
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8),
+              let list = try? JSONDecoder().decode([MapTilesetInfo].self, from: data) else { return [] }
+        return list
+    }
+
+    func setAutotile(tileset: Int, mask: Int, local: Int32?) {
+        bixel_map_set_autotile(handle, UInt32(tileset), UInt8(mask), local ?? -1)
+    }
+
+    /// The 16 autotile slots as local tile ids (nil = empty slot).
+    func autotileSlots(tileset: Int) -> [Int32?] {
+        var slots = [Int64](repeating: -1, count: 16)
+        let count = slots.withUnsafeMutableBufferPointer {
+            bixel_map_autotile_slots(handle, UInt32(tileset), $0.baseAddress, UInt($0.count))
+        }
+        _ = count
+        return slots.map { $0 >= 0 ? Int32($0) : nil }
+    }
+
+    @discardableResult
+    func autotile(layer: Int, tileset: Int, x: Int, y: Int, w: Int, h: Int) -> Int {
+        Int(bixel_map_autotile(handle, UInt32(layer), UInt32(tileset),
+                               UInt32(x), UInt32(y), UInt32(w), UInt32(h)))
+    }
+
+    // MARK: Layers
+
+    var layerCount: Int { Int(bixel_map_layer_count(handle)) }
+
+    @discardableResult
+    func addLayer(_ name: String? = nil) -> Int {
+        Int(bixel_map_add_layer(handle, name))
+    }
+
+    @discardableResult
+    func addObjectLayer(_ name: String? = nil) -> Int {
+        Int(bixel_map_add_object_layer(handle, name))
+    }
+
+    func removeLayer(_ index: Int) {
+        bixel_map_remove_layer(handle, UInt32(index))
+    }
+
+    func renameLayer(_ index: Int, name: String) {
+        bixel_map_rename_layer(handle, UInt32(index), name)
+    }
+
+    func reorderLayer(from: Int, to: Int) {
+        bixel_map_reorder_layer(handle, UInt32(from), UInt32(to))
+    }
+
+    func setLayerVisible(_ index: Int, _ visible: Bool) {
+        bixel_map_set_layer_visible(handle, UInt32(index), visible)
+    }
+
+    func setLayerOpacity(_ index: Int, _ opacity: Double) {
+        bixel_map_set_layer_opacity(handle, UInt32(index), Float(opacity))
+    }
+
+    func layersInfo() -> [MapLayerRow] {
+        let ptr = bixel_map_layers_json(handle)
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8),
+              let list = try? JSONDecoder().decode([MapLayerRow].self, from: data) else { return [] }
+        return list
+    }
+
+    // MARK: Tile editing
+
+    @discardableResult
+    func setTile(layer: Int, x: Int, y: Int, gid: UInt32) -> Bool {
+        bixel_map_set_tile(handle, UInt32(layer), Int32(x), Int32(y), gid)
+    }
+
+    func getTile(layer: Int, x: Int, y: Int) -> UInt32 {
+        bixel_map_get_tile(handle, UInt32(layer), Int32(x), Int32(y))
+    }
+
+    @discardableResult
+    func stamp(layer: Int, x: Int, y: Int, pattern: MapTilePattern, skipEmpty: Bool) -> Int {
+        pattern.tiles.withUnsafeBufferPointer { raw in
+            Int(bixel_map_stamp(handle, UInt32(layer), Int32(x), Int32(y),
+                                raw.baseAddress, UInt32(pattern.width), UInt32(pattern.height), skipEmpty))
+        }
+    }
+
+    @discardableResult
+    func fill(layer: Int, x: Int, y: Int, gid: UInt32) -> Int {
+        Int(bixel_map_fill(handle, UInt32(layer), Int32(x), Int32(y), gid))
+    }
+
+    @discardableResult
+    func paintRect(layer: Int, x0: Int, y0: Int, x1: Int, y1: Int, gid: UInt32) -> Int {
+        Int(bixel_map_paint_rect(handle, UInt32(layer), Int32(x0), Int32(y0), Int32(x1), Int32(y1), gid))
+    }
+
+    @discardableResult
+    func paintLine(layer: Int, x0: Int, y0: Int, x1: Int, y1: Int, gid: UInt32) -> Int {
+        Int(bixel_map_paint_line(handle, UInt32(layer), Int32(x0), Int32(y0), Int32(x1), Int32(y1), gid))
+    }
+
+    /// Copy a rectangular region into a raw-GID pattern.
+    func readRegion(layer: Int, x: Int, y: Int, w: Int, h: Int) -> MapTilePattern {
+        guard w > 0, h > 0 else { return MapTilePattern() }
+        var tiles = [UInt32](repeating: 0, count: w * h)
+        let written = tiles.withUnsafeMutableBufferPointer {
+            bixel_map_read_region(handle, UInt32(layer), UInt32(x), UInt32(y),
+                                  UInt32(w), UInt32(h), $0.baseAddress)
+        }
+        if Int(written) < tiles.count { tiles.removeSubrange(Int(written)...tiles.count - 1) }
+        return MapTilePattern(width: w, height: h, tiles: tiles)
+    }
+
+    @discardableResult
+    func replace(layer: Int, x: Int, y: Int, w: Int, h: Int, from: UInt32, to: UInt32) -> Int {
+        Int(bixel_map_replace(handle, UInt32(layer), UInt32(x), UInt32(y), UInt32(w), UInt32(h), from, to))
+    }
+
+    /// Same-tile region mask (magic wand). Returns a row-major `[Bool]`.
+    func wandMask(layer: Int, x: Int, y: Int) -> [Bool] {
+        var mask = [UInt8](repeating: 0, count: columns * rows)
+        let count = mask.withUnsafeMutableBufferPointer {
+            bixel_map_wand_mask(handle, UInt32(layer), Int32(x), Int32(y), $0.baseAddress, UInt($0.count))
+        }
+        _ = count
+        return mask.map { $0 != 0 }
+    }
+
+    // MARK: Object layers
+
+    @discardableResult
+    func addObject(layer: Int, name: String, kind: String, x: Double, y: Double, w: Double, h: Double) -> Int64 {
+        bixel_map_add_object(handle, UInt32(layer), name, kind, x, y, w, h)
+    }
+
+    func removeObject(layer: Int, objectID: Int) {
+        bixel_map_remove_object(handle, UInt32(layer), UInt32(objectID))
+    }
+
+    func setObject(layer: Int, objectID: Int, name: String, kind: String,
+                   x: Double, y: Double, w: Double, h: Double) {
+        bixel_map_set_object(handle, UInt32(layer), UInt32(objectID), name, kind, x, y, w, h)
+    }
+
+    func objects(layer: Int) -> [MapObjectRow] {
+        let ptr = bixel_map_objects_json(handle, UInt32(layer))
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8),
+              let list = try? JSONDecoder().decode([MapObjectRow].self, from: data) else { return [] }
+        return list
+    }
+
+    // MARK: Properties
+
+    /// `target`: 0 map, 1 layer, 2 object.
+    func setProperties(target: Int, layer: Int?, objectID: Int?, properties: [[String: Any]]) throws {
+        let data = try JSONSerialization.data(withJSONObject: properties)
+        let json = String(data: data, encoding: .utf8) ?? "[]"
+        let ok = bixel_map_set_properties(handle, UInt8(target),
+                                          Int32(layer ?? -1), Int64(objectID ?? -1), json)
+        guard ok else { throw StorageError.message("Could not update the properties.") }
+    }
+
+    func properties(target: Int, layer: Int?, objectID: Int?) -> [[String: Any]] {
+        let ptr = bixel_map_properties_json(handle, UInt8(target), Int32(layer ?? -1), Int64(objectID ?? -1))
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return list
+    }
+
+    // MARK: Resize / history / render
+
+    func resize(width: Int, height: Int) {
+        bixel_map_resize(handle, UInt32(max(1, width)), UInt32(max(1, height)))
+    }
+
+    func snapshot() { bixel_map_snapshot(handle) }
+    @discardableResult
+    func undo() -> Bool { bixel_map_undo(handle) }
+    @discardableResult
+    func redo() -> Bool { bixel_map_redo(handle) }
+    var canUndo: Bool { bixel_map_can_undo(handle) }
+    var canRedo: Bool { bixel_map_can_redo(handle) }
+
+    /// Composite visible tile layers into a caller-owned RGBA buffer.
+    func composite(into buffer: UnsafeMutableRawPointer, capacity: Int) -> Bool {
+        bixel_map_composite(handle, buffer.assumingMemoryBound(to: UInt8.self), UInt(capacity))
+    }
+
+    func compositeRGBA() -> [UInt8] {
+        var buf = [UInt8](repeating: 0, count: pixelWidth * pixelHeight * 4)
+        buf.withUnsafeMutableBytes { raw in
+            _ = composite(into: raw.baseAddress!, capacity: raw.count)
+        }
+        return buf
+    }
+
+    func layerCSV(layer: Int) -> String {
+        let ptr = bixel_map_layer_csv(handle, UInt32(layer))
+        defer { bixel_string_free(ptr) }
+        return ptr.map { String(cString: $0) } ?? ""
+    }
+
+    // MARK: GID helpers
+
+    static func encodeGID(_ localTile: UInt32, firstGID: UInt32, flags: UInt32 = 0) -> UInt32 {
+        (firstGID + localTile) | (flags & (GIDFlag.horizontal | GIDFlag.vertical | GIDFlag.diagonal))
+    }
+}
+
 // MARK: - Project filesystem gateway
 
 enum StorageError: LocalizedError {

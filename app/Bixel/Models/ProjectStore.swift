@@ -14,6 +14,10 @@ final class ProjectStore: ObservableObject {
     @Published private(set) var projects: [StudioProject] = []
     @Published private(set) var current: StudioProject?
     @Published private(set) var editor = EditorModel()
+    /// Non-nil exactly when the active document is a `.map` opened in the
+    /// Tilemap Designer. The sprite `editor` stays installed as a fallback for
+    /// the assistant but never writes files while a map is active.
+    @Published private(set) var mapEditor: TileMapModel?
     @Published private(set) var catalog = WorkspaceCatalog()
     @Published private(set) var assets: [ProjectAssetFile] = []
     @Published var error: String?
@@ -25,6 +29,7 @@ final class ProjectStore: ObservableObject {
     private var pendingSave: DispatchWorkItem?
     var activeDocument: WorkspaceDocument? { catalog.documents.first { $0.id == catalog.activeDocumentID } }
     var projectRoot: URL? { current.map { root.appendingPathComponent($0.id) } }
+    var isMapActive: Bool { activeDocument?.kind == .map }
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -47,13 +52,32 @@ final class ProjectStore: ObservableObject {
     }
 
     @discardableResult
-    func createProject(name: String, kind: AssetKind = .sprite, width: Int = 32, height: Int = 32, pixels: [UInt8]? = nil) -> StudioProject? {
+    func createProject(name: String, kind: AssetKind = .sprite, width: Int = 32, height: Int = 32,
+                       pixels: [UInt8]? = nil, cellWidth: Int = 16, cellHeight: Int = 16) -> StudioProject? {
         guard !assistant.busy else { return nil }
         do {
             let id = UUID().uuidString
             let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": name])!
             let project = try decode(StudioProject.self, value)
             let base = root.appendingPathComponent(project.id)
+
+            if kind == .map {
+                // A Map project opens straight into the Tilemap Designer: width
+                // and height are treated as cells at the given cell size.
+                let doc = WorkspaceDocument(name: name, kind: .map,
+                                            width: max(1, width), height: max(1, height),
+                                            cellWidth: cellWidth, cellHeight: cellHeight)
+                let mapModel = TileMapModel(width: doc.width, height: doc.height,
+                                            tileWidth: doc.cellWidth, tileHeight: doc.cellHeight)
+                try mapModel.map.save(base: base, path: doc.path)
+                var nextCatalog = WorkspaceCatalog()
+                nextCatalog.documents = [doc]
+                nextCatalog.activeDocumentID = doc.id
+                try writeCatalog(nextCatalog, base: base)
+                refresh()
+                try open(project)
+                return project
+            }
 
             let doc = WorkspaceDocument(name: name, kind: kind, width: width, height: height)
             let editorModel = EditorModel(width: doc.pixelWidth, height: doc.pixelHeight)
@@ -90,6 +114,8 @@ final class ProjectStore: ObservableObject {
             current = nil
             catalog = WorkspaceCatalog()
             assets = []
+            mapEditor?.onDocumentChanged = nil
+            mapEditor = nil
             _ = try? ProjectStorage.request(base: root, ["op": "write", "path": "active.txt", "text": ""])
         } catch {
             self.error = error.localizedDescription
@@ -220,6 +246,7 @@ final class ProjectStore: ObservableObject {
         let base = root.appendingPathComponent(project.id)
         var nextCatalog = WorkspaceCatalog()
         var document: Document?
+        var mapDocument: TileMapModel?
         if let json = try ProjectStorage.read(base: base, path: "workspace.json") {
             nextCatalog = try JSONDecoder().decode(WorkspaceCatalog.self, from: Data(json.utf8))
             guard nextCatalog.schema == 1, nextCatalog.documents.allSatisfy({ $0.validationError == nil }),
@@ -231,7 +258,15 @@ final class ProjectStore: ObservableObject {
                       let json = try ProjectStorage.read(base: base, path: item.path) else {
                     throw StorageError.message("The active document is missing.")
                 }
-                document = try Document(json: json)
+                if item.kind == .map {
+                    guard let model = try? TileMapModel(json: json) else {
+                        throw StorageError.message("The active map was created by an older version. Create a new map in this project.")
+                    }
+                    loadMapTilesetImages(model, base: base)
+                    mapDocument = model
+                } else {
+                    document = try Document(json: json)
+                }
             }
         } else if let json = try ProjectStorage.read(base: base, path: "document.json") {
             // Copy the legacy canvas into the catalog; retain the original file.
@@ -245,7 +280,12 @@ final class ProjectStore: ObservableObject {
         let transcript = try ProjectStorage.read(base: base, path: "assistant.json")
         let state = try transcript.map { try JSONDecoder().decode(AssistantSavedState.self, from: Data($0.utf8)) }
         current = project; catalog = nextCatalog; assets = []
-        installEditor(document.map { EditorModel(document: $0) } ?? EditorModel())
+        if let mapDocument {
+            installEditor(EditorModel())
+            installMapEditor(mapDocument)
+        } else {
+            installEditor(document.map { EditorModel(document: $0) } ?? EditorModel())
+        }
         assistant.configure(projectRoot: base, state: state)
         assistant.onPersist = { [weak self] in self?.saveAssistant() }
         assistant.workspaceContext = { [weak self] in self?.contextDescription ?? "" }
@@ -259,12 +299,24 @@ final class ProjectStore: ObservableObject {
         do {
             if let error = item.validationError { throw StorageError.message(error) }
             try flush()
-            let model = EditorModel(width: item.pixelWidth, height: item.pixelHeight)
-            try model.document.save(base: base, path: item.path)
-            var next = catalog
-            next.documents.append(item); next.activeDocumentID = item.id
-            try writeCatalog(next, base: base)
-            catalog = next; installEditor(model)
+            if item.kind == .map {
+                let model = TileMapModel(width: item.width, height: item.height,
+                                         tileWidth: item.cellWidth, tileHeight: item.cellHeight)
+                try model.map.save(base: base, path: item.path)
+                var next = catalog
+                next.documents.append(item); next.activeDocumentID = item.id
+                try writeCatalog(next, base: base)
+                catalog = next
+                installEditor(EditorModel(width: item.pixelWidth, height: item.pixelHeight))
+                installMapEditor(model)
+            } else {
+                let model = EditorModel(width: item.pixelWidth, height: item.pixelHeight)
+                try model.document.save(base: base, path: item.path)
+                var next = catalog
+                next.documents.append(item); next.activeDocumentID = item.id
+                try writeCatalog(next, base: base)
+                catalog = next; installEditor(model)
+            }
         } catch { self.error = error.localizedDescription }
     }
 
@@ -273,15 +325,103 @@ final class ProjectStore: ObservableObject {
         do {
             try flush()
             guard let json = try ProjectStorage.read(base: base, path: item.path) else { throw StorageError.message("Document is missing.") }
-            let model = EditorModel(document: try Document(json: json))
-            var next = catalog; next.activeDocumentID = item.id
-            try writeCatalog(next, base: base)
-            catalog = next; installEditor(model)
+            if item.kind == .map {
+                guard let model = try? TileMapModel(json: json) else {
+                    throw StorageError.message("This map was created by an older version. Open its project and create a new map.")
+                }
+                loadMapTilesetImages(model, base: base)
+                var next = catalog; next.activeDocumentID = item.id
+                try writeCatalog(next, base: base)
+                catalog = next
+                installEditor(EditorModel())
+                installMapEditor(model)
+            } else {
+                let model = EditorModel(document: try Document(json: json))
+                var next = catalog; next.activeDocumentID = item.id
+                try writeCatalog(next, base: base)
+                catalog = next; installEditor(model)
+            }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Keep the sprite editor alive for assistant flows but detach its saves
+    /// while a map owns the active document.
+    private func installMapEditor(_ model: TileMapModel) {
+        mapEditor?.onDocumentChanged = nil
+        mapEditor = model
+        model.onDocumentChanged = { [weak self] in self?.saveDocument() }
+        model.registerTilesets()
+        editor.assetKind = activeDocument?.kind ?? .image
+        editor.cellWidth = activeDocument?.cellWidth ?? 16
+        editor.cellHeight = activeDocument?.cellHeight ?? 16
+        editor.onDocumentChanged = nil
+        if mapEditor == nil {
+            editor.onDocumentChanged = { [weak self] in self?.saveDocument() }
+        }
+    }
+
+    /// Decode and upload every tileset PNG referenced by a freshly parsed map so
+    /// compositing works and the palette shows real thumbnails.
+    func loadMapTilesetImages(_ model: TileMapModel, base: URL) {
+        model.registerTilesets()
+        for info in model.map.tilesetsInfo() where !info.image.isEmpty {
+            do {
+                guard let bytes = try ProjectStorage.request(base: base, ["op": "read_bytes", "path": info.image]) else { continue }
+                let data = Data(try decode([UInt8].self, bytes))
+                guard let image = AIService.pngToRGBA(data),
+                      image.width == info.imageWidth, image.height == info.imageHeight,
+                      let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else { continue }
+                model.uploadTileset(info.index, cgImage: cg, rgba: image.rgba)
+            } catch {
+                continue
+            }
+        }
+    }
+
+    /// Persist a decoded image into `assets/` and return its workspace-relative
+    /// path (used by the tileset importer so the map JSON references the file).
+    func persistImageAsset(data: Data, name: String) -> String? {
+        guard let base = projectRoot else { return nil }
+        let stem = name.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "-", options: .regularExpression)
+        let path = "assets/\(UUID().uuidString.prefix(8))-\(stem).png"
+        do {
+            try ProjectStorage.write(base: base, path: path, data: data)
+            refreshAssets()
+            return path
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    /// Create a brand-new map document from an imported Tiled JSON file and open
+    /// it (round-trip: export → reimport must reopen identically).
+    func importTiledMap(from url: URL) {
+        guard let base = projectRoot, !assistant.busy else { return }
+        do {
+            let json = try String(contentsOf: url, encoding: .utf8)
+            let model = try TileMapModel(json: json)
+            try flush()
+            let name = url.deletingPathExtension().lastPathComponent
+            let item = WorkspaceDocument(name: name, kind: .map,
+                                         width: model.map.columns, height: model.map.rows,
+                                         cellWidth: model.map.cellWidth, cellHeight: model.map.cellHeight)
+            try model.map.save(base: base, path: item.path)
+            var next = catalog
+            next.documents.append(item); next.activeDocumentID = item.id
+            try writeCatalog(next, base: base)
+            catalog = next
+            installEditor(EditorModel(width: item.pixelWidth, height: item.pixelHeight))
+            installMapEditor(model)
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     private func installEditor(_ model: EditorModel) {
         editor.pause(); editor.onDocumentChanged = nil
+        mapEditor?.onDocumentChanged = nil
+        mapEditor = nil
         editor = model
         model.assetKind = activeDocument?.kind ?? .image
         model.cellWidth = activeDocument?.cellWidth ?? 16
@@ -299,7 +439,14 @@ final class ProjectStore: ObservableObject {
     private func synchronizeDimensions() {
         guard let index = catalog.documents.firstIndex(where: { $0.id == catalog.activeDocumentID }) else { return }
         var item = catalog.documents[index]
-        if item.kind.usesCells {
+        if item.kind == .map {
+            if let model = mapEditor {
+                item.width = model.map.columns
+                item.height = model.map.rows
+                item.cellWidth = model.map.cellWidth
+                item.cellHeight = model.map.cellHeight
+            }
+        } else if item.kind.usesCells {
             if editor.width % item.cellWidth == 0 && editor.height % item.cellHeight == 0 {
                 item.width = editor.width / item.cellWidth; item.height = editor.height / item.cellHeight
             } else {
@@ -313,14 +460,33 @@ final class ProjectStore: ObservableObject {
     func saveDocument() {
         guard let base = projectRoot, let item = activeDocument else { return }
         synchronizeDimensions()
-        let document = editor.document, snapshot = catalog
         saveGeneration += 1
         let generation = saveGeneration
         saving = true; pendingSave?.cancel()
+        let snapshot = catalog
+        let isMap = item.kind == .map
+        let mapDoc = mapEditor?.map
+        let spriteDoc = editor.document
         let work = DispatchWorkItem {
-            let result = Result {
-                try document.save(base: base, path: item.path)
-                try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
+            let result: Result<Void, Error>
+            if isMap {
+                guard let mapDoc else {
+                    result = .failure(StorageError.message("The map is not loaded."))
+                    DispatchQueue.main.async {
+                        if generation == self.saveGeneration { self.saving = false }
+                        if case .failure(let error) = result { self.error = error.localizedDescription }
+                    }
+                    return
+                }
+                result = Result {
+                    try mapDoc.save(base: base, path: item.path)
+                    try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
+                }
+            } else {
+                result = Result {
+                    try spriteDoc.save(base: base, path: item.path)
+                    try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
+                }
             }
             DispatchQueue.main.async {
                 if generation == self.saveGeneration { self.saving = false }
@@ -395,9 +561,18 @@ final class ProjectStore: ObservableObject {
     func flush() throws {
         guard let base = projectRoot else { return }
         pendingSave?.cancel(); synchronizeDimensions()
-        let state = assistant.savedState, snapshot = catalog, document = editor.document, item = activeDocument
+        let state = assistant.savedState, snapshot = catalog, item = activeDocument
+        let isMap = item?.kind == .map
+        let mapDoc = mapEditor?.map
+        let document = editor.document
         try saves.sync {
-            if let item { try document.save(base: base, path: item.path) }
+            if let item {
+                if isMap, let mapDoc {
+                    try mapDoc.save(base: base, path: item.path)
+                } else {
+                    try document.save(base: base, path: item.path)
+                }
+            }
             try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
             try ProjectStorage.write(base: base, path: "assistant.json", data: JSONEncoder().encode(state))
         }
