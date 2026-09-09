@@ -53,6 +53,7 @@ struct CanvasView: NSViewRepresentable {
 
             viewport.objectWillChange.sink { [weak view] in
                 view?.updateArtboardGeometry()
+                view?.updateCanvasContents()
             }.store(in: &observations)
         }
 
@@ -105,12 +106,22 @@ final class PixelCanvas: NSView {
     private let canvasImageLayer = CALayer()
     private let pixelGridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
+    private let selectionHandlesLayer = CAShapeLayer()
     private let borderLayer = CALayer()
+    /// Dark veil over the workspace; an even-odd hole lets the artboard shine.
+    private let workspaceDimLayer = CAShapeLayer()
 
     // Grid cache
     private var lastGridZoom: CGFloat = -1
     private var lastGridWidth = -1
     private var lastGridHeight = -1
+
+    // Content redraw cache: lets updateCanvasContents() run cheaply from many
+    // triggers (layout, viewport changes, editor publishes) while only paying
+    // for a full recomposite when the pixels/background really changed.
+    private var didDrawContent = false
+    private var lastDrawnRevision = -1
+    private var lastOnionSignature = 0
 
     // Re-entrancy guards
     private var isUpdatingGeometry = false
@@ -125,6 +136,9 @@ final class PixelCanvas: NSView {
     private var lineStart: CGPoint = .zero
     private var selectionGesture = false
     private var transformGesture = false
+    private var resizeGesture = false
+    private var transformStartPoint: CGPoint = .zero
+    private var didTransformDrag = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -204,10 +218,24 @@ final class PixelCanvas: NSView {
         selectionLayer.isHidden = true
         artboardLayer.addSublayer(selectionLayer)
 
+        // Transform corner handles (only while the transform tool is active).
+        selectionHandlesLayer.fillColor = NSColor.white.cgColor
+        selectionHandlesLayer.strokeColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.95).cgColor
+        selectionHandlesLayer.lineWidth = 1.25
+        selectionHandlesLayer.isHidden = true
+        artboardLayer.addSublayer(selectionHandlesLayer)
+
         // Hairline artboard border
         borderLayer.borderColor = NSColor(white: 1.0, alpha: 0.20).cgColor
         borderLayer.borderWidth = 1.0
         artboardLayer.addSublayer(borderLayer)
+
+        // Workspace dim: darkens everything except the artboard, so the work
+        // area "pops" (Photoshop/Procreate focus mode). Hole punches in the
+        // even-odd path follow the artboard each pan/zoom.
+        workspaceDimLayer.fillColor = NSColor.black.withAlphaComponent(0.42).cgColor
+        workspaceDimLayer.fillRule = .evenOdd
+        root.addSublayer(workspaceDimLayer)
     }
 
     override func layout() {
@@ -254,6 +282,14 @@ final class PixelCanvas: NSView {
         canvasImageLayer.frame = artboardBounds
         pixelGridLayer.frame = artboardBounds
         selectionLayer.frame = artboardBounds
+        selectionHandlesLayer.frame = artboardBounds
+
+        // Workspace dim veil: hole over the artboard, everything else fades.
+        workspaceDimLayer.frame = CGRect(origin: .zero, size: bounds.size)
+        let dimPath = CGMutablePath()
+        dimPath.addRect(CGRect(origin: .zero, size: bounds.size))
+        dimPath.addRect(artboardFrame)
+        workspaceDimLayer.path = dimPath
 
         // Pixel grid (only visible at zoom >= 6)
         if viewport.showGrid && viewport.zoom >= 6 {
@@ -270,19 +306,47 @@ final class PixelCanvas: NSView {
 
         // Selection / Transform rect overlay
         if let rect = model.transformRect ?? model.selectionRect {
-            selectionLayer.isHidden = false
             let scaledRect = CGRect(
                 x: rect.origin.x * viewport.zoom,
                 y: rect.origin.y * viewport.zoom,
                 width: rect.width * viewport.zoom,
                 height: rect.height * viewport.zoom
             )
+            selectionLayer.isHidden = false
             selectionLayer.path = CGPath(rect: scaledRect, transform: nil)
+            // Corner handles appear only with the transform tool.
+            if model.tool == .transform {
+                selectionHandlesLayer.isHidden = false
+                selectionHandlesLayer.path = transformHandlePath(for: scaledRect)
+            } else {
+                selectionHandlesLayer.isHidden = true
+                selectionHandlesLayer.path = nil
+            }
         } else {
             selectionLayer.isHidden = true
+            selectionLayer.path = nil
+            selectionHandlesLayer.isHidden = true
+            selectionHandlesLayer.path = nil
         }
 
         CATransaction.commit()
+    }
+
+    /// Four small squares centred on the corners of the scaled selection rect,
+    /// sized in view points so they stay readable at any zoom.
+    private func transformHandlePath(for rect: CGRect) -> CGPath {
+        let size: CGFloat = 9
+        let path = CGMutablePath()
+        let corners = [
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.maxX, y: rect.minY),
+            CGPoint(x: rect.minX, y: rect.maxY),
+            CGPoint(x: rect.maxX, y: rect.maxY)
+        ]
+        for corner in corners {
+            path.addRect(CGRect(x: corner.x - size / 2, y: corner.y - size / 2, width: size, height: size))
+        }
+        return path
     }
 
     func updateCanvasContents() {
@@ -294,42 +358,67 @@ final class PixelCanvas: NSView {
         let model = coordinator.model
         let viewport = coordinator.viewport
 
+        let revision = model.canvasRevision
+        let onionSignature = self.onionSignature()
+        let needBase = !didDrawContent || revision != lastDrawnRevision
+        let needOnion = needBase || onionSignature != lastOnionSignature
+        guard needBase || needOnion else { return }
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        // Background color / checkerboard
-        if model.showBackgroundColor {
-            checkerboardLayer.backgroundColor = model.canvasBackgroundColor.cgColor
-        } else {
-            checkerboardLayer.backgroundColor = Self.checkerboardPatternColor
-        }
+        if needBase {
+            // Background color / checkerboard
+            if model.showBackgroundColor {
+                checkerboardLayer.backgroundColor = model.canvasBackgroundColor.cgColor
+            } else {
+                checkerboardLayer.backgroundColor = Self.checkerboardPatternColor
+            }
 
-        // Canvas image content
-        let pixels = model.compositeCurrentFrame()
-        canvasImageLayer.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+            // Canvas image content
+            let pixels = model.compositeCurrentFrame()
+            canvasImageLayer.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+        }
 
         // Onion skinning content
-        if viewport.onionSkin && model.frame > 0 {
-            let p1 = model.compositeFrame(model.frame - 1)
-            onionLayer1.contents = makeCGImage(pixels: p1, width: model.width, height: model.height)
-            onionLayer1.opacity = Float(viewport.onionOpacity)
-            onionLayer1.isHidden = false
-        } else {
-            onionLayer1.isHidden = true
-            onionLayer1.contents = nil
+        if needOnion {
+            if viewport.onionSkin && model.frame > 0 {
+                let p1 = model.compositeFrame(model.frame - 1)
+                onionLayer1.contents = makeCGImage(pixels: p1, width: model.width, height: model.height)
+                onionLayer1.opacity = Float(viewport.onionOpacity)
+                onionLayer1.isHidden = false
+            } else {
+                onionLayer1.isHidden = true
+                onionLayer1.contents = nil
+            }
+
+            if viewport.onionSkin && viewport.onionFrames >= 2 && model.frame > 1 {
+                let p2 = model.compositeFrame(model.frame - 2)
+                onionLayer2.contents = makeCGImage(pixels: p2, width: model.width, height: model.height)
+                onionLayer2.opacity = Float(viewport.onionOpacity * 0.5)
+                onionLayer2.isHidden = false
+            } else {
+                onionLayer2.isHidden = true
+                onionLayer2.contents = nil
+            }
         }
 
-        if viewport.onionSkin && viewport.onionFrames >= 2 && model.frame > 1 {
-            let p2 = model.compositeFrame(model.frame - 2)
-            onionLayer2.contents = makeCGImage(pixels: p2, width: model.width, height: model.height)
-            onionLayer2.opacity = Float(viewport.onionOpacity * 0.5)
-            onionLayer2.isHidden = false
-        } else {
-            onionLayer2.isHidden = true
-            onionLayer2.contents = nil
-        }
+        lastDrawnRevision = revision
+        lastOnionSignature = onionSignature
+        didDrawContent = true
 
         CATransaction.commit()
+    }
+
+    private func onionSignature() -> Int {
+        var signature = coordinator?.model.frame ?? 0
+        signature = signature &* 131_071
+        signature = signature ^ (coordinator?.viewport.onionSkin == true ? 1 : 0)
+        signature = signature &* 31
+        signature = signature ^ ((coordinator?.viewport.onionFrames ?? 1) & 3)
+        signature = signature &* 31
+        signature = signature ^ Int(((coordinator?.viewport.onionOpacity ?? 0) * 1000).rounded())
+        return signature
     }
 
     private func makeGridPath(width: Int, height: Int, zoom: CGFloat) -> CGPath {
@@ -388,6 +477,14 @@ final class PixelCanvas: NSView {
 
     // MARK: - Painting / panning gestures
 
+    /// A press outside the artboard still begins a marquee, anchored at the
+    /// nearest canvas edge, so full-canvas selections can be drawn by dragging
+    /// from anywhere in the surrounding workspace.
+    private func marqueeStart(_ point: CGPoint, in coordinator: CanvasView.Coordinator) -> (x: Int, y: Int)? {
+        let viewport = coordinator.viewport
+        return viewport.viewToDoc(point, viewSize: bounds.size, width: coordinator.model.width, height: coordinator.model.height, clamp: true)
+    }
+
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         if spaceDown {
@@ -400,12 +497,31 @@ final class PixelCanvas: NSView {
         if let coordinator {
             if coordinator.model.tool == .selection {
                 selectionGesture = true
-                if let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.beginSelection(x: pixel.x, y: pixel.y) }
+                // A marquee may begin just outside the artboard so full-canvas
+                // selections are easy to start.
+                if let pixel = coordinator.pixelCoordinate(point, in: self) {
+                    coordinator.model.beginSelection(x: pixel.x, y: pixel.y)
+                } else if let clamped = marqueeStart(point, in: coordinator) {
+                    coordinator.model.beginSelection(x: clamped.x, y: clamped.y)
+                }
                 return
             }
-            if coordinator.model.tool == .transform, let pixel = coordinator.pixelCoordinate(point, in: self) {
-                transformGesture = true
-                coordinator.model.beginTransform(x: pixel.x, y: pixel.y)
+            if coordinator.model.tool == .transform, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                let viewport = coordinator.viewport
+                let tolerance = 8.0 / viewport.zoom
+                if let corner = coordinator.model.hitTransformCorner(x: pixel.x, y: pixel.y, tolerance: tolerance) {
+                    let uniform = coordinator.model.uniformTransform || event.modifierFlags.contains(.shift)
+                    coordinator.model.beginResize(corner: corner, x: pixel.x, y: pixel.y, uniform: uniform)
+                    resizeGesture = true
+                    transformGesture = false
+                    transformStartPoint = point
+                    didTransformDrag = false
+                } else if coordinator.model.grabTransform(x: pixel.x, y: pixel.y) {
+                    transformGesture = true
+                    resizeGesture = false
+                    transformStartPoint = point
+                    didTransformDrag = false
+                }
                 return
             }
         }
@@ -432,11 +548,33 @@ final class PixelCanvas: NSView {
             return
         }
         if selectionGesture {
-            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.updateSelection(x: pixel.x, y: pixel.y) }
+            // Clamp while dragging so a marquee extends to the canvas edge when
+            // the cursor leaves the artboard.
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                coordinator.model.updateSelection(x: pixel.x, y: pixel.y)
+            }
             return
         }
         if transformGesture {
-            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.updateTransform(x: pixel.x, y: pixel.y) }
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                coordinator.model.updateTransform(x: pixel.x, y: pixel.y)
+                if !didTransformDrag {
+                    let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
+                        width: coordinator.model.width, height: coordinator.model.height, clamp: true)
+                    didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+                }
+            }
+            return
+        }
+        if resizeGesture {
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                coordinator.model.updateResize(x: pixel.x, y: pixel.y)
+                if !didTransformDrag {
+                    let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
+                        width: coordinator.model.width, height: coordinator.model.height, clamp: true)
+                    didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+                }
+            }
             return
         }
         coordinator?.drag(at: point, in: self)
@@ -461,7 +599,19 @@ final class PixelCanvas: NSView {
         }
         if transformGesture {
             transformGesture = false
-            coordinator?.model.commitTransform()
+            // Only commit when the user actually dragged; a plain click keeps the
+            // current preview (rotation / repositioning) uncommitted.
+            if didTransformDrag {
+                coordinator?.model.commitTransform()
+            }
+            return
+        }
+        if resizeGesture {
+            resizeGesture = false
+            coordinator?.model.endResize()
+            if didTransformDrag {
+                coordinator?.model.commitTransform()
+            }
             return
         }
         coordinator?.end(at: convert(event.locationInWindow, from: nil), in: self)
@@ -542,12 +692,12 @@ final class PixelCanvas: NSView {
             if !spaceDown { spaceDown = true; NSCursor.openHand.set() }
         default:
             switch event.charactersIgnoringModifiers {
-            case "p": model.tool = .pencil
-            case "e": model.tool = .eraser
-            case "f": model.tool = .fill
-            case "i": model.tool = .eyedropper
-            case "s": model.tool = .selection
-            case "t": model.tool = .transform
+            case "p": model.selectTool(.pencil)
+            case "e": model.selectTool(.eraser)
+            case "f": model.selectTool(.fill)
+            case "i": model.selectTool(.eyedropper)
+            case "s": model.selectTool(.selection)
+            case "t": model.selectTool(.transform)
             case "[": model.brushSize = max(1, model.brushSize - 1)
             case "]": model.brushSize = min(32, model.brushSize + 1)
             case "g": viewport.showGrid.toggle()

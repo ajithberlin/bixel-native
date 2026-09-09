@@ -25,7 +25,7 @@ struct LeftBrushDock: View {
 
                 // Middle square button (Quick Eyedropper)
                 Button {
-                    model.tool = (model.tool == .eyedropper) ? .pencil : .eyedropper
+                    model.selectTool((model.tool == .eyedropper) ? .pencil : .eyedropper)
                 } label: {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .stroke(model.tool == .eyedropper ? StudioTheme.accent : Color.white.opacity(0.45), lineWidth: 1.5)

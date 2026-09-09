@@ -103,6 +103,7 @@ final class AssistantSession: ObservableObject {
             for block in messages[message].blocks.indices { messages[message].blocks[block].running = false }
         }
         input = ""; attachments = []; error = nil; query = nil
+        cancelPendingEvents()
         // Restore a bounded text context without resending image payloads or tool logs.
         restoredContext = String(messages.suffix(12).map { message in
             let text = message.isUser ? message.text : message.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n")
@@ -129,6 +130,7 @@ final class AssistantSession: ObservableObject {
         }
         conversationID = UUID(); restoredContext = ""
         messages = []; input = ""; attachments = []; error = nil; query = nil; tokenCount = 0
+        cancelPendingEvents()
         onPersist?()
     }
 
@@ -197,7 +199,7 @@ final class AssistantSession: ObservableObject {
         input = ""; query = nil; attachments = []; error = nil; busy = true; stopping = false; startedAt = Date()
         let token = AssistantCancellation(); cancellation = token
         let receive: @Sendable (AssistantEvent) -> Void = { event in
-            DispatchQueue.main.async { self.receive(event) }
+            DispatchQueue.main.async { self.enqueue(event) }
         }
         let system = """
         You are Bixel, a creative assistant inside a 2D pixel-game asset workspace. Projects contain independent sprites, animations, sheets, tilesets, maps, images, and references. A canvas size is NOT a project-wide asset size. Understand whether the user wants artwork generation, local preparation, frame slicing, sheet packing, animation, or map composition before choosing tools.
@@ -284,6 +286,42 @@ final class AssistantSession: ObservableObject {
         default: break
         }
         messages[messageIndex].blocks = blocks
+    }
+
+    // MARK: - Streamed-event coalescing
+
+    // The agent streams tokens; publishing a SwiftUI mutation for every delta
+    // makes the transcript re-parse all markdown dozens of times a second.
+    // Events are batched and flushed on a short timer so the panel repaints at
+    // a bounded rate while staying responsive.
+    private var pendingEvents: [AssistantEvent] = []
+    private var flushScheduled = false
+    private var flushTimer: Timer?
+
+    private func enqueue(_ event: AssistantEvent) {
+        pendingEvents.append(event)
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        let timer = Timer(timeInterval: 0.05, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.flushPending() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        flushTimer = timer
+    }
+
+    private func cancelPendingEvents() {
+        pendingEvents.removeAll()
+        flushTimer?.invalidate()
+        flushTimer = nil
+        flushScheduled = false
+    }
+
+    private func flushPending() {
+        flushScheduled = false
+        flushTimer = nil
+        let batch = pendingEvents
+        pendingEvents.removeAll(keepingCapacity: true)
+        for event in batch { receive(event) }
     }
     private func finish(stopped: Bool) {
         if let index = messages.indices.last {

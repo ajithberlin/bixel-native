@@ -129,7 +129,7 @@ struct TimelineBar: View {
                             index: index,
                             selected: index == model.frame,
                             durationMs: model.frameDuration(index),
-                            image: model.compositeFrame(index),
+                            image: model.frameThumbnailCGImage(index),
                             width: model.width,
                             height: model.height
                         )
@@ -237,13 +237,13 @@ private struct FrameCell: View {
     let index: Int
     let selected: Bool
     let durationMs: Int
-    let image: [UInt8]
+    let image: CGImage?
     let width: Int
     let height: Int
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            PixelImageView(image: image, width: width, height: height)
+            PixelImageView(cgImage: image, width: width, height: height)
                 .frame(width: 56, height: 56)
                 .background(CheckerboardView(cell: 5))
 

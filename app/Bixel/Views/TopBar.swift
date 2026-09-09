@@ -69,7 +69,7 @@ struct TopBar: View {
 
                 // Selection (Lasso)
                 Button {
-                    model.tool = (model.tool == .selection) ? .pencil : .selection
+                    model.selectTool((model.tool == .selection) ? .pencil : .selection)
                 } label: {
                     Image(systemName: "lasso")
                         .font(.system(size: 16, weight: .medium))
@@ -81,7 +81,7 @@ struct TopBar: View {
 
                 // Transform
                 Button {
-                    model.tool = (model.tool == .transform) ? .pencil : .transform
+                    model.selectTool((model.tool == .transform) ? .pencil : .transform)
                 } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 15, weight: .medium))
@@ -98,7 +98,7 @@ struct TopBar: View {
             HStack(spacing: 16) {
                 // Brush (Paint)
                 Button {
-                    model.tool = .pencil
+                    model.selectTool(.pencil)
                 } label: {
                     Image(systemName: "paintbrush.pointed")
                         .font(.system(size: 17, weight: .medium))
@@ -110,7 +110,7 @@ struct TopBar: View {
 
                 // Smudge
                 Button {
-                    model.tool = .smudge
+                    model.selectTool(.smudge)
                 } label: {
                     Image(systemName: "hand.draw")
                         .font(.system(size: 16, weight: .medium))
@@ -122,7 +122,7 @@ struct TopBar: View {
 
                 // Eraser
                 Button {
-                    model.tool = .eraser
+                    model.selectTool(.eraser)
                 } label: {
                     Image(systemName: "eraser")
                         .font(.system(size: 16, weight: .medium))

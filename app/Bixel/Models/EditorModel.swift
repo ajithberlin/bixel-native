@@ -29,6 +29,21 @@ enum Tool: String, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
 }
 
+/// The four draggable corners of a free-transform box.
+enum TransformCorner: CaseIterable {
+    case topLeft, topRight, bottomRight, bottomLeft
+
+    /// Corner position in document coordinates (y grows downward).
+    func point(in rect: CGRect) -> CGPoint {
+        switch self {
+        case .topLeft: return CGPoint(x: rect.minX, y: rect.minY)
+        case .topRight: return CGPoint(x: rect.maxX, y: rect.minY)
+        case .bottomRight: return CGPoint(x: rect.maxX, y: rect.maxY)
+        case .bottomLeft: return CGPoint(x: rect.minX, y: rect.maxY)
+        }
+    }
+}
+
 struct LayerInfo: Identifiable {
     let index: Int
     var name: String
@@ -72,14 +87,14 @@ final class EditorModel: ObservableObject {
 
     // Canvas background
     @Published var canvasBackgroundColor: BixelColor = BixelColor(r: 104, g: 178, b: 240, a: 255) {
-        didSet { canvasChanged.send() }
+        didSet { notifyCanvasChanged() }
     }
     @Published var showBackgroundColor: Bool = true {
-        didSet { canvasChanged.send() }
+        didSet { notifyCanvasChanged() }
     }
 
     // Document state
-    @Published var frame: Int = 0 { didSet { canvasChanged.send() } }
+    @Published var frame: Int = 0 { didSet { notifyCanvasChanged() } }
     @Published var playing: Bool = false
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
@@ -87,9 +102,14 @@ final class EditorModel: ObservableObject {
     @Published var transformRect: CGRect?
     @Published var transformRotation = 0
     @Published var snapping = true
+    /// Aspect-ratio lock for free-transform resizing (the "Uniform" toggle).
+    @Published var uniformTransform = false
     private var selectionStart: CGPoint?
     private var transformStart: CGPoint?
     private var transformOrigin: CGRect?
+    private var resizeCorner: TransformCorner?
+    private var resizeBase: CGRect?
+    private var resizeUniform = false
 
     // Playback settings
     @Published var fps: Double = 12 {
@@ -100,24 +120,64 @@ final class EditorModel: ObservableObject {
     }
 
     let canvasChanged = PassthroughSubject<Void, Never>()
+    /// Monotonic counter bumped every time pixel/appearance content changes;
+    /// the canvas layer uses it to skip redundant recompositing.
+    private(set) var canvasRevision = 0
     var onDocumentChanged: (() -> Void)?
     private var frameCache: [Int: [UInt8]] = [:]
     private var strokeChanged = false
 
-    private func pixelsChanged(allFrames: Bool = false) {
-        if allFrames { frameCache.removeAll() } else { frameCache[frame] = nil }
+    private func notifyCanvasChanged() {
+        canvasRevision += 1
         canvasChanged.send()
+    }
+
+    /// Coalescing repaint scheduler. A brush stroke fires many per-move updates;
+    /// without batching every move recomposites the whole frame and rebuilds a
+    /// CGImage on the main thread, which tanks frame rate on larger canvases.
+    /// Pixel changes are therefore coalesced to (at most) display-refresh rate.
+    private var refreshTimer: Timer?
+
+    private func scheduleCanvasRefresh() {
+        guard refreshTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.refreshTimer = nil
+            self.notifyCanvasChanged()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    private func flushCanvasRefreshNow() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+        notifyCanvasChanged()
+    }
+
+    private func pixelsChanged(allFrames: Bool = false) {
+        if allFrames {
+            frameCache.removeAll()
+        } else {
+            frameCache[frame] = nil
+        }
+        // Interactive paint feedback can be slightly deferred and coalesced.
+        scheduleCanvasRefresh()
     }
 
     private func commitChange(allFrames: Bool = false) {
         pixelsChanged(allFrames: allFrames)
         if allFrames {
             thumbCache.removeAll()
+            frameThumbCache.removeAll()
         } else {
             thumbCache[activeLayer * 1_000_000 + frame] = nil
+            frameThumbCache[frame] = nil
         }
         objectWillChange.send()
         onDocumentChanged?()
+        // Discrete operations must be visible immediately (not deferred by a timer).
+        flushCanvasRefreshNow()
     }
 
     private var playbackTimer: Timer?
@@ -180,6 +240,7 @@ final class EditorModel: ObservableObject {
         selectionRect = CGRect(x: x, y: y, width: 1, height: 1)
         transformRect = nil
         transformRotation = 0
+        endResize()
     }
 
     func updateSelection(x: Int, y: Int) {
@@ -193,12 +254,88 @@ final class EditorModel: ObservableObject {
         if let rect = selectionRect { transformRect = rect }
     }
 
-    func clearSelection() { selectionStart = nil; selectionRect = nil; transformRect = nil; transformRotation = 0 }
+    func clearSelection() {
+        selectionStart = nil; selectionRect = nil; transformRect = nil; transformRotation = 0
+        endResize()
+    }
+
+    // MARK: - Tool selection
+
+    /// Central tool switch. Choosing Transform with no active marquee turns the
+    /// active layer's artwork into an auto-selection, exactly like Procreate,
+    /// so the transform box + handles appear immediately without a click.
+    func selectTool(_ newTool: Tool) {
+        guard newTool != tool else { return }
+        tool = newTool
+        if newTool == .transform, selectionRect == nil {
+            if let content = activeLayerContentBounds() {
+                selectionRect = content
+                transformRect = content
+            }
+        }
+        if newTool == .selection || newTool == .pencil || newTool == .eraser {
+            endResize()
+        }
+    }
+
+    /// Non-empty bounding box of the active layer's painted pixels at the
+    /// current frame (nil when the layer is empty). Used so the Transform tool
+    /// can auto-select layer artwork when no marquee has been drawn.
+    func activeLayerContentBounds(_ layerIndex: Int? = nil) -> CGRect? {
+        let layer = layerIndex ?? activeLayer
+        guard layer >= 0, layer < document.layerCount else { return nil }
+        let pixels = document.celRGBA(layer: layer, frame: frame)
+        guard pixels.count == width * height * 4 else { return nil }
+        var minX = width, minY = height, maxX = -1, maxY = -1
+        var i = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                if pixels[i + 3] > 0 {
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                    if y < minY { minY = y }
+                    if y > maxY { maxY = y }
+                }
+                i += 4
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
+    func isPointInSelection(x: Int, y: Int) -> Bool {
+        guard let rect = transformRect ?? selectionRect else { return false }
+        let px = CGFloat(x), py = CGFloat(y)
+        return px >= rect.minX && px < rect.maxX && py >= rect.minY && py < rect.maxY
+    }
 
     func beginTransform(x: Int, y: Int) {
-        guard let rect = transformRect ?? selectionRect else { return }
+        var rect = transformRect ?? selectionRect
+        if rect == nil, let content = activeLayerContentBounds() {
+            selectionRect = content
+            rect = content
+        }
+        guard let rect else { return }
         transformOrigin = rect
         transformStart = CGPoint(x: x, y: y)
+    }
+
+    /// Start a transform drag if the point grabs an existing marquee, or auto-
+    /// selects the active layer's artwork when the point lands on it. Returns
+    /// false when the press should not begin a transform gesture.
+    @discardableResult
+    func grabTransform(x: Int, y: Int) -> Bool {
+        if transformRect != nil || selectionRect != nil {
+            guard isPointInSelection(x: x, y: y) else { return false }
+            beginTransform(x: x, y: y)
+            return true
+        }
+        guard let content = activeLayerContentBounds() else { return false }
+        let px = CGFloat(x), py = CGFloat(y)
+        guard px >= content.minX, px < content.maxX, py >= content.minY, py < content.maxY else { return false }
+        selectionRect = content
+        beginTransform(x: x, y: y)
+        return true
     }
 
     func updateTransform(x: Int, y: Int) {
@@ -209,12 +346,82 @@ final class EditorModel: ObservableObject {
         transformRect = CGRect(x: CGFloat(snappedX), y: CGFloat(snappedY), width: origin.width, height: origin.height)
     }
 
+    // MARK: - Free transform resizing
+
+    /// Which corner (if any) is under the pointer. `tolerance` is in document
+    /// pixels so the grab matches the on-screen handle size at any zoom.
+    func hitTransformCorner(x: Int, y: Int, tolerance: CGFloat) -> TransformCorner? {
+        guard let rect = transformRect ?? selectionRect else { return nil }
+        let p = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        for corner in TransformCorner.allCases {
+            let c = corner.point(in: rect)
+            if abs(p.x - c.x) <= tolerance && abs(p.y - c.y) <= tolerance { return corner }
+        }
+        return nil
+    }
+
+    func beginResize(corner: TransformCorner, x: Int, y: Int, uniform: Bool) {
+        guard let rect = transformRect ?? selectionRect else { return }
+        resizeCorner = corner
+        resizeBase = rect
+        resizeUniform = uniform
+        _ = x; _ = y
+    }
+
+    func updateResize(x: Int, y: Int) {
+        guard let base = resizeBase, let corner = resizeCorner else { return }
+        var cx = CGFloat(x), cy = CGFloat(y)
+        // Keep the dragged corner on its own side of the fixed (opposite) edge.
+        switch corner {
+        case .topLeft:
+            cx = min(cx, base.maxX - 1); cy = min(cy, base.maxY - 1)
+        case .topRight:
+            cx = max(cx, base.minX + 1); cy = min(cy, base.maxY - 1)
+        case .bottomRight:
+            cx = max(cx, base.minX + 1); cy = max(cy, base.minY + 1)
+        case .bottomLeft:
+            cx = min(cx, base.maxX - 1); cy = max(cy, base.minY + 1)
+        }
+        var left = base.minX, right = base.maxX, top = base.minY, bottom = base.maxY
+        switch corner {
+        case .topLeft:
+            left = cx; top = cy
+        case .topRight:
+            right = cx; top = cy
+        case .bottomRight:
+            right = cx; bottom = cy
+        case .bottomLeft:
+            left = cx; bottom = cy
+        }
+        guard resizeUniform else {
+            transformRect = CGRect(x: left, y: top, width: right - left, height: bottom - top)
+            return
+        }
+        // Uniform scaling from the fixed opposite corner, keeping base aspect.
+        let baseW = max(1, base.width)
+        let baseH = max(1, base.height)
+        let scale = max((right - left) / baseW, (bottom - top) / baseH)
+        let width = max(1, (baseW * scale).rounded())
+        let height = max(1, (baseH * scale).rounded())
+        let movesLeft = corner == .topLeft || corner == .bottomLeft
+        let movesTop = corner == .topLeft || corner == .topRight
+        let originX = movesLeft ? base.maxX - width : base.minX
+        let originY = movesTop ? base.maxY - height : base.minY
+        transformRect = CGRect(x: originX, y: originY, width: width, height: height)
+    }
+
+    func endResize() {
+        resizeCorner = nil
+        resizeBase = nil
+    }
+
     func commitTransform() {
         guard let source = selectionRect, let destination = transformRect else { return }
         do {
             try document.transformRect(layer: activeLayer, frame: frame, source: source, destination: destination, rotation: transformRotation)
             selectionRect = destination
             transformStart = nil; transformOrigin = nil
+            endResize()
             commitChange()
         } catch { operationError = error.localizedDescription }
     }
@@ -224,16 +431,18 @@ final class EditorModel: ObservableObject {
         transformRotation = (transformRotation + 1) % 4
         transformRect = CGRect(x: rect.midX - rect.height / 2, y: rect.midY - rect.width / 2,
                                width: rect.height, height: rect.width)
+        endResize()
     }
 
     func fitSelectionToCanvas() {
         guard let rect = selectionRect else { return }
         transformRect = CGRect(x: 0, y: 0, width: width, height: height)
         transformRotation = 0
+        endResize()
         if rect.width == CGFloat(width) && rect.height == CGFloat(height) { transformRect = rect }
     }
 
-    func resetTransform() { transformRect = selectionRect; transformRotation = 0 }
+    func resetTransform() { transformRect = selectionRect; transformRotation = 0; endResize() }
 
     func nudgeTransform(dx: Int, dy: Int) {
         guard let rect = transformRect else { return }
@@ -291,14 +500,27 @@ final class EditorModel: ObservableObject {
         commitChange(allFrames: true)
     }
 
-    /// Thumbnail CGImage for a layer at the current frame, cached per frame.
+    /// Thumbnail CGImage for a layer at the current frame. Downsampled so layer
+    /// panels never keep whole-canvas bitmaps alive (a 4096² layer would
+    /// otherwise cache a 64 MB CGImage per row).
     func layerThumbnailCGImage(_ layer: Int) -> CGImage? {
         let key = layer * 1_000_000 + frame
         if let cached = thumbCache[key] { return cached }
         let pixels = document.celRGBA(layer: layer, frame: frame)
-        guard let cg = makeCGImage(pixels: pixels, width: width, height: height) else { return nil }
-        if thumbCache.count > 128 { thumbCache.removeAll() }
+        guard let cg = downsample(pixels, width: width, height: height, maxDimension: 96) else { return nil }
+        if thumbCache.count > 32 { thumbCache.removeAll() }
         thumbCache[key] = cg
+        return cg
+    }
+
+    /// Downsampled preview of a composited frame, cached per frame. Used by the
+    /// timeline strip so playback never re-rasterises full-resolution frames.
+    func frameThumbnailCGImage(_ index: Int) -> CGImage? {
+        if let cached = frameThumbCache[index] { return cached }
+        let pixels = compositeFrame(index)
+        guard let cg = downsample(pixels, width: width, height: height, maxDimension: 96) else { return nil }
+        if frameThumbCache.count > 64 { frameThumbCache.removeAll(keepingCapacity: true) }
+        frameThumbCache[index] = cg
         return cg
     }
 
@@ -308,6 +530,33 @@ final class EditorModel: ObservableObject {
     }
 
     private var thumbCache: [Int: CGImage] = [:]
+    private var frameThumbCache: [Int: CGImage] = [:]
+
+    /// Nearest-neighbour scale of a full-resolution RGBA buffer into a small
+    /// thumbnail bitmap (the display path then magnifies it crisply).
+    private func downsample(_ pixels: [UInt8], width: Int, height: Int, maxDimension: Int) -> CGImage? {
+        guard width > 0, height > 0, pixels.count >= width * height * 4 else { return nil }
+        let scale = min(1.0, CGFloat(maxDimension) / CGFloat(max(width, height)))
+        guard scale < 1.0 else { return makeCGImage(pixels: pixels, width: width, height: height) }
+        let tw = max(1, Int((CGFloat(width) * scale).rounded()))
+        let th = max(1, Int((CGFloat(height) * scale).rounded()))
+        var out = [UInt8](repeating: 0, count: tw * th * 4)
+        for y in 0..<th {
+            let sy = min(height - 1, y * height / th)
+            let srcRow = sy * width
+            let dstRow = y * tw
+            for x in 0..<tw {
+                let sx = min(width - 1, x * width / tw)
+                let si = (srcRow + sx) * 4
+                let di = (dstRow + x) * 4
+                out[di] = pixels[si]
+                out[di + 1] = pixels[si + 1]
+                out[di + 2] = pixels[si + 2]
+                out[di + 3] = pixels[si + 3]
+            }
+        }
+        return makeCGImage(pixels: out, width: tw, height: th)
+    }
 
     // MARK: - Frame timing
 

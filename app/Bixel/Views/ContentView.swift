@@ -32,9 +32,6 @@ struct ContentView: View {
                     .allowsHitTesting(projects.activeDocument != nil)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                SelectionOverlay(model: model, viewport: viewport)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
                 // Left vertical brush dock, vertically centered.
                 HStack {
                     LeftBrushDock(model: model)
