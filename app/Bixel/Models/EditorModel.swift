@@ -171,7 +171,7 @@ final class EditorModel: ObservableObject {
             thumbCache.removeAll()
             frameThumbCache.removeAll()
         } else {
-            thumbCache[activeLayer * 1_000_000 + frame] = nil
+            thumbCache[activeLayer] = nil
             frameThumbCache[frame] = nil
         }
         objectWillChange.send()
@@ -519,12 +519,17 @@ final class EditorModel: ObservableObject {
     /// panels never keep whole-canvas bitmaps alive (a 4096² layer would
     /// otherwise cache a 64 MB CGImage per row).
     func layerThumbnailCGImage(_ layer: Int) -> CGImage? {
-        let key = layer * 1_000_000 + frame
-        if let cached = thumbCache[key] { return cached }
+        // Retain the current frame's small thumbnails across control changes.
+        // Clearing the entire cache at a fixed layer count makes every redraw
+        // copy all full-resolution cels when the document exceeds that count.
+        if thumbCacheFrame != frame {
+            thumbCache.removeAll(keepingCapacity: true)
+            thumbCacheFrame = frame
+        }
+        if let cached = thumbCache[layer] { return cached }
         let pixels = document.celRGBA(layer: layer, frame: frame)
         guard let cg = downsample(pixels, width: width, height: height, maxDimension: 96) else { return nil }
-        if thumbCache.count > 32 { thumbCache.removeAll() }
-        thumbCache[key] = cg
+        thumbCache[layer] = cg
         return cg
     }
 
@@ -544,6 +549,8 @@ final class EditorModel: ObservableObject {
         document.celRGBA(layer: layer, frame: frame)
     }
 
+    // At most one 96 × 96 thumbnail per layer, for one frame only.
+    private var thumbCacheFrame: Int?
     private var thumbCache: [Int: CGImage] = [:]
     private var frameThumbCache: [Int: CGImage] = [:]
 

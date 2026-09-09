@@ -61,49 +61,58 @@ struct TimelineBar: View {
     }
 
     private var frameStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 5) {
-                    ForEach(0..<model.frameCount, id: \.self) { index in
-                        FrameCell(
-                            selected: index == model.frame,
-                            targeted: dropTarget == index,
-                            image: model.frameThumbnailCGImage(index),
-                            width: model.width,
-                            height: model.height
-                        )
-                        .id(index)
-                        .onTapGesture { model.pause(); model.goTo(index) }
-                        .contextMenu { frameMenu(for: index) }
-                        .draggable(dragPrefix + String(index))
-                        .dropDestination(for: String.self) { items, _ in
-                            defer { dropTarget = nil }
-                            guard items.count == 1, let value = items.first,
-                                  value.hasPrefix(dragPrefix),
-                                  let source = Int(value.dropFirst(dragPrefix.count)),
-                                  source >= 0, source < model.frameCount,
-                                  source != index else { return false }
-                            model.reorderFrame(from: source, to: index)
-                            return true
-                        } isTargeted: { targeted in
-                            if targeted { dropTarget = index }
-                            else if dropTarget == index { dropTarget = nil }
+        GeometryReader { geo in
+            let cellWidth: CGFloat = 40
+            let spacing: CGFloat = 5
+            let count = CGFloat(model.frameCount)
+            let contentWidth = count * cellWidth + max(0, count - 1) * spacing
+            // Centre the strip when it fits; when it overflows the padding drops
+            // to zero and the row scrolls horizontally instead.
+            let pad = max(0, (geo.size.width - contentWidth) / 2)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: spacing) {
+                        ForEach(0..<model.frameCount, id: \.self) { index in
+                            FrameCell(
+                                selected: index == model.frame,
+                                targeted: dropTarget == index,
+                                image: model.frameThumbnailCGImage(index),
+                                width: model.width,
+                                height: model.height
+                            )
+                            .id(index)
+                            .onTapGesture { model.pause(); model.goTo(index) }
+                            .contextMenu { frameMenu(for: index) }
+                            .draggable(dragPrefix + String(index))
+                            .dropDestination(for: String.self) { items, _ in
+                                defer { dropTarget = nil }
+                                guard items.count == 1, let value = items.first,
+                                      value.hasPrefix(dragPrefix),
+                                      let source = Int(value.dropFirst(dragPrefix.count)),
+                                      source >= 0, source < model.frameCount,
+                                      source != index else { return false }
+                                model.reorderFrame(from: source, to: index)
+                                return true
+                            } isTargeted: { targeted in
+                                if targeted { dropTarget = index }
+                                else if dropTarget == index { dropTarget = nil }
+                            }
+                            .accessibilityLabel("Frame \(index + 1), \(model.frameDuration(index)) milliseconds")
+                            .accessibilityAddTraits(index == model.frame ? [.isSelected] : [])
+                            .accessibilityAction(named: "Move earlier") {
+                                model.reorderFrame(from: index, to: index - 1)
+                            }
+                            .accessibilityAction(named: "Move later") {
+                                model.reorderFrame(from: index, to: index + 1)
+                            }
+                            .help("Frame \(index + 1) · \(model.frameDuration(index)) ms — drag to arrange; right-click for options")
                         }
-                        .accessibilityLabel("Frame \(index + 1), \(model.frameDuration(index)) milliseconds")
-                        .accessibilityAddTraits(index == model.frame ? [.isSelected] : [])
-                        .accessibilityAction(named: "Move earlier") {
-                            model.reorderFrame(from: index, to: index - 1)
-                        }
-                        .accessibilityAction(named: "Move later") {
-                            model.reorderFrame(from: index, to: index + 1)
-                        }
-                        .help("Frame \(index + 1) · \(model.frameDuration(index)) ms — drag to arrange; right-click for options")
                     }
+                    .padding(.horizontal, pad)
                 }
-                .padding(.horizontal, 2)
-            }
-            .onChange(of: model.frame) { index in
-                withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(index, anchor: .center) }
+                .onChange(of: model.frame) { index in
+                    withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(index, anchor: .center) }
+                }
             }
         }
     }

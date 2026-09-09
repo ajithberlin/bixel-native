@@ -65,27 +65,22 @@ struct TopBar: View {
                     )
                 }
 
-                // AI Copilot / Chat (Wand)
+                // AI Copilot (Wand)
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         showAI.toggle()
                     }
                 } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text("AI Chat")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    }
-                    .foregroundColor(showAI ? .black : StudioTheme.bixelGreen)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule().fill(showAI ? StudioTheme.bixelGreen : StudioTheme.bixelGreenSoft)
-                    )
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(showAI ? StudioTheme.bixelGreen : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                        .background(
+                            showAI ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.bixelGreenSoft) : nil
+                        )
                 }
                 .buttonStyle(.plain)
-                .help("Toggle AI Design & Creation Chat")
+                .help("AI Copilot & Adjustments")
 
                 // Selection (Lasso)
                 Button {

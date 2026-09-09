@@ -2,9 +2,8 @@
 //
 // Native macOS Home Page & Dashboard for Bixel Studio:
 // - Top Bar: Bixel logo, search bar with ⌘K, cloud sync status, notifications, settings, avatar
-// - Left Sidebar: Home, Projects, Templates, Assets, Trash
 // - Hero Banner: Pixel art forest scene with glowing moon, headline, and quick action bar
-// - AI Creator Bar: "Ask Bixel AI to create, design..." with quick prompt chips
+// - AI Studio Creator: High-end conversational AI prompt composer with modes, sizes, and instant creation
 // - Recent Projects Grid: Pixel art thumbnail previews, tag badges, dimensions, and click-to-open
 // - Right Column: Sync & Storage card, Recent Activity card
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
@@ -12,22 +11,38 @@
 import SwiftUI
 import AppKit
 
-enum HomeNavTab: String, CaseIterable, Identifiable {
-    case home = "Home"
-    case projects = "Projects"
-    case templates = "Templates"
-    case assets = "Assets"
-    case trash = "Trash"
+enum AIMode: String, CaseIterable, Identifiable {
+    case sprite = "Sprite (32²)"
+    case animation = "Animation (64²)"
+    case tileset = "Tileset (128²)"
+    case icons = "RPG Icons (32²)"
 
     var id: String { rawValue }
 
     var icon: String {
         switch self {
-        case .home: return "house.fill"
-        case .projects: return "folder.fill"
-        case .templates: return "cube.fill"
-        case .assets: return "shippingbox.fill"
-        case .trash: return "trash"
+        case .sprite: return "person.crop.square"
+        case .animation: return "film"
+        case .tileset: return "squareshape.split.2x2"
+        case .icons: return "shield.fill"
+        }
+    }
+
+    var defaultKind: AssetKind {
+        switch self {
+        case .sprite: return .sprite
+        case .animation: return .animation
+        case .tileset: return .tileset
+        case .icons: return .sprite
+        }
+    }
+
+    var defaultSize: Int {
+        switch self {
+        case .sprite: return 32
+        case .animation: return 64
+        case .tileset: return 128
+        case .icons: return 32
         }
     }
 }
@@ -37,87 +52,72 @@ struct HomePageView: View {
     let onOpenProject: (StudioProject) -> Void
     let onOpenWithAIPrompt: (String) -> Void
 
-    @State private var selectedTab: HomeNavTab = .home
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
     @State private var showSettingsSheet = false
-    @State private var showAIChatSheet = false
     @State private var aiPrompt = ""
+    @State private var selectedAIMode: AIMode = .sprite
+    @State private var selectedSize: Int = 32
+    @State private var selectedStyle: String = "16-Bit Retro"
     @State private var renamingProject: StudioProject? = nil
     @State private var renameText = ""
     @FocusState private var searchFieldFocused: Bool
+    @FocusState private var promptFieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: 0) {
-            // 1. LEFT SIDEBAR
-            sidebar
-                .frame(width: 140)
+        VStack(spacing: 0) {
+            // TOP HEADER BAR (Full width)
+            topHeaderBar
+                .frame(height: 58)
                 .background(StudioTheme.homeDark)
 
             Divider()
                 .overlay(StudioTheme.homeCardBorder)
 
-            // 2. MAIN CONTENT AREA
-            VStack(spacing: 0) {
-                // TOP HEADER BAR
-                topHeaderBar
-                    .frame(height: 56)
-                    .background(StudioTheme.homeDark)
+            // SCROLLABLE DASHBOARD
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 28) {
+                    // 1. Hero Banner
+                    heroBanner
 
-                Divider()
-                    .overlay(StudioTheme.homeCardBorder)
+                    // 2. High-End AI Studio Creator (Redesigned, no extra AI Chat button)
+                    aiCreatorHub
 
-                // SCROLLABLE DASHBOARD
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 24) {
-                        // Hero Banner
-                        heroBanner
+                    // 3. Middle Section: Recent Projects & Right Column (Storage + Activity)
+                    HStack(alignment: .top, spacing: 24) {
+                        // Recent Projects Grid
+                        recentProjectsSection
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // AI Creator & Design Prompt Bar
-                        aiCreatorBar
-
-                        // Middle Section: Recent Projects & Right Column (Storage + Activity)
-                        HStack(alignment: .top, spacing: 20) {
-                            // Recent Projects Grid
-                            recentProjectsSection
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            // Right Column (Sync & Storage + Activity)
-                            VStack(spacing: 16) {
-                                syncStorageCard
-                                recentActivityCard
-                            }
-                            .frame(width: 280)
+                        // Right Column (Sync & Storage + Activity)
+                        VStack(spacing: 16) {
+                            syncStorageCard
+                            recentActivityCard
                         }
-
-                        // Bottom Section: Templates & Inspirations + Quote
-                        HStack(alignment: .top, spacing: 20) {
-                            templatesSection
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            quoteCard
-                                .frame(width: 280)
-                        }
+                        .frame(width: 300)
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.top, 20)
-                    .padding(.bottom, 40)
+
+                    // 4. Bottom Section: Templates & Inspirations + Quote
+                    HStack(alignment: .top, spacing: 24) {
+                        templatesSection
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        quoteCard
+                            .frame(width: 300)
+                    }
                 }
+                .padding(.horizontal, 36)
+                .padding(.top, 24)
+                .padding(.bottom, 48)
             }
-            .background(StudioTheme.homeDark)
         }
-        .frame(minWidth: 1040, minHeight: 700)
+        .frame(minWidth: 1060, minHeight: 720)
+        .background(StudioTheme.homeDark)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showNewProjectSheet) {
             NewProjectQuickDialog(store: store) { project in
                 showNewProjectSheet = false
                 onOpenProject(project)
-            }
-        }
-        .sheet(isPresented: $showAIChatSheet) {
-            HomeAIChatDialog(session: store.assistant) { prompt in
-                showAIChatSheet = false
-                onOpenWithAIPrompt(prompt)
             }
         }
         .sheet(item: $renamingProject) { project in
@@ -131,22 +131,22 @@ struct HomePageView: View {
     // MARK: - Top Header Bar
 
     private var topHeaderBar: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 20) {
             // Brand Logo & Title
             HStack(spacing: 10) {
-                BixelSlimeLogo(size: 26)
+                BixelSlimeLogo(size: 28)
 
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Bixel Studio")
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                     Text("PIXEL ART FOR BIG IDEAS")
                         .font(.system(size: 8, weight: .semibold, design: .monospaced))
                         .foregroundColor(StudioTheme.textSecondary)
-                        .tracking(1.2)
+                        .tracking(1.4)
                 }
             }
-            .padding(.leading, 12)
+            .padding(.leading, 24)
 
             Spacer()
 
@@ -182,9 +182,9 @@ struct HomePageView: View {
                             .fill(Color.white.opacity(0.06))
                     )
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .frame(width: 360)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(width: 420)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(StudioTheme.homeCard)
@@ -197,11 +197,11 @@ struct HomePageView: View {
             Spacer()
 
             // Status & User Actions
-            HStack(spacing: 12) {
+            HStack(spacing: 14) {
                 // Cloud Sync Status
                 HStack(spacing: 6) {
                     Image(systemName: "cloud.fill")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundColor(StudioTheme.textSecondary)
                     Circle()
                         .fill(StudioTheme.bixelGreen)
@@ -245,73 +245,9 @@ struct HomePageView: View {
                 }
 
                 // Pixel Avatar
-                PixelAvatarView(size: 28)
+                PixelAvatarView(size: 30)
             }
-            .padding(.trailing, 16)
-        }
-    }
-
-    // MARK: - Left Sidebar
-
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            // Navigation Links
-            VStack(spacing: 4) {
-                ForEach(HomeNavTab.allCases) { tab in
-                    Button {
-                        selectedTab = tab
-                    } label: {
-                        HStack(spacing: 12) {
-                            // Active pill on left edge
-                            if selectedTab == tab {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(StudioTheme.bixelGreen)
-                                    .frame(width: 3, height: 18)
-                            } else {
-                                Color.clear
-                                    .frame(width: 3, height: 18)
-                            }
-
-                            Image(systemName: tab.icon)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(selectedTab == tab ? StudioTheme.bixelGreen : StudioTheme.textSecondary)
-                                .frame(width: 18)
-
-                            Text(tab.rawValue)
-                                .font(.system(size: 13, weight: selectedTab == tab ? .semibold : .regular))
-                                .foregroundColor(selectedTab == tab ? .white : StudioTheme.textSecondary)
-
-                            Spacer()
-                        }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 8)
-                        .background(
-                            selectedTab == tab ?
-                                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)) :
-                                nil
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.top, 16)
-
-            Spacer()
-
-            // Sidebar Footer Text: "SMALL PIXELS BIG WORLDS ."
-            VStack(alignment: .leading, spacing: 3) {
-                Text("SMALL")
-                Text("PIXELS")
-                Text("BIG")
-                Text("WORLDS")
-                Text(".")
-                    .foregroundColor(StudioTheme.bixelGreen)
-            }
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
-            .foregroundColor(StudioTheme.textDisabled)
-            .lineSpacing(2)
-            .padding(.leading, 18)
-            .padding(.bottom, 24)
+            .padding(.trailing, 24)
         }
     }
 
@@ -321,7 +257,7 @@ struct HomePageView: View {
         ZStack(alignment: .bottomLeading) {
             // Background Artwork (Pixel Forest Landscape at Night)
             HeroPixelLandscape()
-                .frame(height: 230)
+                .frame(height: 220)
                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -333,7 +269,7 @@ struct HomePageView: View {
                 // Headlines
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Create something\npixel perfect.")
-                        .font(.system(size: 32, weight: .heavy, design: .rounded))
+                        .font(.system(size: 30, weight: .heavy, design: .rounded))
                         .foregroundColor(.white)
                         .lineSpacing(2)
 
@@ -441,150 +377,253 @@ struct HomePageView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - AI Creator & Design Prompt Bar ("add tai chat to create, design")
+    // MARK: - Redesigned High-End AI Studio Creator (No extra AI Chat button)
 
-    private var aiCreatorBar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                // AI Sparkle badge
+    private var aiCreatorHub: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            // 1. Header Bar: AI badge, Mode selector pills, and Model indicator
+            HStack(spacing: 14) {
+                // Glow Badge
                 HStack(spacing: 6) {
                     Image(systemName: "wand.and.stars")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 13, weight: .bold))
                         .foregroundColor(StudioTheme.bixelGreen)
-                    Text("Bixel AI")
+                    Text("Bixel AI Studio")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundColor(.white)
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.vertical, 5)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(StudioTheme.bixelGreenSoft)
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(StudioTheme.bixelGreen.opacity(0.35), lineWidth: 1)
+                                .strokeBorder(StudioTheme.bixelGreen.opacity(0.4), lineWidth: 1)
                         )
                 )
 
-                // Prompt Input Box
-                HStack(spacing: 8) {
-                    TextField("Ask AI to create or design... (e.g., 'A 32x32 cyber ninja sprite', 'Dungeon crypt tileset')", text: $aiPrompt)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .foregroundColor(.white)
-                        .onSubmit {
-                            submitAIPrompt()
-                        }
-
-                    if !aiPrompt.isEmpty {
-                        Button { aiPrompt = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(StudioTheme.textSecondary)
+                // Asset Mode Pills
+                HStack(spacing: 6) {
+                    ForEach(AIMode.allCases) { mode in
+                        Button {
+                            selectedAIMode = mode
+                            selectedSize = mode.defaultSize
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: mode.icon)
+                                    .font(.system(size: 10))
+                                Text(mode.rawValue)
+                                    .font(.system(size: 11, weight: selectedAIMode == mode ? .semibold : .regular))
+                            }
+                            .foregroundColor(selectedAIMode == mode ? .white : StudioTheme.textSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(selectedAIMode == mode ? Color.white.opacity(0.12) : Color.clear)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
+                }
 
-                    // Send / Generate Button
+                Spacer()
+
+                // Active Engine Indicator
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(StudioTheme.bixelGreen)
+                        .frame(width: 6, height: 6)
+                    Text("PixelArt Agent Ready")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+            }
+
+            // 2. Main Prompt Composer Area
+            VStack(spacing: 10) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 14))
+                        .foregroundColor(StudioTheme.bixelGreen)
+                        .padding(.top, 2)
+
+                    TextField("Describe what you want to create or design... (e.g., 'A 32x32 cyber slime monster with electric aura and idle bounce', 'Dungeon crypt tileset with stone walls and torches')", text: $aiPrompt, axis: .vertical)
+                        .lineLimit(2...4)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .foregroundColor(.white)
+                        .focused($promptFieldFocused)
+                        .onSubmit {
+                            submitAIPrompt()
+                        }
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 6)
+
+                Divider()
+                    .overlay(Color.white.opacity(0.06))
+
+                // 3. Parameter Controls & Prominent "Design & Create" Action
+                HStack(spacing: 10) {
+                    // Size Selector Menu
+                    Menu {
+                        Button("16 × 16 px") { selectedSize = 16 }
+                        Button("32 × 32 px") { selectedSize = 32 }
+                        Button("64 × 64 px") { selectedSize = 64 }
+                        Button("128 × 128 px") { selectedSize = 128 }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "aspectratio")
+                                .font(.system(size: 10))
+                            Text("\(selectedSize) × \(selectedSize)")
+                                .font(.system(size: 11, design: .monospaced))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8))
+                        }
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+
+                    // Art Style Menu
+                    Menu {
+                        Button("16-Bit Retro") { selectedStyle = "16-Bit Retro" }
+                        Button("Classic 8-Bit") { selectedStyle = "Classic 8-Bit" }
+                        Button("Cyberpunk Neon") { selectedStyle = "Cyberpunk Neon" }
+                        Button("Fantasy RPG") { selectedStyle = "Fantasy RPG" }
+                        Button("Game Boy (4 Colors)") { selectedStyle = "Game Boy (4 Colors)" }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "paintpalette.fill")
+                                .font(.system(size: 10))
+                            Text(selectedStyle)
+                                .font(.system(size: 11))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8))
+                        }
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+
+                    Spacer()
+
+                    // Clear button
+                    if !aiPrompt.isEmpty {
+                        Button { aiPrompt = "" } label: {
+                            Text("Clear")
+                                .font(.system(size: 11))
+                                .foregroundColor(StudioTheme.textDisabled)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 4)
+                    }
+
+                    // Prominent "Design & Create" Action Button
                     Button {
                         submitAIPrompt()
                     } label: {
-                        HStack(spacing: 5) {
-                            Text("Design")
-                                .font(.system(size: 11, weight: .bold))
+                        HStack(spacing: 7) {
+                            Text("Design & Create")
+                                .font(.system(size: 12, weight: .bold, design: .rounded))
                             Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 14))
+                                .font(.system(size: 14, weight: .bold))
                         }
                         .foregroundColor(.black)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
                         .background(
-                            Capsule().fill(StudioTheme.bixelGreen)
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .fill(StudioTheme.bixelGreen)
                         )
+                        .shadow(color: StudioTheme.bixelGreen.opacity(0.4), radius: 8, y: 2)
                     }
                     .buttonStyle(.plain)
                     .disabled(aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(StudioTheme.homeCard)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1)
-                        )
-                )
-
-                // Open AI Chat Button
-                Button {
-                    showAIChatSheet = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "bubble.left.and.bubble.right.fill")
-                            .font(.system(size: 12))
-                        Text("AI Chat")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(StudioTheme.homeCard)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1)
-                            )
-                    )
-                }
-                .buttonStyle(.plain)
-                .help("Chat with Bixel AI Agent to brainstorm and plan game assets")
+                .padding(.bottom, 10)
             }
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(StudioTheme.homeCard)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1)
+                    )
+            )
 
-            // Quick Prompt Suggestion Chips
+            // 4. Quick Inspiration Chips
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    promptChip("✨ Slime Sprite (32×32)") {
+                    promptChip("✨ Slime Sprite", mode: .sprite, size: 32) {
                         aiPrompt = "Create a cute 32x32 animated slime sprite with bounce frames"
                         submitAIPrompt()
                     }
-                    promptChip("🏰 Dungeon Tileset (128×128)") {
-                        aiPrompt = "Design a 128x128 dungeon crypt tileset with stone walls and torches"
+                    promptChip("🏰 Dungeon Crypt", mode: .tileset, size: 128) {
+                        aiPrompt = "Design a 128x128 dungeon crypt tileset with stone walls, floor tiles, and torches"
                         submitAIPrompt()
                     }
-                    promptChip("⚔️ RPG Weapon Icons") {
-                        aiPrompt = "Generate 32x32 fantasy RPG items: sword, magic shield, ruby potion"
+                    promptChip("⚔️ RPG Weapon Icons", mode: .icons, size: 32) {
+                        aiPrompt = "Generate 32x32 fantasy RPG items: sword, magic shield, ruby potion bottle"
                         submitAIPrompt()
                     }
-                    promptChip("🏃 64×64 Character Walk") {
-                        aiPrompt = "Design a 64x64 pixel art character walk cycle animation"
+                    promptChip("🏃 64×64 Character Walk", mode: .animation, size: 64) {
+                        aiPrompt = "Design a 64x64 pixel art adventurer walk cycle animation"
                         submitAIPrompt()
                     }
-                    promptChip("🌆 Tokyo Cyberpunk Alley") {
-                        aiPrompt = "Create a futuristic Tokyo cyberpunk street tileset with neon lights"
+                    promptChip("🌆 Tokyo Cyberpunk Alley", mode: .tileset, size: 128) {
+                        aiPrompt = "Create a futuristic Tokyo cyberpunk street tileset with glowing neon signs"
+                        submitAIPrompt()
+                    }
+                    promptChip("🧙 Fantasy Mage Portrait", mode: .sprite, size: 64) {
+                        aiPrompt = "Design a 64x64 detailed pixel art fantasy mage girl portrait"
                         submitAIPrompt()
                     }
                 }
             }
         }
-        .padding(14)
+        .padding(18)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(StudioTheme.homeCard.opacity(0.65))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(StudioTheme.bixelGreen.opacity(0.2), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.09, green: 0.10, blue: 0.12),
+                            Color(red: 0.11, green: 0.12, blue: 0.14)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
                 )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(StudioTheme.bixelGreen.opacity(0.22), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.3), radius: 14, y: 4)
         )
     }
 
-    private func promptChip(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    private func promptChip(_ label: String, mode: AIMode, size: Int, action: @escaping () -> Void) -> some View {
+        Button {
+            selectedAIMode = mode
+            selectedSize = size
+            action()
+        } label: {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(StudioTheme.textSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 5)
                 .background(
                     Capsule().fill(Color.white.opacity(0.06))
                         .overlay(Capsule().strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1))
@@ -607,14 +646,12 @@ struct HomePageView: View {
             // Header: Title & "See All ->"
             HStack {
                 Text("Recent Projects")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
 
                 Spacer()
 
-                Button {
-                    selectedTab = .projects
-                } label: {
+                Button {} label: {
                     HStack(spacing: 4) {
                         Text("See All")
                             .font(.system(size: 12, weight: .medium))
@@ -640,7 +677,7 @@ struct HomePageView: View {
                 .frame(maxWidth: .infinity, minHeight: 160)
                 .background(StudioTheme.homeCard, in: RoundedRectangle(cornerRadius: 12))
             } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], spacing: 14) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 16) {
                     ForEach(list) { project in
                         RecentProjectCard(
                             project: project,
@@ -780,14 +817,12 @@ struct HomePageView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Templates & Inspirations")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
 
                 Spacer()
 
-                Button {
-                    selectedTab = .templates
-                } label: {
+                Button {} label: {
                     HStack(spacing: 4) {
                         Text("See All")
                             .font(.system(size: 12, weight: .medium))
@@ -799,7 +834,7 @@ struct HomePageView: View {
                 .buttonStyle(.plain)
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 16) {
                 ForEach(SamplePixelArt.templates) { template in
                     TemplateInspirationCard(template: template) {
                         if let project = store.createFromTemplate(templateId: template.id) {
@@ -1339,69 +1374,6 @@ struct RenameProjectDialog: View {
         }
         .padding(20)
         .frame(width: 320)
-        .background(StudioTheme.homeDark)
-    }
-}
-
-// MARK: - Home AI Chat Dialog
-
-struct HomeAIChatDialog: View {
-    @ObservedObject var session: AssistantSession
-    let onStartDesign: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var promptText = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                HStack(spacing: 8) {
-                    BixelSlimeLogo(size: 20)
-                    Text("Bixel AI Assistant")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                }
-
-                Spacer()
-
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(StudioTheme.textSecondary)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Text("Describe what you want to create or design. Bixel AI will create the project, configure layers, and start painting.")
-                .font(.system(size: 12))
-                .foregroundColor(StudioTheme.textSecondary)
-
-            TextEditor(text: $promptText)
-                .font(.system(size: 13))
-                .frame(height: 120)
-                .padding(8)
-                .background(StudioTheme.homeCard, in: RoundedRectangle(cornerRadius: 8))
-
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button {
-                    let trimmed = promptText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    onStartDesign(trimmed)
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "wand.and.stars")
-                        Text("Create & Design")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioTheme.bixelGreen)
-                .foregroundColor(.black)
-                .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-        .frame(width: 480)
         .background(StudioTheme.homeDark)
     }
 }
