@@ -11,9 +11,9 @@ import Combine
 
 final class CanvasViewport: ObservableObject {
     /// View points per document pixel (1 = native size, 16 = zoomed in).
-    @Published var zoom: CGFloat = 8 {
-        didSet { zoom = Self.clampZoom(zoom) }
-    }
+    /// Callers must clamp through `CanvasViewport.clampZoom` — mutating the
+    /// property from its own `didSet` recurses infinitely.
+    @Published var zoom: CGFloat = 8
     /// Offset of the artboard center from the view center, in view points (y-up).
     @Published var pan: CGPoint = .zero
     @Published var showGrid = true
