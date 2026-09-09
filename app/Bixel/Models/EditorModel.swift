@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 import Combine
 
 enum Tool: String, CaseIterable, Identifiable {
-    case pencil, eraser, fill, eyedropper
+    case pencil, eraser, fill, eyedropper, selection, transform
     var id: String { rawValue }
 
     var symbol: String {
@@ -20,6 +20,8 @@ enum Tool: String, CaseIterable, Identifiable {
         case .eraser: return "eraser"
         case .fill: return "paintbrush.pointed.fill"
         case .eyedropper: return "eyedropper"
+        case .selection: return "rectangle.dashed"
+        case .transform: return "arrow.up.left.and.arrow.down.right"
         }
     }
 
@@ -56,6 +58,13 @@ final class EditorModel: ObservableObject {
     @Published var playing: Bool = false
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
+    @Published var selectionRect: CGRect?
+    @Published var transformRect: CGRect?
+    @Published var transformRotation = 0
+    @Published var snapping = true
+    private var selectionStart: CGPoint?
+    private var transformStart: CGPoint?
+    private var transformOrigin: CGRect?
 
     // Playback settings
     @Published var fps: Double = 12 {
@@ -99,6 +108,74 @@ final class EditorModel: ObservableObject {
             LayerInfo(index: i, name: document.layerName(i), visible: document.isLayerVisible(i),
                       opacity: Double(document.layerOpacity(i)))
         }
+    }
+
+    // MARK: - Selection and transform
+
+    func beginSelection(x: Int, y: Int) {
+        selectionStart = CGPoint(x: x, y: y)
+        selectionRect = CGRect(x: x, y: y, width: 1, height: 1)
+        transformRect = nil
+        transformRotation = 0
+    }
+
+    func updateSelection(x: Int, y: Int) {
+        guard let start = selectionStart else { return }
+        let left = min(Int(start.x), x), top = min(Int(start.y), y)
+        selectionRect = CGRect(x: left, y: top, width: max(1, abs(x - Int(start.x)) + 1), height: max(1, abs(y - Int(start.y)) + 1))
+    }
+
+    func endSelection() {
+        selectionStart = nil
+        if let rect = selectionRect { transformRect = rect }
+    }
+
+    func clearSelection() { selectionStart = nil; selectionRect = nil; transformRect = nil; transformRotation = 0 }
+
+    func beginTransform(x: Int, y: Int) {
+        guard let rect = transformRect ?? selectionRect else { return }
+        transformOrigin = rect
+        transformStart = CGPoint(x: x, y: y)
+    }
+
+    func updateTransform(x: Int, y: Int) {
+        guard let start = transformStart, let origin = transformOrigin else { return }
+        let dx = x - Int(start.x), dy = y - Int(start.y)
+        let snappedX = snapping ? Int(round(Double(origin.origin.x + CGFloat(dx)))) : Int(origin.origin.x + CGFloat(dx))
+        let snappedY = snapping ? Int(round(Double(origin.origin.y + CGFloat(dy)))) : Int(origin.origin.y + CGFloat(dy))
+        transformRect = CGRect(x: CGFloat(snappedX), y: CGFloat(snappedY), width: origin.width, height: origin.height)
+    }
+
+    func commitTransform() {
+        guard let source = selectionRect, let destination = transformRect else { return }
+        do {
+            try document.transformRect(layer: activeLayer, frame: frame, source: source, destination: destination, rotation: transformRotation)
+            selectionRect = destination
+            transformStart = nil; transformOrigin = nil
+            commitChange()
+        } catch { operationError = error.localizedDescription }
+    }
+
+    func rotateSelection() {
+        guard let rect = transformRect ?? selectionRect else { return }
+        transformRotation = (transformRotation + 1) % 4
+        transformRect = CGRect(x: rect.midX - rect.height / 2, y: rect.midY - rect.width / 2,
+                               width: rect.height, height: rect.width)
+    }
+
+    func fitSelectionToCanvas() {
+        guard let rect = selectionRect else { return }
+        transformRect = CGRect(x: 0, y: 0, width: width, height: height)
+        transformRotation = 0
+        if rect.width == CGFloat(width) && rect.height == CGFloat(height) { transformRect = rect }
+    }
+
+    func resetTransform() { transformRect = selectionRect; transformRotation = 0 }
+
+    func nudgeTransform(dx: Int, dy: Int) {
+        guard let rect = transformRect else { return }
+        let step = snapping ? 1 : 1
+        transformRect = rect.offsetBy(dx: CGFloat(dx * step), dy: CGFloat(dy * step))
     }
 
     func addLayer() {
@@ -216,6 +293,8 @@ final class EditorModel: ObservableObject {
             document.stroke(layer: activeLayer, frame: frame, points: [(x, y)], color: strokeColor, radius: brushRadius)
             strokeChanged = true
             pixelsChanged()
+        case .selection, .transform:
+            break
         }
     }
 

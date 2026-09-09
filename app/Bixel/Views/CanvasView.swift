@@ -163,7 +163,7 @@ struct CanvasView: NSViewRepresentable {
             model.strokeLine(from: start, to: end)
         }
 
-        private func pixelCoordinate(_ point: CGPoint, in view: MTKView, clamp: Bool = false) -> (x: Int, y: Int)? {
+        fileprivate func pixelCoordinate(_ point: CGPoint, in view: MTKView, clamp: Bool = false) -> (x: Int, y: Int)? {
             viewport.viewToDoc(point, viewSize: view.bounds.size,
                                width: model.width, height: model.height, clamp: clamp)
         }
@@ -180,6 +180,8 @@ final class PixelCanvas: MTKView {
     private var lineGesture = false
     private var lineDragged = false
     private var lineStart: CGPoint = .zero
+    private var selectionGesture = false
+    private var transformGesture = false
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         sender.draggingPasteboard.availableType(from: [.png]) != nil ? .copy : []
@@ -227,6 +229,18 @@ final class PixelCanvas: MTKView {
             return
         }
         let point = convert(event.locationInWindow, from: nil)
+        if let coordinator {
+            if coordinator.model.tool == .selection {
+                selectionGesture = true
+                if let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.beginSelection(x: pixel.x, y: pixel.y) }
+                return
+            }
+            if coordinator.model.tool == .transform, let pixel = coordinator.pixelCoordinate(point, in: self) {
+                transformGesture = true
+                coordinator.model.beginTransform(x: pixel.x, y: pixel.y)
+                return
+            }
+        }
         // Shift+draw paints a straight line with the current brush.
         if event.modifierFlags.contains(.shift),
            let tool = coordinator?.model.tool, tool == .pencil || tool == .eraser {
@@ -249,6 +263,14 @@ final class PixelCanvas: MTKView {
             lineDragged = true
             return
         }
+        if selectionGesture {
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.updateSelection(x: pixel.x, y: pixel.y) }
+            return
+        }
+        if transformGesture {
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self) { coordinator.model.updateTransform(x: pixel.x, y: pixel.y) }
+            return
+        }
         coordinator?.drag(at: point, in: self)
     }
 
@@ -262,6 +284,16 @@ final class PixelCanvas: MTKView {
             lineGesture = false
             coordinator?.commitLine(from: lineStart, to: convert(event.locationInWindow, from: nil),
                                     dragged: lineDragged, in: self)
+            return
+        }
+        if selectionGesture {
+            selectionGesture = false
+            coordinator?.model.endSelection()
+            return
+        }
+        if transformGesture {
+            transformGesture = false
+            coordinator?.model.commitTransform()
             return
         }
         coordinator?.end(at: convert(event.locationInWindow, from: nil), in: self)
@@ -317,6 +349,16 @@ final class PixelCanvas: MTKView {
         let viewport = coordinator.viewport
         let model = coordinator.model
 
+        if model.tool == .transform {
+            switch event.keyCode {
+            case 123: model.nudgeTransform(dx: -1, dy: 0); return
+            case 124: model.nudgeTransform(dx: 1, dy: 0); return
+            case 125: model.nudgeTransform(dx: 0, dy: 1); return
+            case 126: model.nudgeTransform(dx: 0, dy: -1); return
+            default: break
+            }
+        }
+
         if event.modifierFlags.contains(.command) {
             switch event.charactersIgnoringModifiers {
             case "=", "+": viewport.zoomIn()
@@ -336,12 +378,17 @@ final class PixelCanvas: MTKView {
             case "e": model.tool = .eraser
             case "f": model.tool = .fill
             case "i": model.tool = .eyedropper
+            case "s": model.tool = .selection
+            case "t": model.tool = .transform
             case "[": model.brushSize = max(1, model.brushSize - 1)
             case "]": model.brushSize = min(32, model.brushSize + 1)
             case "g": viewport.showGrid.toggle()
             default: super.keyDown(with: event)
             }
         }
+
+        if event.keyCode == 53 { model.clearSelection() }
+        if event.keyCode == 36, model.tool == .transform { model.commitTransform() }
     }
 
     override func keyUp(with event: NSEvent) {

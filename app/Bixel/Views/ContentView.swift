@@ -31,6 +31,9 @@ struct ContentView: View {
                     .allowsHitTesting(projects.activeDocument != nil)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+                SelectionOverlay(model: model, viewport: viewport)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
                 // Left tool rail + brush sliders, vertically centered.
                 if !showLibrary {
                 HStack(alignment: .center, spacing: 8) {
@@ -96,6 +99,11 @@ struct ContentView: View {
                     }.padding(.horizontal, 24).padding(.top, 6)
 
                     Spacer()
+
+                    if model.selectionRect != nil || model.transformRect != nil {
+                        SelectionTransformToolbar(model: model)
+                            .padding(.bottom, 70)
+                    }
 
                     EditorOperationFeedback(model: model)
                     if projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {

@@ -562,6 +562,45 @@ impl AsepriteDoc {
         Ok(())
     }
 
+    /// Transform a rectangular selection in-place with nearest-neighbor
+    /// sampling. The source is cleared first, then the transformed pixels are
+    /// clipped to the canvas. Rotation is clockwise in quarter turns.
+    pub fn transform_rect(
+        &mut self, layer: usize, frame: usize,
+        sx: usize, sy: usize, sw: usize, sh: usize,
+        dx: i32, dy: i32, dw: usize, dh: usize, rotation: u32,
+    ) -> Result<(), String> {
+        if frame >= self.frames.len() || sw == 0 || sh == 0 || dw == 0 || dh == 0
+            || sx.checked_add(sw).map_or(true, |v| v > self.width)
+            || sy.checked_add(sh).map_or(true, |v| v > self.height)
+            || rotation > 3 || self.layers.get(layer).map_or(true, |l| l.locked) {
+            return Err("Invalid selection transform".into());
+        }
+        self.snapshot();
+        let source = self.layers.get(layer).and_then(|l| l.cels.get(frame)).and_then(|c| c.as_ref())
+            .map(|c| c.data.clone()).unwrap_or_else(|| vec![0; self.width * self.height * 4]);
+        let mut result = source.clone();
+        for y in sy..sy + sh { for x in sx..sx + sw {
+            let i = (y * self.width + x) * 4; result[i..i + 4].fill(0);
+        }}
+        let canvas_w = self.width as i64; let canvas_h = self.height as i64;
+        for ty in 0..dh { for tx in 0..dw {
+            let (u, v) = (tx as f64 / dw as f64, ty as f64 / dh as f64);
+            let (su, sv) = match rotation { 1 => (v, 1.0 - u), 2 => (1.0 - u, 1.0 - v), 3 => (1.0 - v, u), _ => (u, v) };
+            let ox = ((su * sw as f64).floor() as usize).min(sw - 1);
+            let oy = ((sv * sh as f64).floor() as usize).min(sh - 1);
+            let src_i = ((sy + oy) * self.width + sx + ox) * 4;
+            let px = dx as i64 + tx as i64; let py = dy as i64 + ty as i64;
+            if px >= 0 && py >= 0 && px < canvas_w && py < canvas_h {
+                let dst_i = (py as usize * self.width + px as usize) * 4;
+                result[dst_i..dst_i + 4].copy_from_slice(&source[src_i..src_i + 4]);
+            }
+        }}
+        let cel = self.cel_mut(layer, frame).ok_or("Invalid layer")?;
+        cel.data = result;
+        Ok(())
+    }
+
     /// Import a regular sheet to a new layer, row-major from frame zero.
     /// Existing layers and canvas dimensions are preserved; history records one step.
     pub fn import_sheet_data(

@@ -18,3 +18,4 @@ app/Bixel/Info.plist
 .DS_Store
 
 __PYCACHE__/
+build/

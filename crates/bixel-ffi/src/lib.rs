@@ -336,6 +336,23 @@ pub unsafe extern "C" fn bixel_doc_stamp_image(
         .is_ok()
 }
 
+/// Transform a rectangular selection in-place with nearest-neighbor sampling.
+/// Rotation is clockwise quarter turns; the operation records one undo step.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_transform_rect(
+    ptr: *mut BixelDoc, layer: u32, frame: u32,
+    sx: u32, sy: u32, sw: u32, sh: u32,
+    dx: i32, dy: i32, dw: u32, dh: u32, rotation: u32,
+) -> bool {
+    if ptr.is_null() { return false; }
+    let mut document = unsafe { doc(ptr) }.lock().unwrap();
+    if document.transform_rect(layer as usize, frame as usize, sx as usize, sy as usize,
+                               sw as usize, sh as usize, dx, dy, dw as usize, dh as usize, rotation).is_err() {
+        return false;
+    }
+    true
+}
+
 /// Import a regular RGBA sheet to a new layer, starting at frame zero.
 /// Cell size must match the canvas. Returns layer index, or -1; one undo step.
 #[no_mangle]

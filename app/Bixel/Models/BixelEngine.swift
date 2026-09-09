@@ -162,6 +162,28 @@ final class Document: @unchecked Sendable {
         }
     }
 
+    func transformRect(layer: Int, frame: Int, source: CGRect, destination: CGRect,
+                       rotation: Int = 0) throws {
+        guard source.origin.x >= 0, source.origin.y >= 0,
+              source.width >= 1, source.height >= 1,
+              destination.width >= 1, destination.height >= 1,
+              let sx = UInt32(exactly: Int(source.origin.x)),
+              let sy = UInt32(exactly: Int(source.origin.y)),
+              let sw = UInt32(exactly: Int(source.width)),
+              let sh = UInt32(exactly: Int(source.height)),
+              let dx = Int32(exactly: Int(destination.origin.x)),
+              let dy = Int32(exactly: Int(destination.origin.y)),
+              let dw = UInt32(exactly: Int(destination.width)),
+              let dh = UInt32(exactly: Int(destination.height)),
+              let l = UInt32(exactly: layer), let f = UInt32(exactly: frame) else {
+            throw StorageError.message("Invalid selection transform dimensions.")
+        }
+        guard bixel_doc_transform_rect(handle, l, f, sx, sy, sw, sh, dx, dy, dw, dh,
+                                       UInt32((rotation % 4 + 4) % 4)) else {
+            throw StorageError.message("The selection could not be transformed.")
+        }
+    }
+
     /// Import sheet cells into a new layer from frame zero without resizing.
     @discardableResult
     func importSheetData(_ data: [UInt8], width: Int, height: Int,
