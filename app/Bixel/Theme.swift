@@ -19,14 +19,18 @@ enum StudioTheme {
     static let textSecondary = Color.white.opacity(0.55)
     static let textDisabled = Color.white.opacity(0.28)
 
-    // Accent (used sparingly, like Procreate's understated highlights)
-    static let accent = Color(red: 0.42, green: 0.60, blue: 1.0)              // #6b99ff
-    static let accentSoft = Color(red: 0.42, green: 0.60, blue: 1.0).opacity(0.16)
+    // Accent (Procreate's vivid blue highlight)
+    static let accent = Color(red: 0.10, green: 0.50, blue: 0.98)              // #1a7ffb
+    static let accentSoft = Color(red: 0.10, green: 0.50, blue: 0.98).opacity(0.18)
+    static let procreateBlue = Color(red: 0.10, green: 0.50, blue: 0.98)
+    static let procreateGlass = Color(red: 0.13, green: 0.135, blue: 0.15).opacity(0.88)
+    static let procreateRowInactive = Color(white: 0.20, opacity: 0.55)
 
     static let canvasBackground = Color(red: 0.11, green: 0.113, blue: 0.125)
 
     // Misc
     static let cornerRadius: CGFloat = 10
+    static let panelRadius: CGFloat = 16
     static let controlHeight: CGFloat = 30
 }
 
@@ -66,6 +70,49 @@ extension View {
             .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(.regularMaterial))
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(StudioTheme.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
+    }
+
+    /// Procreate-style floating frosted card with deep blur and subtle hairline.
+    func procreatePanel(radius: CGFloat = 16) -> some View {
+        self
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .fill(StudioTheme.procreateGlass)
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.45), radius: 24, x: 0, y: 8)
+    }
+}
+
+/// Procreate layer visibility checkbox (square with clean checkmark).
+struct ProcreateCheckbox: View {
+    let isChecked: Bool
+    var isOnBlue: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(isOnBlue ? Color.white.opacity(0.85) : Color.white.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: 17, height: 17)
+                if isChecked {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(isOnBlue ? .white : Color.white.opacity(0.9))
+                }
+            }
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

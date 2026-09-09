@@ -90,7 +90,27 @@ struct CanvasView: NSViewRepresentable {
             }
 
             if canvasDirty {
-                let pixels = model.compositeCurrentFrame()
+                var pixels = model.compositeCurrentFrame()
+                if model.showBackgroundColor {
+                    let bgR = model.canvasBackgroundColor.r
+                    let bgG = model.canvasBackgroundColor.g
+                    let bgB = model.canvasBackgroundColor.b
+                    let bgA = Float(model.canvasBackgroundColor.a) / 255.0
+                    for i in stride(from: 0, to: pixels.count, by: 4) {
+                        let fgA = Float(pixels[i + 3]) / 255.0
+                        if fgA < 1.0 {
+                            let invFgA = 1.0 - fgA
+                            let r = Float(pixels[i]) * fgA + Float(bgR) * invFgA * bgA
+                            let g = Float(pixels[i + 1]) * fgA + Float(bgG) * invFgA * bgA
+                            let b = Float(pixels[i + 2]) * fgA + Float(bgB) * invFgA * bgA
+                            let outA = fgA + bgA * invFgA
+                            pixels[i] = UInt8(clamping: Int(r.rounded()))
+                            pixels[i + 1] = UInt8(clamping: Int(g.rounded()))
+                            pixels[i + 2] = UInt8(clamping: Int(b.rounded()))
+                            pixels[i + 3] = UInt8(clamping: Int((outA * 255.0).rounded()))
+                        }
+                    }
+                }
                 renderer?.updateCanvas(pixels: pixels, width: model.width, height: model.height)
                 canvasDirty = false
             }

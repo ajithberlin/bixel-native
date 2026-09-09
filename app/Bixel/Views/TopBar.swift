@@ -1,8 +1,8 @@
 // TopBar.swift
 //
-// Floating top capsule: project menu and canvas size on the left, zoom
-// controls in the middle, undo/redo, grid, onion skin, export, panel and AI
-// toggles on the right.
+// Procreate-style top navigation bar:
+// - Left group: Gallery, Actions (wrench), Adjustments/AI (wand), Selection (lasso), Transform (arrow)
+// - Right group: Brush, Smudge, Eraser, Layers (square layers icon with blue highlight), Color disc swatch
 
 import SwiftUI
 
@@ -11,188 +11,336 @@ struct TopBar: View {
     @ObservedObject var viewport: CanvasViewport
     let projectName: String
     let onShowProjects: () -> Void
-    @Binding var showPanel: Bool
+    @Binding var showLayers: Bool
+    @Binding var showColor: Bool
     @Binding var showAI: Bool
-    @State private var showOnionSettings = false
+    @Binding var showTimeline: Bool
+    var onNewDocument: (() -> Void)? = nil
+
+    @State private var showActions = false
 
     var body: some View {
-        HStack(spacing: 14) {
-            // Project + canvas info
-            Button(action: onShowProjects) {
-                HStack(spacing: 7) {
-                    Image(systemName: "square.grid.3x3.fill")
-                        .foregroundColor(StudioTheme.accent)
-                    Text(projectName)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundColor(StudioTheme.textPrimary)
-                        .lineLimit(1)
+        HStack {
+            // LEFT CLUSTER: Gallery, Wrench, Wand, Selection, Transform
+            HStack(spacing: 16) {
+                // Gallery button
+                Button(action: onShowProjects) {
+                    Text("Gallery")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundColor(Color.white.opacity(0.92))
                 }
-            }
-            .buttonStyle(.plain)
-            .help("Open the gallery")
+                .buttonStyle(.plain)
+                .help("Open Gallery")
 
-            Text("\(model.width) × \(model.height)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(StudioTheme.textSecondary)
-
-            divider
-
-            // Zoom
-            HStack(spacing: 2) {
-                Button { viewport.zoomOut() } label: { Image(systemName: "minus.magnifyingglass") }
-                    .help("Zoom out (⌘-)")
+                // Actions (Wrench)
                 Button {
-                    viewport.zoomToFitCurrent(canvasWidth: model.width, height: model.height)
+                    showActions.toggle()
                 } label: {
-                    Text("\(Int((viewport.zoom * 100).rounded()))%")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .frame(width: 44)
+                    Image(systemName: "wrench")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(showActions ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
                 }
-                .help("Zoom to fit (⌘0)")
-                Button { viewport.zoomIn() } label: { Image(systemName: "plus.magnifyingglass") }
-                    .help("Zoom in (⌘+)")
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(StudioTheme.textSecondary)
-
-            divider
-
-            // History
-            HStack(spacing: 2) {
-                Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }
-                    .disabled(!model.document.canUndo)
-                    .help("Undo (⌘Z)")
-                Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }
-                    .disabled(!model.document.canRedo)
-                    .help("Redo (⇧⌘Z)")
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(StudioTheme.textPrimary)
-
-            divider
-
-            // Canvas aids
-            HStack(spacing: 2) {
-                Toggle(isOn: $viewport.showGrid) {
-                    Image(systemName: "grid")
+                .buttonStyle(.plain)
+                .help("Actions & Canvas settings")
+                .popover(isPresented: $showActions, arrowEdge: .bottom) {
+                    ActionsPopover(
+                        model: model,
+                        viewport: viewport,
+                        showTimeline: $showTimeline,
+                        onShowProjects: onShowProjects,
+                        onNewDocument: onNewDocument
+                    )
                 }
-                .help("Pixel grid (G)")
 
-                HStack(spacing: 0) {
-                    Toggle(isOn: $viewport.onionSkin) {
-                        Image(systemName: "circle.dashed.inset.filled")
+                // Adjustments / AI (Wand)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAI.toggle()
                     }
-                    .help("Onion skin — ghost previous frames")
+                } label: {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(showAI ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("AI Copilot & Adjustments")
 
-                    if viewport.onionSkin {
-                        Button { showOnionSettings = true } label: {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 7, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Onion skin settings")
-                        .popover(isPresented: $showOnionSettings, arrowEdge: .bottom) {
-                            OnionSettings(viewport: viewport)
-                        }
+                // Selection (Lasso)
+                Button {
+                    model.tool = (model.tool == .selection) ? .pencil : .selection
+                } label: {
+                    Image(systemName: "lasso")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(model.tool == .selection ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Selection tool")
+
+                // Transform
+                Button {
+                    model.tool = (model.tool == .transform) ? .pencil : .transform
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(model.tool == .transform ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Transform tool")
+            }
+
+            Spacer()
+
+            // RIGHT CLUSTER: Brush, Smudge, Eraser, Layers, Color
+            HStack(spacing: 16) {
+                // Brush (Paint)
+                Button {
+                    model.tool = .pencil
+                } label: {
+                    Image(systemName: "paintbrush.pointed")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundColor(model.tool == .pencil ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Paint brush")
+
+                // Smudge
+                Button {
+                    model.tool = .smudge
+                } label: {
+                    Image(systemName: "hand.draw")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(model.tool == .smudge ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Smudge tool")
+
+                // Eraser
+                Button {
+                    model.tool = .eraser
+                } label: {
+                    Image(systemName: "eraser")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(model.tool == .eraser ? StudioTheme.accent : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .help("Eraser")
+
+                // Layers button (Vibrant blue highlight when open!)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showLayers.toggle()
+                        if showLayers { showColor = false }
                     }
+                } label: {
+                    Image(systemName: "square.2.layers.3d")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(showLayers ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
+                        .frame(width: 28, height: 28)
+                        .background(
+                            showLayers ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
+                        )
                 }
-            }
-            .toggleStyle(.button)
-            .foregroundColor(StudioTheme.textSecondary)
+                .buttonStyle(.plain)
+                .help("Layers panel")
 
-            divider
-
-            // Export
-            Menu {
-                Button("Animation sheet + frame timings…") { model.exportSpriteSheet() }
-                Divider()
-                ForEach([1, 2, 4, 8], id: \.self) { scale in
-                    Button("PNG at \(scale)× (\(model.width * scale) × \(model.height * scale))") {
-                        model.exportPNG(scale: scale)
+                // Color Circle Button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showColor.toggle()
+                        if showColor { showLayers = false }
                     }
+                } label: {
+                    ZStack {
+                        Circle()
+                            .fill(currentColor)
+                            .frame(width: 24, height: 24)
+                        Circle()
+                            .strokeBorder(showColor ? StudioTheme.procreateBlue : Color.white.opacity(0.35), lineWidth: showColor ? 2.5 : 1)
+                            .frame(width: 26, height: 26)
+                    }
+                    .frame(width: 28, height: 28)
                 }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .foregroundColor(StudioTheme.textSecondary)
+                .buttonStyle(.plain)
+                .help("Colors")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .frame(width: 26)
-            .help("Export frame as PNG")
-
-            divider
-
-            // Panels
-            Button { showPanel.toggle() } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .foregroundColor(showPanel ? StudioTheme.accent : StudioTheme.textSecondary)
-            }
-            .buttonStyle(.plain)
-            .help("Color & layers panel")
-
-            Button { showAI = true } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "sparkles")
-                    Text("AI")
-                        .font(.system(size: 11, weight: .semibold))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft))
-                .foregroundColor(StudioTheme.accent)
-            }
-            .buttonStyle(.plain)
-            .help("Open the assistant")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .studioPill()
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(Rectangle().fill(StudioTheme.procreateGlass))
+                .overlay(
+                    Rectangle()
+                        .fill(StudioTheme.hairline)
+                        .frame(height: 1),
+                    alignment: .bottom
+                )
+        )
     }
 
-    private var divider: some View {
-        Rectangle()
-            .fill(StudioTheme.hairline)
-            .frame(width: 1, height: 18)
+    private var currentColor: Color {
+        Color(
+            red: Double(model.currentColor.r) / 255,
+            green: Double(model.currentColor.g) / 255,
+            blue: Double(model.currentColor.b) / 255
+        )
     }
 }
 
-/// Onion-skin settings popover: ghost opacity and how many frames back to show.
-private struct OnionSettings: View {
+// MARK: - Actions Popover (Wrench menu)
+
+struct ActionsPopover: View {
+    @ObservedObject var model: EditorModel
     @ObservedObject var viewport: CanvasViewport
+    @Binding var showTimeline: Bool
+    let onShowProjects: () -> Void
+    var onNewDocument: (() -> Void)?
+
+    @State private var tab: ActionTab = .canvas
+
+    enum ActionTab: String, CaseIterable {
+        case canvas = "Canvas"
+        case share = "Share"
+        case project = "Project"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Onion Skin")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(StudioTheme.textPrimary)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Opacity")
-                        .font(.system(size: 11))
-                        .foregroundColor(StudioTheme.textSecondary)
-                    Spacer()
-                    Text("\(Int((viewport.onionOpacity * 100).rounded()))%")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(StudioTheme.textSecondary)
-                }
-                Slider(value: $viewport.onionOpacity, in: 0.1...0.8)
-                    .controlSize(.small)
+            // Tab Picker
+            Picker("", selection: $tab) {
+                ForEach(ActionTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
+            .pickerStyle(.segmented)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Previous frames")
-                    .font(.system(size: 11))
-                    .foregroundColor(StudioTheme.textSecondary)
-                Picker("", selection: $viewport.onionFrames) {
-                    Text("1").tag(1)
-                    Text("2").tag(2)
+            Divider().overlay(StudioTheme.hairline)
+
+            switch tab {
+            case .canvas:
+                VStack(alignment: .leading, spacing: 10) {
+                    // Animation assist (Timeline toggle)
+                    Toggle(isOn: $showTimeline) {
+                        Label("Animation Assist", systemImage: "film")
+                    }
+                    .toggleStyle(.switch)
+
+                    // Pixel Grid toggle
+                    Toggle(isOn: $viewport.showGrid) {
+                        Label("Drawing Guide / Grid", systemImage: "grid")
+                    }
+                    .toggleStyle(.switch)
+
+                    // Onion Skin toggle
+                    Toggle(isOn: $viewport.onionSkin) {
+                        Label("Onion Skin", systemImage: "circle.dashed.inset.filled")
+                    }
+                    .toggleStyle(.switch)
+
+                    if viewport.onionSkin {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Ghost Opacity")
+                                    .font(.caption)
+                                    .foregroundColor(StudioTheme.textSecondary)
+                                Spacer()
+                                Text("\(Int((viewport.onionOpacity * 100).rounded()))%")
+                                    .font(.caption.monospacedDigit())
+                            }
+                            Slider(value: $viewport.onionOpacity, in: 0.1...0.8)
+                                .controlSize(.mini)
+                        }
+                        .padding(.leading, 8)
+                    }
+
+                    Divider().overlay(StudioTheme.hairline)
+
+                    // Canvas dimensions
+                    HStack {
+                        Label("Canvas Size", systemImage: "aspectratio")
+                            .font(.system(size: 12))
+                        Spacer()
+                        Text("\(model.width) × \(model.height)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(StudioTheme.textSecondary)
+                    }
+
+                    // Zoom controls
+                    HStack(spacing: 8) {
+                        Button { viewport.zoomOut() } label: { Label("Zoom -", systemImage: "minus.magnifyingglass") }
+                            .controlSize(.small)
+                        Button {
+                            viewport.zoomToFitCurrent(canvasWidth: model.width, height: model.height)
+                        } label: {
+                            Text("\(Int((viewport.zoom * 100).rounded()))%")
+                                .font(.system(size: 11, design: .monospaced))
+                        }
+                        .controlSize(.small)
+                        Button { viewport.zoomIn() } label: { Label("Zoom +", systemImage: "plus.magnifyingglass") }
+                            .controlSize(.small)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+
+            case .share:
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Share Image")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(StudioTheme.textSecondary)
+
+                    ForEach([1, 2, 4, 8], id: \.self) { scale in
+                        Button {
+                            model.exportPNG(scale: scale)
+                        } label: {
+                            HStack {
+                                Label("PNG (\(scale)×)", systemImage: "photo")
+                                Spacer()
+                                Text("\(model.width * scale) × \(model.height * scale)")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(StudioTheme.textSecondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                    }
+
+                    Divider().overlay(StudioTheme.hairline)
+
+                    Button {
+                        model.exportSpriteSheet()
+                    } label: {
+                        Label("Animated Sprite Sheet…", systemImage: "square.grid.3x2")
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
+                }
+
+            case .project:
+                VStack(alignment: .leading, spacing: 10) {
+                    if let onNew = onNewDocument {
+                        Button {
+                            onNew()
+                        } label: {
+                            Label("New Document…", systemImage: "plus.square")
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button {
+                        onShowProjects()
+                    } label: {
+                        Label("Project Gallery", systemImage: "square.grid.3x3")
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(14)
-        .frame(width: 200)
+        .frame(width: 250)
     }
 }

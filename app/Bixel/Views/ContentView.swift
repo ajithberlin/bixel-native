@@ -1,9 +1,8 @@
 // ContentView.swift
 //
-// Canvas-centric studio shell in the spirit of Procreate / Procreate Dreams:
+// Canvas-centric studio shell in the spirit of Procreate:
 // the infinite canvas fills the window edge-to-edge and all chrome — top bar,
-// tool rail, color/layers panel, timeline, assistant — floats over it as
-// translucent capsules and panels.
+// left brush dock, floating layers card, color popover, and timeline — floats over it.
 
 import SwiftUI
 
@@ -11,10 +10,12 @@ struct ContentView: View {
     @StateObject private var projects = ProjectStore()
     @StateObject private var viewport = CanvasViewport()
     @State private var showProjects = false
-    @State private var showLibrary = true
+    @State private var showLibrary = false
     @State private var showNewDocument = false
-    @State private var showAI = true
-    @State private var showPanel = true
+    @State private var showAI = false
+    @State private var showLayers = true
+    @State private var showColor = false
+    @State private var showTimeline = false
     @State private var timelineCollapsed = false
     @State private var assistantExpanded = false
     @Environment(\.scenePhase) private var scenePhase
@@ -34,82 +35,105 @@ struct ContentView: View {
                 SelectionOverlay(model: model, viewport: viewport)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                // Left tool rail + brush sliders, vertically centered.
-                if !showLibrary {
-                HStack(alignment: .center, spacing: 8) {
-                    ToolRail(model: model)
-                    BrushSliders(model: model)
+                // Left vertical brush dock, vertically centered.
+                HStack {
+                    LeftBrushDock(model: model)
+                        .padding(.leading, 14)
+                        .disabled(projects.activeDocument == nil)
                     Spacer()
                 }
-                .padding(.leading, 14)
-                .disabled(projects.activeDocument == nil)
-                }
 
+                // Workspace Library (when opened)
                 if showLibrary {
                     HStack {
                         WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
                             .id(projects.current?.id)
-                            .studioPanel().padding(.leading, 14).padding(.top, 106).padding(.bottom, 100)
+                            .procreatePanel(radius: 16)
+                            .padding(.leading, 64)
+                            .padding(.top, 64)
+                            .padding(.bottom, 70)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
                         Spacer()
                     }
                 }
 
-                // Right side: assistant, or the color/layers panel.
-                HStack {
+                // Right floating popovers (Layers card & Color disc)
+                HStack(alignment: .top) {
                     Spacer()
-                    if showAI {
-                        AIPanel(model: model, session: assistant, onClose: { showAI = false },
-                                expanded: assistantExpanded, onExpand: { assistantExpanded.toggle() })
-                            .id(projects.current?.id)
-                            .frame(width: assistantExpanded ? 540 : 390)
-                            .frame(maxHeight: .infinity)
-                            .studioPanel()
-                            .padding(.trailing, 14)
-                            .padding(.top, 64)
-                            .padding(.bottom, 84)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    } else if showPanel {
-                        RightPanel(model: model)
-                            .padding(.trailing, 14)
-                            .padding(.top, 64)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Color.clear.frame(height: 52)
+
+                        if showLayers {
+                            LayersPopover(model: model)
+                                .padding(.trailing, 16)
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
+                        } else if showColor {
+                            ColorPopover(model: model)
+                                .padding(.trailing, 16)
+                                .transition(.asymmetric(
+                                    insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
+                        }
+
+                        Spacer()
                     }
                 }
 
-                // Top capsule + bottom timeline.
-                VStack {
+                // Right floating AI panel (when opened via wand)
+                if showAI {
+                    HStack {
+                        Spacer()
+                        AIPanel(
+                            model: model,
+                            session: assistant,
+                            onClose: { showAI = false },
+                            expanded: assistantExpanded,
+                            onExpand: { assistantExpanded.toggle() }
+                        )
+                        .id(projects.current?.id)
+                        .frame(width: assistantExpanded ? 540 : 390)
+                        .frame(maxHeight: .infinity)
+                        .procreatePanel(radius: 16)
+                        .padding(.trailing, 16)
+                        .padding(.top, 56)
+                        .padding(.bottom, 70)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+
+                // Top navigation bar & Bottom timeline
+                VStack(spacing: 0) {
                     TopBar(
                         model: model,
                         viewport: viewport,
                         projectName: projects.current?.name ?? "Bixel",
                         onShowProjects: { showProjects = true },
-                        showPanel: $showPanel,
-                        showAI: $showAI
+                        showLayers: $showLayers,
+                        showColor: $showColor,
+                        showAI: $showAI,
+                        showTimeline: $showTimeline,
+                        onNewDocument: { showNewDocument = true }
                     )
-                    .padding(.top, 10)
-                    HStack {
-                        Button { showLibrary.toggle() } label: { Label("Library", systemImage: "square.stack.3d.up") }
-                        Button { showNewDocument = true } label: { Image(systemName: "plus") }.help("New document")
-                            .disabled(assistant.busy)
-                        if let item = projects.activeDocument {
-                            Text("\(item.name) · \(item.kind.title)").font(.caption.bold())
-                            Text(item.summary).font(.caption).foregroundColor(.secondary)
-                        } else { Text("Add a document to start creating").font(.caption) }
-                        Spacer()
-                    }.padding(.horizontal, 24).padding(.top, 6)
 
                     Spacer()
 
                     if model.selectionRect != nil || model.transformRect != nil {
                         SelectionTransformToolbar(model: model)
-                            .padding(.bottom, 70)
+                            .padding(.bottom, 16)
                     }
 
                     EditorOperationFeedback(model: model)
-                    if projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
-                    TimelineBar(model: model, collapsed: $timelineCollapsed)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, timelineCollapsed ? 4 : 12)
+
+                    if showTimeline && projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
+                        TimelineBar(model: model, collapsed: $timelineCollapsed)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, timelineCollapsed ? 4 : 14)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
             }
@@ -135,11 +159,16 @@ struct ContentView: View {
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: showAI)
-        .animation(.easeInOut(duration: 0.2), value: showPanel)
+        .animation(.easeInOut(duration: 0.2), value: showLayers)
+        .animation(.easeInOut(duration: 0.2), value: showColor)
+        .animation(.easeInOut(duration: 0.2), value: showTimeline)
         .sheet(isPresented: $showProjects) { ProjectPicker(store: projects) }
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
-        .onAppear { showProjects = projects.current == nil }
-        .onChange(of: projects.current?.id) { _ in viewport.refit(); showLibrary = true }
+        .onAppear {
+            showProjects = projects.current == nil
+            showLayers = true
+        }
+        .onChange(of: projects.current?.id) { _ in viewport.refit() }
         .onChange(of: projects.catalog.activeDocumentID) { _ in viewport.refit() }
         .onChange(of: scenePhase) { phase in
             if phase != .active { flushProject() }

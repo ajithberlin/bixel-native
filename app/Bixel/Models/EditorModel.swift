@@ -11,16 +11,17 @@ import UniformTypeIdentifiers
 import Combine
 
 enum Tool: String, CaseIterable, Identifiable {
-    case pencil, eraser, fill, eyedropper, selection, transform
+    case pencil, smudge, eraser, fill, eyedropper, selection, transform
     var id: String { rawValue }
 
     var symbol: String {
         switch self {
-        case .pencil: return "pencil.tip"
+        case .pencil: return "paintbrush.pointed"
+        case .smudge: return "hand.draw"
         case .eraser: return "eraser"
         case .fill: return "paintbrush.pointed.fill"
         case .eyedropper: return "eyedropper"
-        case .selection: return "rectangle.dashed"
+        case .selection: return "lasso"
         case .transform: return "arrow.up.left.and.arrow.down.right"
         }
     }
@@ -33,7 +34,23 @@ struct LayerInfo: Identifiable {
     var name: String
     var visible: Bool
     var opacity: Double
+    var blendMode: String = "Normal"
+    var subtitle: String? = nil
     var id: Int { index }
+
+    var blendLetter: String {
+        switch blendMode.lowercased() {
+        case "multiply": return "M"
+        case "screen": return "S"
+        case "overlay": return "O"
+        case "darken": return "D"
+        case "lighten": return "L"
+        case "color dodge", "colordodge", "dodge": return "D"
+        case "addition", "add": return "A"
+        case "difference": return "F"
+        default: return "N"
+        }
+    }
 }
 
 final class EditorModel: ObservableObject {
@@ -52,6 +69,14 @@ final class EditorModel: ObservableObject {
     @Published var brushSize: Double = 3
     @Published var opacity: Double = 1.0
     @Published var currentColor: BixelColor = BixelColor(r: 24, g: 24, b: 24, a: 255)
+
+    // Canvas background
+    @Published var canvasBackgroundColor: BixelColor = BixelColor(r: 104, g: 178, b: 240, a: 255) {
+        didSet { canvasChanged.send() }
+    }
+    @Published var showBackgroundColor: Bool = true {
+        didSet { canvasChanged.send() }
+    }
 
     // Document state
     @Published var frame: Int = 0 { didSet { canvasChanged.send() } }
@@ -104,10 +129,44 @@ final class EditorModel: ObservableObject {
     // MARK: - Layer list
 
     func reloadLayers() {
+        let prev = Dictionary(uniqueKeysWithValues: layers.map { ($0.index, ($0.blendMode, $0.subtitle)) })
         layers = (0..<document.layerCount).map { i in
-            LayerInfo(index: i, name: document.layerName(i), visible: document.isLayerVisible(i),
-                      opacity: Double(document.layerOpacity(i)))
+            let existing = prev[i]
+            return LayerInfo(
+                index: i,
+                name: document.layerName(i),
+                visible: document.isLayerVisible(i),
+                opacity: Double(document.layerOpacity(i)),
+                blendMode: existing?.0 ?? "Normal",
+                subtitle: existing?.1
+            )
         }
+    }
+
+    func setLayerBlendMode(_ index: Int, _ mode: String) {
+        if let idx = layers.firstIndex(where: { $0.index == index }) {
+            layers[idx].blendMode = mode
+            commitChange(allFrames: true)
+        }
+    }
+
+    func duplicateLayer(_ index: Int) {
+        guard index >= 0, index < document.layerCount else { return }
+        document.snapshot()
+        let name = "\(document.layerName(index)) Copy"
+        let newIdx = document.addLayer(name)
+        for f in 0..<document.frameCount {
+            let rgba = document.celRGBA(layer: index, frame: f)
+            document.loadImageData(rgba, width: width, height: height, layer: newIdx, frame: f)
+        }
+        let oldOpacity = document.layerOpacity(index)
+        document.setLayerOpacity(newIdx, oldOpacity)
+        activeLayer = newIdx
+        reloadLayers()
+        if let origMode = layers.first(where: { $0.index == index })?.blendMode {
+            setLayerBlendMode(newIdx, origMode)
+        }
+        commitChange(allFrames: true)
     }
 
     // MARK: - Selection and transform
@@ -293,6 +352,12 @@ final class EditorModel: ObservableObject {
             document.stroke(layer: activeLayer, frame: frame, points: [(x, y)], color: strokeColor, radius: brushRadius)
             strokeChanged = true
             pixelsChanged()
+        case .smudge:
+            document.snapshot()
+            lastPoint = (x, y)
+            document.stroke(layer: activeLayer, frame: frame, points: [(x, y)], color: smudgeColor(at: x, y: y), radius: brushRadius)
+            strokeChanged = true
+            pixelsChanged()
         case .selection, .transform:
             break
         }
@@ -307,13 +372,18 @@ final class EditorModel: ObservableObject {
             lastPoint = (x, y)
             strokeChanged = true
             pixelsChanged()
+        case .smudge:
+            document.stroke(layer: activeLayer, frame: frame, points: [last, (x, y)], color: smudgeColor(at: x, y: y), radius: brushRadius)
+            lastPoint = (x, y)
+            strokeChanged = true
+            pixelsChanged()
         default:
             break
         }
     }
 
     func endStroke(x: Int, y: Int) {
-        if tool == .pencil || tool == .eraser { continueStroke(x: x, y: y) }
+        if tool == .pencil || tool == .eraser || tool == .smudge { continueStroke(x: x, y: y) }
         lastPoint = nil
         lastTile = nil
         if strokeChanged {
@@ -339,6 +409,14 @@ final class EditorModel: ObservableObject {
 
     private var strokeColor: BixelColor {
         tool == .eraser ? BixelColor(r: 0, g: 0, b: 0, a: 0) : drawColor
+    }
+
+    private func smudgeColor(at x: Int, y: Int) -> BixelColor {
+        let picked = document.getPixel(layer: activeLayer, frame: frame, x: x, y: y)
+        if picked.a > 0 {
+            return BixelColor(r: picked.r, g: picked.g, b: picked.b, a: UInt8(max(25, Int(picked.a) / 3)))
+        }
+        return drawColor
     }
 
     func pick(x: Int, y: Int) {
