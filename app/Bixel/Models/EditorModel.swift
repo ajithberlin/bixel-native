@@ -577,6 +577,15 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Rotation handle
 
+    /// The live ordinary transform box in document space. During rotation the
+    /// mutable `transformRect` holds raster bounds, while `rotationBaseRect`
+    /// retains the unrotated moved/resized source used by the visual controls.
+    var transformGeometry: TransformGeometry? {
+        guard let rect = rotationBaseRect ?? transformRect ?? selectionRect else { return nil }
+        return TransformGeometry(center: CGPoint(x: rect.midX, y: rect.midY),
+                                 size: rect.size, angle: transformAngle)
+    }
+
     /// Document-space position of the Procreate-style rotation handle above
     /// the transform box. The extra stem keeps it reachable on tiny artwork.
     var rotationHandlePoint: CGPoint? {

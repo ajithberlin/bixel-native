@@ -63,6 +63,14 @@ struct EditorInteractionTests {
         let expectedRotationHandle = CGPoint(x: 30, y: 20)
         assertNear(geometry.point(for: .top), expectedTop, "Rotated top handle")
         assertNear(geometry.rotationHandlePoint, expectedRotationHandle, "Rotated rotation handle")
+        let unrotatedGeometry = TransformGeometry(
+            center: CGPoint(x: 10, y: 20),
+            size: CGSize(width: 8, height: 4),
+            angle: 0
+        )
+        precondition(geometry.point(for: .top) != unrotatedGeometry.point(for: .top) &&
+                     geometry.rotationHandlePoint != unrotatedGeometry.rotationHandlePoint,
+                     "A 90° transform must expose handle and rotation controls at oriented, not axis-aligned, points")
         func hit(_ point: CGPoint) -> TransformHandle? {
             TransformHandle.allCases.first { handle in
                 hypot(point.x - geometry.point(for: handle).x,
@@ -357,11 +365,42 @@ struct EditorInteractionTests {
                      pixel(scaledPixels, width: 8, x: 3, y: 2) == pixel(scaledImportSource, width: 4, x: 3, y: 1),
                      "Reducing floating scale must place nearest source pixels at the transformed document positions")
 
+        // Releasing a canvas resize leaves the transformed source pending; only
+        // Place/Enter may rasterize it into the document. This drives the real
+        // PixelCanvas mouse router because the bug lived in its mouseUp branch.
+        let canvasResizeModel = floatingGestureModel()
+        let canvasResizeViewport = CanvasViewport()
+        canvasResizeViewport.zoom = 10
+        let canvasResize = PixelCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let canvasResizeCoordinator = CanvasView.Coordinator(model: canvasResizeModel, viewport: canvasResizeViewport)
+        canvasResize.coordinator = canvasResizeCoordinator
+        canvasResize.updateArtboardGeometry()
+        func canvasMouseEvent(_ type: NSEvent.EventType, point: CGPoint) -> NSEvent {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ) else {
+                fatalError("Could not construct canvas mouse event")
+            }
+            return event
+        }
+        // The 4×2 source is centered at document (8, 8), so its right handle
+        // is document (10, 8) / view (220, 200); drag it right by two pixels.
+        canvasResize.mouseDown(with: canvasMouseEvent(.leftMouseDown, point: CGPoint(x: 220, y: 200)))
+        canvasResize.mouseDragged(with: canvasMouseEvent(.leftMouseDragged, point: CGPoint(x: 240, y: 200)))
+        canvasResize.mouseUp(with: canvasMouseEvent(.leftMouseUp, point: CGPoint(x: 240, y: 200)))
+        precondition(canvasResizeModel.floatingImport != nil,
+                     "A floating resize mouse-up must retain the pending source until explicit placement")
+        precondition(abs(canvasResizeModel.floatingImport!.scaleX - 1.5) <= tolerance,
+                     "Floating resize mouse-up must retain the transformed geometry for subsequent edits")
+
         precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: true) == .paint)
         precondition(CanvasCursorPolicy.kind(tool: .eyedropper, insideArtboard: true) == .eyedropper)
         precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: false) == .arrow)
         precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: true, transformHandle: .right) == .resizeHorizontal)
         precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: true, rotationHandle: true) == .rotate)
+        precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: false, floatingBody: true) == .move,
+                     "A floating source body outside the artboard must retain its move cursor")
         print("Editor interaction tests passed")
     }
 }

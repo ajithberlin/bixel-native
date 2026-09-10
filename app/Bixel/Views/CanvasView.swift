@@ -151,6 +151,7 @@ enum CanvasCursorPolicy {
     static func kind(tool: Tool, insideArtboard: Bool,
                      transformHandle: TransformHandle? = nil,
                      rotationHandle: Bool = false,
+                     floatingBody: Bool = false,
                      panning: Bool = false,
                      spaceDown: Bool = false) -> CanvasCursorKind {
         if spaceDown { return panning ? .panClosed : .panOpen }
@@ -163,7 +164,7 @@ enum CanvasCursorPolicy {
                 case .topLeft, .topRight, .bottomRight, .bottomLeft: return .resizeDiagonal
                 }
             }
-            return insideArtboard ? .move : .arrow
+            return insideArtboard || floatingBody ? .move : .arrow
         }
         guard insideArtboard else { return .arrow }
         switch tool {
@@ -196,6 +197,13 @@ final class PixelCanvas: NSView {
     private let borderLayer = CALayer()
     /// Dark veil over the workspace; an even-odd hole lets the artboard shine.
     private let workspaceDimLayer = CAShapeLayer()
+    /// Pending imports deliberately live at the workspace root rather than in
+    /// `artboardLayer`: their native-size source and controls may extend beyond
+    /// the fixed export canvas until the user places them.
+    private let floatingImageLayer = CALayer()
+    private let floatingOutlineLayer = CAShapeLayer()
+    private let floatingHandlesLayer = CAShapeLayer()
+    private let floatingRotationLayer = CAShapeLayer()
 
     // Grid cache
     private var lastGridZoom: CGFloat = -1
@@ -343,6 +351,34 @@ final class PixelCanvas: NSView {
         workspaceDimLayer.fillColor = NSColor.black.withAlphaComponent(0.42).cgColor
         workspaceDimLayer.fillRule = .evenOdd
         root.addSublayer(workspaceDimLayer)
+
+        // These are root siblings above the dim veil, so an oversized source
+        // remains visible and interactive throughout the surrounding workspace.
+        floatingImageLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        floatingImageLayer.magnificationFilter = .nearest
+        floatingImageLayer.minificationFilter = .nearest
+        floatingImageLayer.isHidden = true
+        root.addSublayer(floatingImageLayer)
+
+        floatingOutlineLayer.strokeColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.95).cgColor
+        floatingOutlineLayer.lineWidth = 1.5
+        floatingOutlineLayer.lineDashPattern = [4, 4]
+        floatingOutlineLayer.fillColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.14).cgColor
+        floatingOutlineLayer.isHidden = true
+        root.addSublayer(floatingOutlineLayer)
+
+        floatingHandlesLayer.fillColor = NSColor.white.cgColor
+        floatingHandlesLayer.strokeColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.95).cgColor
+        floatingHandlesLayer.lineWidth = 1.25
+        floatingHandlesLayer.isHidden = true
+        root.addSublayer(floatingHandlesLayer)
+
+        floatingRotationLayer.fillColor = NSColor(red: 1.0, green: 0.78, blue: 0.12, alpha: 1).cgColor
+        floatingRotationLayer.strokeColor = NSColor(red: 0.12, green: 0.10, blue: 0.05, alpha: 0.9).cgColor
+        floatingRotationLayer.lineWidth = 1.25
+        floatingRotationLayer.lineCap = .round
+        floatingRotationLayer.isHidden = true
+        root.addSublayer(floatingRotationLayer)
     }
 
     override func layout() {
@@ -425,22 +461,24 @@ final class PixelCanvas: NSView {
             pixelGridLayer.isHidden = true
         }
 
-        // Selection / Transform rect overlay
-        if let rect = model.transformRect ?? model.selectionRect {
-            let scaledRect = CGRect(
-                x: rect.origin.x * viewport.zoom,
-                y: rect.origin.y * viewport.zoom,
-                width: rect.width * viewport.zoom,
-                height: rect.height * viewport.zoom
-            )
+        // Selection / Transform overlay. The artboard is flipped, so document
+        // coordinates scale directly within it; the shared builders keep the
+        // ordinary and floating controls on the same oriented geometry.
+        if let geometry = ordinaryTransformGeometry(for: model) {
             selectionLayer.isHidden = false
-            selectionLayer.path = CGPath(rect: scaledRect, transform: nil)
+            selectionLayer.path = orientedOutlinePath(for: geometry) { point in
+                CGPoint(x: point.x * viewport.zoom, y: point.y * viewport.zoom)
+            }
             // Handles appear only with the transform tool.
             if model.tool == .transform {
                 selectionHandlesLayer.isHidden = false
-                selectionHandlesLayer.path = transformHandlePath(for: scaledRect)
+                selectionHandlesLayer.path = transformHandlePath(for: geometry) { point in
+                    CGPoint(x: point.x * viewport.zoom, y: point.y * viewport.zoom)
+                }
                 rotationHandleLayer.isHidden = false
-                rotationHandleLayer.path = rotationHandlePath(for: scaledRect, zoom: viewport.zoom)
+                rotationHandleLayer.path = rotationHandlePath(for: geometry) { point in
+                    CGPoint(x: point.x * viewport.zoom, y: point.y * viewport.zoom)
+                }
             } else {
                 selectionHandlesLayer.isHidden = true
                 selectionHandlesLayer.path = nil
@@ -456,39 +494,102 @@ final class PixelCanvas: NSView {
             rotationHandleLayer.path = nil
         }
 
+        updateFloatingImportGeometry()
+
         CATransaction.commit()
         updateCursor()
     }
 
-    /// Eight small squares centred on the corners and edge midpoints of the
-    /// scaled selection rect, sized in view points so they stay readable.
-    private func transformHandlePath(for rect: CGRect) -> CGPath {
+    private func ordinaryTransformGeometry(for model: EditorModel) -> TransformGeometry? {
+        model.transformGeometry
+    }
+
+    private func documentPointToView(_ point: CGPoint, coordinator: CanvasView.Coordinator) -> CGPoint {
+        let viewport = coordinator.viewport
+        let origin = viewport.artboardOrigin(viewSize: bounds.size,
+                                              canvasWidth: coordinator.model.width,
+                                              height: coordinator.model.height)
+        return CGPoint(x: origin.x + point.x * viewport.zoom,
+                       y: origin.y + (CGFloat(coordinator.model.height) - point.y) * viewport.zoom)
+    }
+
+    private func orientedOutlinePath(for geometry: TransformGeometry,
+                                     map: (CGPoint) -> CGPoint) -> CGPath {
         let path = CGMutablePath()
-        let handles: [(CGPoint, CGFloat)] = [
-            (CGPoint(x: rect.minX, y: rect.minY), 9),
-            (CGPoint(x: rect.midX, y: rect.minY), 7),
-            (CGPoint(x: rect.maxX, y: rect.minY), 9),
-            (CGPoint(x: rect.maxX, y: rect.midY), 7),
-            (CGPoint(x: rect.maxX, y: rect.maxY), 9),
-            (CGPoint(x: rect.midX, y: rect.maxY), 7),
-            (CGPoint(x: rect.minX, y: rect.maxY), 9),
-            (CGPoint(x: rect.minX, y: rect.midY), 7)
-        ]
-        for (point, size) in handles {
-            let corner = point
-            path.addRect(CGRect(x: corner.x - size / 2, y: corner.y - size / 2, width: size, height: size))
+        let corners = geometry.corners.map(map)
+        guard let first = corners.first else { return path }
+        path.move(to: first)
+        for corner in corners.dropFirst() { path.addLine(to: corner) }
+        path.closeSubpath()
+        return path
+    }
+
+    /// Eight small squares centred on the rotated corners and edge midpoints,
+    /// sized in view points so they stay readable at every zoom.
+    private func transformHandlePath(for geometry: TransformGeometry,
+                                     map: (CGPoint) -> CGPoint) -> CGPath {
+        let path = CGMutablePath()
+        for handle in TransformHandle.allCases {
+            let point = map(geometry.point(for: handle))
+            let size: CGFloat = handle.isCorner ? 9 : 7
+            path.addRect(CGRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size))
         }
         return path
     }
 
-    private func rotationHandlePath(for rect: CGRect, zoom: CGFloat) -> CGPath {
+    private func rotationHandlePath(for geometry: TransformGeometry,
+                                    map: (CGPoint) -> CGPoint) -> CGPath {
         let path = CGMutablePath()
-        let stemDistance = max(18 * zoom, min(36 * zoom, rect.height * 0.3))
-        let stemEnd = CGPoint(x: rect.midX, y: rect.minY - stemDistance)
-        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-        path.addLine(to: stemEnd)
-        path.addEllipse(in: CGRect(x: stemEnd.x - 6, y: stemEnd.y - 6, width: 12, height: 12))
+        let edge = map(geometry.point(for: .top))
+        let handle = map(geometry.rotationHandlePoint)
+        path.move(to: edge)
+        path.addLine(to: handle)
+        path.addEllipse(in: CGRect(x: handle.x - 6, y: handle.y - 6, width: 12, height: 12))
         return path
+    }
+
+    /// Refreshes only CALayer geometry during gestures. The CGImage is built
+    /// once when a pending source appears and cleared when it is dismissed.
+    private func updateFloatingImportGeometry() {
+        guard let coordinator, let image = coordinator.model.floatingImport,
+              let geometry = coordinator.model.floatingTransformGeometry else {
+            floatingImageLayer.contents = nil
+            floatingImageLayer.isHidden = true
+            floatingOutlineLayer.path = nil
+            floatingOutlineLayer.isHidden = true
+            floatingHandlesLayer.path = nil
+            floatingHandlesLayer.isHidden = true
+            floatingRotationLayer.path = nil
+            floatingRotationLayer.isHidden = true
+            return
+        }
+
+        let rootFrame = CGRect(origin: .zero, size: bounds.size)
+        floatingOutlineLayer.frame = rootFrame
+        floatingHandlesLayer.frame = rootFrame
+        floatingRotationLayer.frame = rootFrame
+        if floatingImageLayer.contents == nil {
+            floatingImageLayer.contents = makeCGImage(pixels: image.rgba, width: image.width, height: image.height)
+        }
+        floatingImageLayer.bounds = CGRect(x: 0, y: 0,
+                                           width: CGFloat(image.width) * coordinator.viewport.zoom,
+                                           height: CGFloat(image.height) * coordinator.viewport.zoom)
+        floatingImageLayer.position = documentPointToView(image.center, coordinator: coordinator)
+        floatingImageLayer.setAffineTransform(
+            CGAffineTransform(scaleX: image.scaleX, y: image.scaleY).rotated(by: -image.angle)
+        )
+        floatingImageLayer.isHidden = false
+
+        let map: (CGPoint) -> CGPoint = { [weak self, weak coordinator] point in
+            guard let self, let coordinator else { return .zero }
+            return self.documentPointToView(point, coordinator: coordinator)
+        }
+        floatingOutlineLayer.path = orientedOutlinePath(for: geometry, map: map)
+        floatingOutlineLayer.isHidden = false
+        floatingHandlesLayer.path = transformHandlePath(for: geometry, map: map)
+        floatingHandlesLayer.isHidden = false
+        floatingRotationLayer.path = rotationHandlePath(for: geometry, map: map)
+        floatingRotationLayer.isHidden = false
     }
 
     func updateCanvasContents() {
@@ -628,16 +729,31 @@ final class PixelCanvas: NSView {
         ) != nil
         var transformHandle: TransformHandle?
         var rotationHandle = false
-        if coordinator.model.tool == .transform {
-            let documentPoint = coordinator.documentPoint(point, in: self)
-            let tolerance = 8.0 / coordinator.viewport.zoom
-            rotationHandle = coordinator.model.hitRotationHandle(
-                x: documentPoint.x, y: documentPoint.y, tolerance: tolerance
-            )
+        let documentPoint = coordinator.documentPoint(point, in: self)
+        let tolerance = 8.0 / coordinator.viewport.zoom
+        let floatingGeometry = coordinator.model.floatingTransformGeometry
+        if let floatingGeometry {
+            // A floating import owns transform affordances even if its controls
+            // lie outside the export canvas or another tool was selected.
+            rotationHandle = hitRotationHandle(at: documentPoint, geometry: floatingGeometry, tolerance: tolerance)
             if !rotationHandle {
-                transformHandle = coordinator.model.hitTransformHandle(
-                    x: documentPoint.x, y: documentPoint.y, tolerance: tolerance
-                )
+                transformHandle = hitTransformHandle(at: documentPoint, geometry: floatingGeometry, tolerance: tolerance)
+            }
+            CanvasCursorPolicy.kind(
+                tool: .transform,
+                insideArtboard: insideArtboard,
+                transformHandle: transformHandle,
+                rotationHandle: rotationHandle,
+                floatingBody: floatingGeometry.contains(documentPoint),
+                panning: panning,
+                spaceDown: spaceDown
+            ).cursor.set()
+            return
+        }
+        if coordinator.model.tool == .transform, let geometry = ordinaryTransformGeometry(for: coordinator.model) {
+            rotationHandle = hitRotationHandle(at: documentPoint, geometry: geometry, tolerance: tolerance)
+            if !rotationHandle {
+                transformHandle = hitTransformHandle(at: documentPoint, geometry: geometry, tolerance: tolerance)
             }
         }
         CanvasCursorPolicy.kind(
@@ -648,6 +764,20 @@ final class PixelCanvas: NSView {
             panning: panning,
             spaceDown: spaceDown
         ).cursor.set()
+    }
+
+    private func hitTransformHandle(at point: CGPoint, geometry: TransformGeometry,
+                                    tolerance: CGFloat) -> TransformHandle? {
+        TransformHandle.allCases.first { handle in
+            hypot(point.x - geometry.point(for: handle).x,
+                  point.y - geometry.point(for: handle).y) <= tolerance
+        }
+    }
+
+    private func hitRotationHandle(at point: CGPoint, geometry: TransformGeometry,
+                                   tolerance: CGFloat) -> Bool {
+        hypot(point.x - geometry.rotationHandlePoint.x,
+              point.y - geometry.rotationHandlePoint.y) <= tolerance
     }
 
     // MARK: - Painting / panning gestures
@@ -670,6 +800,34 @@ final class PixelCanvas: NSView {
         }
         let point = convert(event.locationInWindow, from: nil)
         if let coordinator {
+            // Floating controls are tested before converting to a clamped
+            // integer pixel, because their source and handles may live outside
+            // the artboard. All of their gestures use continuous document space.
+            if let geometry = coordinator.model.floatingTransformGeometry {
+                let documentPoint = coordinator.documentPoint(point, in: self)
+                let tolerance = 8.0 / coordinator.viewport.zoom
+                transformStartPoint = point
+                didTransformDrag = false
+                if hitRotationHandle(at: documentPoint, geometry: geometry, tolerance: tolerance) {
+                    coordinator.model.beginFloatingRotation(x: documentPoint.x, y: documentPoint.y)
+                    rotationGesture = true
+                    transformGesture = false
+                    resizeGesture = false
+                } else if let handle = hitTransformHandle(at: documentPoint, geometry: geometry, tolerance: tolerance) {
+                    coordinator.model.beginFloatingResize(
+                        handle: handle, x: documentPoint.x, y: documentPoint.y,
+                        uniform: event.modifierFlags.contains(.shift)
+                    )
+                    resizeGesture = true
+                    transformGesture = false
+                    rotationGesture = false
+                } else if coordinator.model.beginFloatingMove(x: documentPoint.x, y: documentPoint.y) {
+                    transformGesture = true
+                    resizeGesture = false
+                    rotationGesture = false
+                }
+                return
+            }
             if coordinator.model.tool == .eyedropper {
                 eyedropperGesture = true
                 isLongPressActive = false
@@ -696,14 +854,15 @@ final class PixelCanvas: NSView {
                 let viewport = coordinator.viewport
                 let tolerance = 8.0 / viewport.zoom
                 let documentPoint = coordinator.documentPoint(point, in: self)
-                if coordinator.model.hitRotationHandle(x: documentPoint.x, y: documentPoint.y, tolerance: tolerance) {
+                let geometry = ordinaryTransformGeometry(for: coordinator.model)
+                if let geometry, hitRotationHandle(at: documentPoint, geometry: geometry, tolerance: tolerance) {
                     coordinator.model.beginRotation(x: documentPoint.x, y: documentPoint.y)
                     rotationGesture = true
                     transformGesture = false
                     resizeGesture = false
                     transformStartPoint = point
                     didTransformDrag = false
-                } else if let handle = coordinator.model.hitTransformHandle(x: CGFloat(pixel.x), y: CGFloat(pixel.y), tolerance: tolerance) {
+                } else if let geometry, let handle = hitTransformHandle(at: documentPoint, geometry: geometry, tolerance: tolerance) {
                     let uniform = coordinator.model.uniformTransform || event.modifierFlags.contains(.shift)
                     coordinator.model.beginResize(handle: handle, x: pixel.x, y: pixel.y, uniform: uniform)
                     resizeGesture = true
@@ -795,7 +954,11 @@ final class PixelCanvas: NSView {
         if rotationGesture {
             if let coordinator {
                 let documentPoint = coordinator.documentPoint(point, in: self)
-                coordinator.model.updateRotation(x: documentPoint.x, y: documentPoint.y)
+                if coordinator.model.floatingImport != nil {
+                    coordinator.model.updateFloatingRotation(x: documentPoint.x, y: documentPoint.y)
+                } else {
+                    coordinator.model.updateRotation(x: documentPoint.x, y: documentPoint.y)
+                }
                 if !didTransformDrag {
                     let dx = point.x - transformStartPoint.x
                     let dy = point.y - transformStartPoint.y
@@ -805,23 +968,43 @@ final class PixelCanvas: NSView {
             return
         }
         if transformGesture {
-            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
-                coordinator.model.updateTransform(x: pixel.x, y: pixel.y)
-                if !didTransformDrag {
-                    let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
-                        width: coordinator.model.width, height: coordinator.model.height, clamp: true)
-                    didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+            if let coordinator {
+                if coordinator.model.floatingImport != nil {
+                    let documentPoint = coordinator.documentPoint(point, in: self)
+                    coordinator.model.updateFloatingMove(x: documentPoint.x, y: documentPoint.y)
+                    if !didTransformDrag {
+                        let dx = point.x - transformStartPoint.x
+                        let dy = point.y - transformStartPoint.y
+                        didTransformDrag = hypot(dx, dy) > 2
+                    }
+                } else if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                    coordinator.model.updateTransform(x: pixel.x, y: pixel.y)
+                    if !didTransformDrag {
+                        let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
+                            width: coordinator.model.width, height: coordinator.model.height, clamp: true)
+                        didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+                    }
                 }
             }
             return
         }
         if resizeGesture {
-            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
-                coordinator.model.updateResize(x: pixel.x, y: pixel.y)
-                if !didTransformDrag {
-                    let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
-                        width: coordinator.model.width, height: coordinator.model.height, clamp: true)
-                    didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+            if let coordinator {
+                if coordinator.model.floatingImport != nil {
+                    let documentPoint = coordinator.documentPoint(point, in: self)
+                    coordinator.model.updateFloatingResize(x: documentPoint.x, y: documentPoint.y)
+                    if !didTransformDrag {
+                        let dx = point.x - transformStartPoint.x
+                        let dy = point.y - transformStartPoint.y
+                        didTransformDrag = hypot(dx, dy) > 2
+                    }
+                } else if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                    coordinator.model.updateResize(x: pixel.x, y: pixel.y)
+                    if !didTransformDrag {
+                        let start = coordinator.viewport.viewToDoc(transformStartPoint, viewSize: bounds.size,
+                            width: coordinator.model.width, height: coordinator.model.height, clamp: true)
+                        didTransformDrag = start.map { $0.x != pixel.x || $0.y != pixel.y } ?? false
+                    }
                 }
             }
             return
@@ -863,23 +1046,30 @@ final class PixelCanvas: NSView {
         }
         if transformGesture {
             transformGesture = false
-            // Only commit when the user actually dragged; a plain click keeps the
-            // current preview (rotation / repositioning) uncommitted.
-            if didTransformDrag {
+            // Floating imports remain editable after a move. Rasterization is
+            // explicit (Place/Enter), whereas an ordinary selection commits a
+            // completed drag into its document-backed source.
+            if didTransformDrag, coordinator?.model.floatingImport == nil {
                 coordinator?.model.commitTransform()
             }
             return
         }
         if rotationGesture {
             rotationGesture = false
-            coordinator?.model.endRotation(commit: didTransformDrag)
+            if coordinator?.model.floatingImport != nil {
+                coordinator?.model.endFloatingRotation(commit: didTransformDrag)
+            } else {
+                coordinator?.model.endRotation(commit: didTransformDrag)
+            }
             return
         }
         if resizeGesture {
             resizeGesture = false
-            coordinator?.model.endResize()
-            if didTransformDrag {
-                coordinator?.model.commitTransform()
+            if coordinator?.model.floatingImport == nil {
+                coordinator?.model.endResize()
+                if didTransformDrag {
+                    coordinator?.model.commitTransform()
+                }
             }
             return
         }
@@ -935,6 +1125,18 @@ final class PixelCanvas: NSView {
         guard let coordinator else { return }
         let viewport = coordinator.viewport
         let model = coordinator.model
+
+        if model.floatingImport != nil {
+            switch event.keyCode {
+            case 123: model.nudgeFloatingImport(dx: -1, dy: 0); return
+            case 124: model.nudgeFloatingImport(dx: 1, dy: 0); return
+            case 125: model.nudgeFloatingImport(dx: 0, dy: 1); return
+            case 126: model.nudgeFloatingImport(dx: 0, dy: -1); return
+            case 36: model.commitFloatingImport(); return
+            case 53: model.cancelFloatingImport(); return
+            default: break
+            }
+        }
 
         if model.tool == .transform {
             switch event.keyCode {

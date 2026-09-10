@@ -354,7 +354,7 @@ struct ContentView: View {
 
             Spacer()
 
-            if model.selectionRect != nil || model.transformRect != nil {
+            if model.floatingImport != nil || model.selectionRect != nil || model.transformRect != nil {
                 SelectionTransformToolbar(model: model)
                     .padding(.bottom, 16)
             }
