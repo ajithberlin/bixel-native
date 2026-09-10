@@ -420,9 +420,9 @@ private struct AssistantArtifactCard: View {
     @State private var applied = false
 
     private var isSpriteSheet: Bool {
-        artifact.atlas != nil || artifact.frameMeta != nil
-            || artifact.name.lowercased().contains("sheet")
-            || (artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0)
+        if artifact.atlas != nil { return true }
+        if let meta = artifact.frameMeta, meta.count > 1 { return true }
+        return artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0
     }
 
     private var provenanceLabel: String { artifact.isSource ? "Original" : "Prepared" }

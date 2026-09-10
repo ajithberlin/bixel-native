@@ -38,8 +38,8 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// Entitlement identifier in RevenueCat dashboard.
     static let entitlementID = "ad_free"
 
-    /// Expected identifier for the Lifetime one-time purchase product / package.
-    static let lifetimeProductID = "lifetime"
+    /// Product identifier configured in App Store Connect and RevenueCat.
+    static let lifetimeProductID = "bixel_ad_free"
 
     // MARK: - Published State
 
@@ -70,6 +70,9 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
     private var hasConfigured = false
 
+    /// Whether RevenueCat has been initialized for this build.
+    private(set) var isConfigured = false
+
     override private init() {
         super.init()
     }
@@ -96,6 +99,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
         Purchases.configure(withAPIKey: apiKey)
         Purchases.shared.delegate = self
         hasConfigured = true
+        isConfigured = true
 
         Task {
             await refreshCustomerInfo()
@@ -146,6 +150,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// Fetches the configured offerings and locates the lifetime package.
     func fetchOfferings() async {
         #if canImport(RevenueCat)
+        guard isConfigured else { return }
         do {
             let offerings = try await Purchases.shared.offerings()
             self.currentOffering = offerings.current
@@ -212,6 +217,11 @@ final class SubscriptionManager: NSObject, ObservableObject {
     @discardableResult
     func purchaseLifetime() async -> Bool {
         #if canImport(RevenueCat)
+        guard isConfigured else {
+            errorMessage = "In-App Purchases are not configured for this build."
+            return false
+        }
+
         if let package = lifetimePackage ?? currentOffering?.lifetime {
             return await purchase(package: package)
         }
@@ -236,6 +246,11 @@ final class SubscriptionManager: NSObject, ObservableObject {
     @discardableResult
     func restorePurchases() async -> Bool {
         #if canImport(RevenueCat)
+        guard isConfigured else {
+            errorMessage = "In-App Purchases are not configured for this build."
+            return false
+        }
+
         isRestoring = true
         errorMessage = nil
         statusNotice = nil

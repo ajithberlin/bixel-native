@@ -19,18 +19,23 @@ struct PaywallContainerView: View {
 
     var body: some View {
         #if canImport(RevenueCatUI)
-        PaywallView()
-            .onPurchaseCompleted { info in
-                if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
-                    dismiss()
+        if subscriptionManager.isConfigured {
+            PaywallView()
+                .onPurchaseCompleted { info in
+                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
+                        dismiss()
+                    }
                 }
-            }
-            .onRestoreCompleted { info in
-                if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
-                    dismiss()
+                .onRestoreCompleted { info in
+                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
+                        dismiss()
+                    }
                 }
-            }
-            .frame(minWidth: 500, minHeight: 620)
+                .frame(minWidth: 500, minHeight: 620)
+        } else {
+            nativeFallbackPaywall
+                .frame(width: 520, height: 620)
+        }
         #else
         nativeFallbackPaywall
             .frame(width: 520, height: 620)

@@ -201,11 +201,26 @@ impl SheetPlan {
         let fallback_h = out.iter().map(|f| f.height).max().unwrap_or(0);
         let (canvas_width, canvas_height) =
             atlas_canvas(value, image_w, image_h, frame_w.max(fallback_w), frame_h.max(fallback_h));
+        // Reconstruct tag ranges from per-frame tags so a normalized plan
+        // round-trips through the planner with its tags intact.
+        let mut tags: Vec<SheetTag> = Vec::new();
+        let mut i = 0usize;
+        while i < out.len() {
+            if let Some(name) = out[i].tag.clone() {
+                let from = i;
+                while i + 1 < out.len() && out[i + 1].tag.as_deref() == Some(name.as_str()) {
+                    i += 1;
+                }
+                let color = TAG_COLORS[tags.len() % TAG_COLORS.len()].to_string();
+                tags.push(SheetTag { name, from: from as u32, to: i as u32, color });
+            }
+            i += 1;
+        }
         let plan = SheetPlan {
             canvas_width,
             canvas_height,
             frames: out,
-            tags: Vec::new(),
+            tags,
             source: SheetSource::BixelExport,
         };
         plan.validate(image_w, image_h)?;
@@ -437,6 +452,23 @@ mod tests {
         assert_eq!(plan.source, SheetSource::Grid);
         assert_eq!(plan.frames.len(), 6);
         assert_eq!((plan.canvas_width, plan.canvas_height), (8, 8));
+    }
+
+    #[test]
+    fn normalized_plan_round_trips_with_tags() {
+        let value = json!({
+            "size": {"w": 32, "h": 16}, "cell": {"w": 16, "h": 16},
+            "actions": {
+                "idle": {"frames": [{"x":0,"y":0,"w":16,"h":16}, {"x":16,"y":0,"w":16,"h":16}]},
+                "walk": {"frames": [{"x":0,"y":0,"w":16,"h":16}]}
+            }
+        });
+        let plan = SheetPlan::from_json(&value, 32, 16).unwrap();
+        let reparsed = SheetPlan::from_json_str(&plan.to_json(), 32, 16).unwrap();
+        assert_eq!(reparsed.frames.len(), plan.frames.len());
+        assert_eq!(reparsed.tags.len(), plan.tags.len());
+        assert_eq!((reparsed.tags[0].name.as_str(), reparsed.tags[0].from, reparsed.tags[0].to), ("idle", 0, 1));
+        assert_eq!((reparsed.tags[1].name.as_str(), reparsed.tags[1].from, reparsed.tags[1].to), ("walk", 2, 2));
     }
 
     #[test]

@@ -213,7 +213,7 @@ Connect before submitting:
 |---|---|
 | Type | Non-Consumable |
 | Reference Name | `Bixel Lifetime Unlock` |
-| Product ID | `com.bixel.studio.lifetime` **(must match the RevenueCat offering)** |
+| Product ID | `bixel_ad_free` **(must match the RevenueCat product)** |
 | Price | Tier of your choice |
 | Display Name | `Lifetime Unlock` |
 | Description | `Unlock Bixel Studio forever and remove all ads.` |

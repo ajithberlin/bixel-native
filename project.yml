@@ -88,6 +88,7 @@ targets:
       - name: Build Rust engine
         script: |
           set -euo pipefail
+          "$SRCROOT/scripts/configure-revenuecat-info.sh"
           "$SRCROOT/scripts/build-rust.sh"
         basedOnDependencyAnalysis: false
         showEnvVars: false

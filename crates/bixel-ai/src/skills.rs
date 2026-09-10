@@ -1503,12 +1503,44 @@ fn prepare_generated(
         }
     );
     let frame_meta = vec![FrameMeta::new(100, None); frames.len()];
+    // Emit a Bixel-export manifest for grid sheets so the prepared sheet can be
+    // re-imported as an animation with the exact frame geometry.
+    let atlas = grid.and_then(|(cols, rows)| {
+        if frames.is_empty() || cols == 0 || rows == 0 {
+            return None;
+        }
+        let frame_w = prepared.width / cols;
+        let frame_h = prepared.height / rows;
+        if frame_w == 0 || frame_h == 0 {
+            return None;
+        }
+        let rects: Vec<serde_json::Value> = (0..frames.len())
+            .map(|i| {
+                serde_json::json!({
+                    "x": (i % cols) * frame_w,
+                    "y": (i / cols) * frame_h,
+                    "width": frame_w,
+                    "height": frame_h,
+                    "duration_ms": 100,
+                })
+            })
+            .collect();
+        Some(
+            serde_json::json!({
+                "frame_width": frame_w,
+                "frame_height": frame_h,
+                "columns": cols,
+                "frames": rects,
+            })
+            .to_string(),
+        )
+    });
     Ok(SkillOutput {
         text,
         image: Some(prepared),
         source_image: Some(source),
         frames,
         frame_meta,
-        atlas: None,
+        atlas,
     })
 }
