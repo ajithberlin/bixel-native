@@ -12,17 +12,19 @@ import UniformTypeIdentifiers
 import Combine
 
 enum MapTool: String, CaseIterable, Identifiable {
-    case stamp, eraser, bucket, rectFill, line, select, tilePicker, wand
+    case stamp, terrain, eraser, bucket, rectFill, line, select, move, tilePicker, wand
     var id: String { rawValue }
 
     var symbol: String {
         switch self {
         case .stamp: return "paintbrush.pointed"
+        case .terrain: return "mountain.2.fill"
         case .eraser: return "eraser"
         case .bucket: return "drop.fill"
         case .rectFill: return "square.on.square"
         case .line: return "line.diagonal"
         case .select: return "lasso"
+        case .move: return "arrow.up.and.down.and.arrow.left.and.right"
         case .tilePicker: return "eyedropper"
         case .wand: return "wand.and.rays"
         }
@@ -31,15 +33,20 @@ enum MapTool: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .stamp: return "Stamp"
+        case .terrain: return "Terrain"
         case .eraser: return "Eraser"
         case .bucket: return "Fill"
         case .rectFill: return "Rectangle"
         case .line: return "Line"
         case .select: return "Select"
+        case .move: return "Move"
         case .tilePicker: return "Pick tile"
         case .wand: return "Magic wand"
         }
     }
+
+    /// Tools surfaced in the map top bar (wand stays available by shortcut only).
+    static let toolbar: [MapTool] = [.stamp, .terrain, .eraser, .bucket, .rectFill, .line, .select, .move, .tilePicker]
 }
 
 /// A cell-aligned selection rectangle (inclusive corners → width/height ≥ 1).
@@ -93,7 +100,9 @@ final class TileMapModel: ObservableObject {
     @Published var hasPasteGhost = false
 
     /// Last pointer position in whole-map tile pixels (for ghost overlays).
-    @Published var hoverPixel: (x: Int, y: Int)?
+    /// Deliberately not `@Published`: hover changes are pushed straight to the
+    /// canvas overlay so mouse movement never triggers a SwiftUI body pass.
+    var hoverPixel: (x: Int, y: Int)?
 
     /// Tileset metadata + display images for the tileset panel.
     @Published var tilesetList: [MapTilesetInfo] = []
@@ -107,9 +116,10 @@ final class TileMapModel: ObservableObject {
     private(set) var canvasRevision = 0
     var onDocumentChanged: (() -> Void)?
 
-    private var refreshTimer: Timer?
     private var lastCell: (x: Int, y: Int)?
     private var strokeChanged = false
+    private var moveOrigin: (x: Int, y: Int)?
+    private var moveGrab: (x: Int, y: Int)?
 
     var width: Int { map.columns }
     var height: Int { map.rows }
@@ -145,25 +155,11 @@ final class TileMapModel: ObservableObject {
         canvasChanged.send()
     }
 
-    private func scheduleCanvasRefresh() {
-        guard refreshTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            self.refreshTimer = nil
-            self.notifyCanvasChanged()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        refreshTimer = timer
-    }
-
     private func flushCanvasRefreshNow() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
         notifyCanvasChanged()
     }
 
     func commitChange() {
-        scheduleCanvasRefresh()
         objectWillChange.send()
         onDocumentChanged?()
         flushCanvasRefreshNow()
@@ -366,6 +362,8 @@ final class TileMapModel: ObservableObject {
         case .select:
             selection = MapCellRect(x: x, y: y, width: 1, height: 1)
             hasPasteGhost = false
+        case .move:
+            beginMove(x: x, y: y)
         case .tilePicker:
             pickTile(x: x, y: y)
         case .wand:
@@ -388,6 +386,9 @@ final class TileMapModel: ObservableObject {
             guard let start = selection else { return }
             let rect = MapCellRect.between((start.x, start.y), (x, y))
             selection = rect
+            return
+        case .move:
+            continueMove(x: x, y: y)
             return
         case .tilePicker:
             return
@@ -421,9 +422,69 @@ final class TileMapModel: ObservableObject {
                 }
             }
         }
+        if tool == .move {
+            finishMove(x: x, y: y)
+        }
         finishObjectTool()
         lastCell = nil
         objectWillChange.send()
+    }
+
+    // MARK: - Move tool
+
+    /// Grab the current selection (or start a new one) to reposition a block.
+    private func beginMove(x: Int, y: Int) {
+        if isObjectActive {
+            beginObjectTool(x: x, y: y)
+            return
+        }
+        guard isActiveLayerTile else { return }
+        if let rect = selection,
+           x >= rect.x, x < rect.x + rect.width,
+           y >= rect.y, y < rect.y + rect.height {
+            let pattern = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y, w: rect.width, h: rect.height)
+            guard !pattern.isEmpty else { return }
+            map.snapshot()
+            map.paintRect(layer: activeLayer, x0: rect.x, y0: rect.y,
+                          x1: rect.x + rect.width - 1, y1: rect.y + rect.height - 1, gid: 0)
+            clipboard = pattern
+            brush = MapBrush(pattern: pattern)
+            hasPasteGhost = true
+            moveOrigin = (rect.x, rect.y)
+            moveGrab = (x, y)
+            // Reflect the lifted block immediately so the source empties as the
+            // ghost starts following the pointer.
+            commitChange()
+        } else {
+            selection = MapCellRect(x: x, y: y, width: 1, height: 1)
+            moveOrigin = nil
+            moveGrab = nil
+        }
+    }
+
+    private func continueMove(x: Int, y: Int) {
+        if hasPasteGhost, let origin = moveOrigin, let grab = moveGrab {
+            let anchorX = origin.x + (x - grab.x)
+            let anchorY = origin.y + (y - grab.y)
+            let width = clipboard?.width ?? 1
+            let height = clipboard?.height ?? 1
+            selection = MapCellRect(x: anchorX, y: anchorY, width: width, height: height)
+            hoverPixel = (anchorX * map.cellWidth, anchorY * map.cellHeight)
+        } else if let start = selection {
+            selection = MapCellRect.between((start.x, start.y), (x, y))
+        }
+    }
+
+    private func finishMove(x: Int, y: Int) {
+        defer { moveOrigin = nil; moveGrab = nil }
+        guard hasPasteGhost, let origin = moveOrigin, let grab = moveGrab else { return }
+        let anchorX = origin.x + (x - grab.x)
+        let anchorY = origin.y + (y - grab.y)
+        map.stamp(layer: activeLayer, x: anchorX, y: anchorY, pattern: brush.pattern, skipEmpty: false)
+        hasPasteGhost = false
+        selection = MapCellRect(x: anchorX, y: anchorY,
+                                width: brush.pattern.width, height: brush.pattern.height)
+        commitChange()
     }
 
     func eraseSelection() {
@@ -449,7 +510,7 @@ final class TileMapModel: ObservableObject {
         if pattern.width == 1 && pattern.height == 1 {
             let gid = pattern.tiles.first ?? 0
             map.setTile(layer: activeLayer, x: x, y: y, gid: gid)
-            if autotileEnabled, let ts = brush.tilesetIndex, gid != 0 {
+            if (autotileEnabled || tool == .terrain), let ts = brush.tilesetIndex, gid != 0 {
                 _ = map.autotile(layer: activeLayer, tileset: ts, x: x, y: y, w: 1, h: 1)
             }
             return true

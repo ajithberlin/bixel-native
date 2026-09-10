@@ -312,8 +312,9 @@ final class MapCanvas: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let pixels = model.compositeRGBA()
-        compositeLayer.contents = makeCGImage(pixels: pixels, width: model.map.pixelWidth, height: model.map.pixelHeight)
+        // Reuse the revision-cached CGImage (shared with the minimap) instead of
+        // re-compositing and re-wrapping the whole map on every stroke.
+        compositeLayer.contents = model.compositeCGImage()
         lastDrawnRevision = revision
         didDrawContent = true
         CATransaction.commit()
@@ -407,14 +408,40 @@ final class MapCanvas: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
         let point = convert(event.locationInWindow, from: nil)
+        refreshCursor(at: point)
         updateHover(point)
     }
 
     override func mouseExited(with event: NSEvent) {
         coordinator?.hover(at: nil)
         updateOverlays()
+        NSCursor.arrow.set()
+    }
+
+    /// Tool- and location-aware cursor: hand over the artboard for Move, arrow
+    /// outside it, crosshair for paint/pick tools, closed hand while dragging.
+    private func refreshCursor(at point: CGPoint?) {
+        if panning { NSCursor.closedHand.set(); return }
+        if spaceDown { NSCursor.openHand.set(); return }
+        guard let coordinator else { NSCursor.arrow.set(); return }
+        let model = coordinator.model
+        let overArtboard: Bool
+        if let point {
+            overArtboard = coordinator.viewport.viewToDoc(point, viewSize: bounds.size,
+                                                          width: model.map.pixelWidth,
+                                                          height: model.map.pixelHeight) != nil
+        } else {
+            overArtboard = false
+        }
+        let cursor: NSCursor
+        switch model.tool {
+        case .move:
+            cursor = overArtboard ? .openHand : .arrow
+        case .select, .tilePicker, .wand, .stamp, .terrain, .eraser, .bucket, .rectFill, .line:
+            cursor = overArtboard ? .crosshair : .arrow
+        }
+        cursor.set()
     }
 
     private func updateHover(_ point: CGPoint) {
@@ -438,12 +465,13 @@ final class MapCanvas: NSView {
         }
         let point = convert(event.locationInWindow, from: nil)
         let shift = event.modifierFlags.contains(.shift)
-        if shift, let tool = coordinator?.model.tool, tool == .stamp || tool == .eraser || tool == .rectFill || tool == .line {
+        if shift, let tool = coordinator?.model.tool, tool == .stamp || tool == .terrain || tool == .eraser || tool == .rectFill || tool == .line {
             lineGesture = true
             lineDragged = false
             lineStart = point
             return
         }
+        if coordinator?.model.tool == .move { NSCursor.closedHand.set() }
         coordinator?.begin(at: point, in: self)
     }
 
@@ -459,13 +487,14 @@ final class MapCanvas: NSView {
             updateHover(point)
             return
         }
+        if coordinator?.model.tool == .move { NSCursor.closedHand.set() }
         coordinator?.drag(at: point, in: self)
     }
 
     override func mouseUp(with event: NSEvent) {
         if panning {
             panning = false
-            (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
+            refreshCursor(at: convert(event.locationInWindow, from: nil))
             return
         }
         if lineGesture {
@@ -475,12 +504,14 @@ final class MapCanvas: NSView {
             return
         }
         coordinator?.end(at: convert(event.locationInWindow, from: nil), in: self)
+        refreshCursor(at: convert(event.locationInWindow, from: nil))
     }
 
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return }
         panning = true
         lastPanPoint = convert(event.locationInWindow, from: nil)
+        NSCursor.closedHand.set()
     }
 
     override func otherMouseDragged(with event: NSEvent) {
@@ -491,7 +522,10 @@ final class MapCanvas: NSView {
     }
 
     override func otherMouseUp(with event: NSEvent) {
-        if event.buttonNumber == 2 { panning = false }
+        if event.buttonNumber == 2 {
+            panning = false
+            refreshCursor(at: convert(event.locationInWindow, from: nil))
+        }
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -544,11 +578,13 @@ final class MapCanvas: NSView {
 
         switch event.charactersIgnoringModifiers {
         case "p": model.tool = .stamp
+        case "t": model.tool = .terrain
         case "e": model.tool = .eraser
         case "g": model.tool = .bucket
         case "f": model.tool = .rectFill
         case "l": model.tool = .line
         case "v": model.tool = .select
+        case "m": model.tool = .move
         case "i": model.tool = .tilePicker
         case "w": model.tool = .wand
         case "x": model.flipBrushH()
@@ -576,7 +612,7 @@ final class MapCanvas: NSView {
         if event.keyCode == 49 {
             spaceDown = false
             panning = false
-            NSCursor.crosshair.set()
+            refreshCursor(at: convert(event.locationInWindow, from: nil))
         } else {
             super.keyUp(with: event)
         }
@@ -598,7 +634,7 @@ extension TileMapModel {
         case .rectFill:
             changed = map.paintRect(layer: activeLayer, x0: start.x, y0: start.y,
                                     x1: end.x, y1: end.y, gid: brush.pattern.tiles.first ?? 0) > 0
-        case .stamp:
+        case .stamp, .terrain:
             if !brush.pattern.isEmpty {
                 changed = paintStroke(from: start, to: end)
             } else {

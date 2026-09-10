@@ -451,9 +451,71 @@ struct MapTilePattern {
 
     init() {}
 
-    /// Flip the pattern horizontally in place.
+    // MARK: Orientation-aware transforms
+    //
+    // Flipping/rotating a multi-tile stamp must transform the *whole block*:
+    // the tiles change position AND each tile's own orientation flags are
+    // updated so the artwork mirrors/rotates as one image (matching Tiled).
+
+    private static let flagBits: UInt32 = GIDFlag.horizontal | GIDFlag.vertical | GIDFlag.diagonal
+    private static let gidMask: UInt32 = ~flagBits
+
+    /// A 2×2 signed permutation acting on pixel coordinates.
+    private typealias Matrix = (Int, Int, Int, Int)
+
+    /// Every Tiled orientation as `(flags, matrix)`; flags are applied
+    /// diagonal → horizontal → vertical (the engine's render order).
+    private static let orientations: [(flags: UInt32, matrix: Matrix)] = {
+        let identity: Matrix = (1, 0, 0, 1)
+        let diagonal: Matrix = (0, 1, 1, 0)
+        let horizontal: Matrix = (-1, 0, 0, 1)
+        let vertical: Matrix = (1, 0, 0, -1)
+        func multiply(_ r: Matrix, _ m: Matrix) -> Matrix {
+            (r.0 * m.0 + r.1 * m.2, r.0 * m.1 + r.1 * m.3,
+             r.2 * m.0 + r.3 * m.2, r.2 * m.1 + r.3 * m.3)
+        }
+        var table: [(flags: UInt32, matrix: Matrix)] = []
+        for d in 0..<2 {
+            for h in 0..<2 {
+                for v in 0..<2 {
+                    var m = identity
+                    if d == 1 { m = multiply(diagonal, m) }
+                    if h == 1 { m = multiply(horizontal, m) }
+                    if v == 1 { m = multiply(vertical, m) }
+                    var flags: UInt32 = 0
+                    if d == 1 { flags |= GIDFlag.diagonal }
+                    if h == 1 { flags |= GIDFlag.horizontal }
+                    if v == 1 { flags |= GIDFlag.vertical }
+                    table.append((flags, m))
+                }
+            }
+        }
+        return table
+    }()
+
+    /// Apply an additional block-level transform to one GID's orientation.
+    private static func oriented(_ gid: UInt32, by transform: Matrix) -> UInt32 {
+        let base = gid & gidMask
+        let flags = gid & flagBits
+        guard let current = orientations.first(where: { $0.flags == flags }) else { return gid }
+        let m = (
+            transform.0 * current.matrix.0 + transform.1 * current.matrix.2,
+            transform.0 * current.matrix.1 + transform.1 * current.matrix.3,
+            transform.2 * current.matrix.0 + transform.3 * current.matrix.2,
+            transform.2 * current.matrix.1 + transform.3 * current.matrix.3
+        )
+        guard let updated = orientations.first(where: { $0.matrix == m }) else { return gid }
+        return base | updated.flags
+    }
+
+    private mutating func orientAll(_ transform: Matrix) {
+        for i in tiles.indices { tiles[i] = Self.oriented(tiles[i], by: transform) }
+    }
+
+    /// Flip the whole pattern horizontally (mirror positions + tile artwork).
     mutating func flipH() {
-        guard width > 0 else { return }
+        guard width > 0, height > 0 else { return }
+        orientAll((-1, 0, 0, 1))
         for y in 0..<height {
             for x in 0..<(width / 2) {
                 let a = y * width + x
@@ -463,9 +525,10 @@ struct MapTilePattern {
         }
     }
 
-    /// Flip the pattern vertically in place.
+    /// Flip the whole pattern vertically (mirror positions + tile artwork).
     mutating func flipV() {
-        guard height > 0 else { return }
+        guard width > 0, height > 0 else { return }
+        orientAll((1, 0, 0, -1))
         for x in 0..<width {
             for y in 0..<(height / 2) {
                 let a = y * width + x
@@ -475,9 +538,10 @@ struct MapTilePattern {
         }
     }
 
-    /// Rotate clockwise in place.
+    /// Rotate the whole pattern clockwise (rotate positions + tile artwork).
     mutating func rotateCW() {
         guard width > 0, height > 0 else { return }
+        orientAll((0, -1, 1, 0))
         var out = [UInt32](repeating: 0, count: width * height)
         let (w, h) = (width, height)
         for y in 0..<h {
@@ -489,9 +553,10 @@ struct MapTilePattern {
         swap(&width, &height)
     }
 
-    /// Rotate counter-clockwise in place.
+    /// Rotate the whole pattern counter-clockwise (rotate positions + artwork).
     mutating func rotateCCW() {
         guard width > 0, height > 0 else { return }
+        orientAll((0, 1, -1, 0))
         var out = [UInt32](repeating: 0, count: width * height)
         let (w, h) = (width, height)
         for y in 0..<h {

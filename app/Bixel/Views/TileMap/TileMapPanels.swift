@@ -441,7 +441,7 @@ struct TilesetPanel: View {
                         ForEach(0..<16, id: \.self) { mask in
                             let local = slots[mask]
                             Button {
-                                if let local {
+                                if local != nil {
                                     model.setTilesetAutotile(tileset: ts.index, mask: mask, local: nil)
                                 } else {
                                     autotileSlotToAssign = autotileSlotToAssign == mask ? nil : mask

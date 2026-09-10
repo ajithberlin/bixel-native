@@ -200,14 +200,9 @@ struct TopBar: View {
 
     private func mapRightCluster(_ mapModel: TileMapModel) -> some View {
         HStack(spacing: 10) {
-            mapTool(mapModel, .stamp, "paintbrush.pointed", "Stamp (P)")
-            mapTool(mapModel, .eraser, "eraser", "Eraser (E)")
-            mapTool(mapModel, .bucket, "drop.fill", "Fill (G)")
-            mapTool(mapModel, .rectFill, "rectangle", "Rectangle fill (F)")
-            mapTool(mapModel, .line, "line.diagonal", "Line (L)")
-            mapTool(mapModel, .select, "lasso", "Select (V)")
-            mapTool(mapModel, .tilePicker, "eyedropper", "Pick tile (I)")
-            mapTool(mapModel, .wand, "wand.and.rays", "Magic wand (W)")
+            ForEach(MapTool.toolbar) { tool in
+                mapTool(mapModel, tool, tool.symbol, "\(tool.label) (\(shortcut(for: tool)))")
+            }
 
             Divider().frame(height: 20).overlay(StudioTheme.hairlineStrong)
 
@@ -216,6 +211,21 @@ struct TopBar: View {
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
+        }
+    }
+
+    private func shortcut(for tool: MapTool) -> String {
+        switch tool {
+        case .stamp: return "P"
+        case .terrain: return "T"
+        case .eraser: return "E"
+        case .bucket: return "G"
+        case .rectFill: return "F"
+        case .line: return "L"
+        case .select: return "V"
+        case .move: return "M"
+        case .tilePicker: return "I"
+        case .wand: return "W"
         }
     }
 
