@@ -59,22 +59,25 @@ targets:
         # The Rust build phase needs to read/write target/, generated/ and the
         # cargo/rustup homes, which the user-script sandbox blocks.
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGNING_REQUIRED: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
+          CODE_SIGNING_REQUIRED: NO
         # App Store archives require the sandbox. Debug/dev builds stay
         # unsandboxed so the Rust build phase and local project access work.
         Release:
+          CODE_SIGNING_REQUIRED: YES
           CODE_SIGN_ENTITLEMENTS: app/Bixel/Bixel-AppStore.entitlements
     info:
       path: app/Bixel/Info.plist
       properties:
         CFBundleName: Bixel
         CFBundleDisplayName: Bixel Studio
-        CFBundleShortVersionString: "1.0.0"
+        CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
+        LSApplicationCategoryType: public.app-category.graphics-design
         NSHighResolutionCapable: true
         ITSAppUsesNonExemptEncryption: false
         GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"

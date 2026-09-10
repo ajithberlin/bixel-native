@@ -319,6 +319,7 @@ SIGN_ARGS=(
   "PRODUCT_BUNDLE_IDENTIFIER=$APPSTORE_BUNDLE_ID"
   "CODE_SIGN_ENTITLEMENTS=$ENTITLEMENTS_PATH"
   "CODE_SIGN_STYLE=$([[ "$APPSTORE_SIGNING_STYLE" == "manual" ]] && echo Manual || echo Automatic)"
+  "CODE_SIGNING_REQUIRED=YES"
 )
 
 if [[ "$APPSTORE_SIGNING_STYLE" == "manual" ]]; then
@@ -326,8 +327,6 @@ if [[ "$APPSTORE_SIGNING_STYLE" == "manual" ]]; then
     "CODE_SIGN_IDENTITY=$APPSTORE_CODE_SIGN_IDENTITY"
     "PROVISIONING_PROFILE_SPECIFIER=$APPSTORE_PROVISIONING_PROFILE"
   )
-else
-  SIGN_ARGS+=("CODE_SIGN_IDENTITY=Apple Distribution")
 fi
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
@@ -349,6 +348,14 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
 fi
 
 [[ -d "$ARCHIVE_PATH" ]] || die "Archive not found at $ARCHIVE_PATH (run without --skip-build)."
+
+APP_PATH="$ARCHIVE_PATH/Products/Applications/Bixel.app"
+if [[ -d "$APP_PATH" ]]; then
+  SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
+  if [[ "$SIGNATURE_DETAILS" == *"Signature=adhoc"* ]]; then
+    die "Archive is ad-hoc signed. Install an Apple Distribution certificate or sign into Xcode and enable automatic signing before publishing."
+  fi
+fi
 
 if [[ "$ARCHIVE_ONLY" -eq 1 ]]; then
   log "Archive only — done: $ARCHIVE_PATH"
