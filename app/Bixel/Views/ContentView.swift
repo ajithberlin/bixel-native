@@ -284,9 +284,9 @@ struct ContentView: View {
     private func mapWorkspace(_ mapModel: TileMapModel) -> some View {
         ZStack {
             mapCanvas(mapModel)
-            mapLeftDock(mapModel)
+            mapPalette(mapModel)
             mapLibrary
-            mapRightPanels(mapModel)
+            mapRightLayers(mapModel)
             mapBottomOverlay(mapModel)
             mapTopChrome(mapModel)
             mapCommandSink(mapModel)
@@ -322,11 +322,17 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func mapLeftDock(_ mapModel: TileMapModel) -> some View {
-        HStack {
-            MapLeftDock(model: mapModel)
-                .padding(.leading, 14)
-            Spacer()
+    /// Left column: tool dock + an always-visible tileset palette.
+    private func mapPalette(_ mapModel: TileMapModel) -> some View {
+        HStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 12) {
+                MapLeftDock(model: mapModel)
+                if !showLibrary {
+                    TilesetPanel(store: projects, model: mapModel)
+                }
+            }
+            .padding(.leading, 14)
+            Spacer(minLength: 0)
         }
     }
 
@@ -346,20 +352,13 @@ struct ContentView: View {
         }
     }
 
-    private func mapRightPanels(_ mapModel: TileMapModel) -> some View {
+    private func mapRightLayers(_ mapModel: TileMapModel) -> some View {
         HStack(alignment: .top) {
             Spacer()
             VStack(alignment: .trailing, spacing: 14) {
                 Color.clear.frame(height: 52)
                 if showLayers {
                     MapLayersPanel(model: mapModel)
-                        .padding(.trailing, 16)
-                        .transition(.asymmetric(
-                            insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
-                            removal: .opacity
-                        ))
-                } else if showColor {
-                    TilesetPanel(store: projects, model: mapModel)
                         .padding(.trailing, 16)
                         .transition(.asymmetric(
                             insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),

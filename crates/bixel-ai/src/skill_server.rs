@@ -40,7 +40,8 @@ pub struct Artifact {
 /// Shared runtime state for the skill extension: the image model client, the
 /// per-request workspace, and a mailbox of produced artifacts.
 pub struct SkillRuntime {
-    pub image_gen: Option<Arc<ImageGen>>,
+    /// The image-role client; None while the image role is not ready.
+    pub image_gen: Mutex<Option<Arc<ImageGen>>>,
     pub workspace: Mutex<Option<PathBuf>>,
     pub artifacts: Mutex<Vec<Artifact>>,
 }
@@ -48,7 +49,7 @@ pub struct SkillRuntime {
 impl SkillRuntime {
     pub fn new(image_gen: Option<Arc<ImageGen>>) -> Self {
         SkillRuntime {
-            image_gen,
+            image_gen: Mutex::new(image_gen),
             workspace: Mutex::new(None),
             artifacts: Mutex::new(Vec::new()),
         }
@@ -140,8 +141,8 @@ impl SkillServer {
             params: p.params,
         };
 
-        let gen = runtime.image_gen.as_deref();
-        let output = Skills::run(gen, kind, input)
+        let gen = runtime.image_gen.lock().unwrap().clone();
+        let output = Skills::run(gen.as_deref(), kind, input)
             .map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
 
         let mut text = output.text.clone();

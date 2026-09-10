@@ -1,7 +1,5 @@
-//! AI settings loaded from the environment (`.env`), plus the env wiring that
-//! points the embedded goose agent at the OpenRouter provider.
-
-use std::path::Path;
+//! AI settings loaded from the environment (`.env`) — the lowest-precedence
+//! dev fallback beneath the UI/stored connection config (see `connection.rs`).
 
 /// Model routing + credentials for the OpenRouter gateway.
 #[derive(Debug, Clone, PartialEq)]
@@ -79,21 +77,6 @@ impl AiSettings {
             Some(host) => host.to_string(),
             None => base.to_string(),
         }
-    }
-
-    /// Apply goose's configuration through the process environment.
-    ///
-    /// goose's `Config` resolves values from the environment (uppercased keys),
-    /// so this is how the embedded agent is pointed at OpenRouter. `data_dir`
-    /// (via `GOOSE_PATH_ROOT`) isolates goose's config/state/session SQLite so
-    /// the host owns the location and no user `~/.config/goose` is touched.
-    pub fn apply_goose_env(&self, data_dir: &Path) {
-        std::env::set_var("GOOSE_PATH_ROOT", data_dir);
-        std::env::set_var("GOOSE_DISABLE_KEYRING", "1");
-        std::env::set_var("GOOSE_PROVIDER", "openrouter");
-        std::env::set_var("GOOSE_MODEL", &self.text_model);
-        std::env::set_var("OPENROUTER_API_KEY", &self.api_key);
-        std::env::set_var("OPENROUTER_HOST", self.openrouter_host());
     }
 }
 

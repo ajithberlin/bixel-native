@@ -1,6 +1,8 @@
-//! The embedded goose agent: builds a full `goose::agents::Agent`, wires the
-//! OpenRouter provider, registers the Bixel skill extension, and drives
-//! `Agent::reply` while mapping `AgentEvent`s to [`NativeEvent`]s for the FFI.
+//! The embedded goose agent: builds a full `goose::agents::Agent`, registers
+//! the Bixel skill extension, and drives `Agent::reply` while mapping
+//! `AgentEvent`s to [`NativeEvent`]s for the FFI. The chat provider comes from
+//! a cached [`ProviderHandle`] (see `connection.rs`) and is shared across
+//! sessions via `Agent::update_provider`.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,15 +11,14 @@ use std::sync::{Arc, Mutex};
 use futures::StreamExt;
 use goose::agents::types::SessionConfig;
 use goose::agents::{Agent, AgentConfig, AgentEvent, GoosePlatform};
-use goose::config::{Config, ExtensionConfig, GooseMode, PermissionManager};
+use goose::config::{ExtensionConfig, GooseMode, PermissionManager};
 use goose::conversation::message::{Message, MessageContent};
 use goose::session::session_manager::SessionType;
 use goose::session::SessionManager;
 use rmcp::model::ContentBlock;
 
-use crate::config::AiSettings;
+use crate::connection::{self, ConnectionConfig, ModelReadiness, ProviderHandle};
 use crate::error::AiError;
-use crate::image_gen::ImageGen;
 use crate::native_stream::{NativeEvent, NativeRequest};
 use crate::skill_server::{self, Artifact, SkillRuntime};
 
@@ -27,22 +28,15 @@ pub struct GooseAgent {
     agent: Agent,
     runtime: tokio::runtime::Runtime,
     session_id: Mutex<HashMap<String, String>>,
-    settings: AiSettings,
+    handle: Mutex<Option<Arc<ProviderHandle>>>,
 }
 
 impl GooseAgent {
-    pub fn new(settings: AiSettings) -> Result<Self, AiError> {
-        if !settings.has_key() {
-            return Err(AiError::Config(
-                "OPENROUTER_API_KEY is not set (see .env.example)".into(),
-            ));
-        }
-
-        // Isolate goose's config/session state under a host-owned temp dir and
-        // point it at OpenRouter via the environment.
-        let data_dir = std::env::temp_dir().join("bixel-goose");
-        settings.apply_goose_env(&data_dir);
-        std::fs::create_dir_all(&data_dir).map_err(|e| AiError::Provider(e.to_string()))?;
+    pub fn new() -> Result<Self, AiError> {
+        // Isolate goose's config/session/OAuth state under an app-owned root
+        // (never the user's ~/.config/goose) before Config::global() is first
+        // touched.
+        let data_dir = connection::ensure_goose_env()?;
 
         skill_server::register();
 
@@ -65,20 +59,61 @@ impl GooseAgent {
             GoosePlatform::GooseCli,
         ));
 
-        // Initialize the skill runtime with the image model client.
-        let image_gen = Arc::new(ImageGen::new(&settings));
-        skill_server::RUNTIME.get_or_init(|| Arc::new(SkillRuntime::new(Some(image_gen))));
+        skill_server::RUNTIME.get_or_init(|| Arc::new(SkillRuntime::new(None)));
 
         Ok(GooseAgent {
             agent,
             runtime,
             session_id: Mutex::new(HashMap::new()),
-            settings,
+            handle: Mutex::new(None),
         })
     }
 
-    pub fn settings(&self) -> &AiSettings {
-        &self.settings
+    /// The active provider connection, if any.
+    pub fn handle(&self) -> Option<Arc<ProviderHandle>> {
+        self.handle.lock().unwrap().clone()
+    }
+
+    /// The tokio runtime driving this agent (for other blocking goose calls).
+    pub fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
+    /// Current readiness of the three model roles (None = not connected).
+    pub fn readiness(&self) -> Option<ModelReadiness> {
+        self.handle().map(|h| h.readiness.clone())
+    }
+
+    /// The image-role client used by model-backed skills.
+    pub fn image_gen(&self) -> Option<Arc<crate::image_gen::ImageGen>> {
+        self.handle().and_then(|h| h.image_gen.clone())
+    }
+
+    /// Connect (or reconnect) with a new credential set. Builds and caches one
+    /// provider instance; sessions receive clones via `update_provider`.
+    /// Returns the three-model readiness gate.
+    pub fn connect(&self, cfg: ConnectionConfig) -> Result<ModelReadiness, AiError> {
+        let handle = connection::connect(&self.runtime, cfg)?;
+        let readiness = handle.readiness.clone();
+        if let Some(runtime) = skill_server::RUNTIME.get() {
+            *runtime.image_gen.lock().unwrap() = handle.image_gen.clone();
+        }
+        *self.handle.lock().unwrap() = Some(handle);
+        Ok(readiness)
+    }
+
+    /// Drop the cached provider and clear stored credentials.
+    pub fn disconnect(&self) -> Result<(), AiError> {
+        let provider = self
+            .handle()
+            .map(|h| h.config.provider)
+            .unwrap_or_default();
+        connection::disconnect(&self.runtime, provider)?;
+        *self.handle.lock().unwrap() = None;
+        if let Some(runtime) = skill_server::RUNTIME.get() {
+            *runtime.image_gen.lock().unwrap() = None;
+        }
+        Ok(())
     }
 
     /// Forget the current conversation so the next `chat_stream` starts a fresh
@@ -109,8 +144,11 @@ impl GooseAgent {
     }
 
     /// Enable the developer (file/shell) and bixel (pixel-art skills) extensions
-    /// and create the OpenRouter provider for the session.
+    /// and hand the session the cached provider with the configured text model.
     fn ensure_extensions_and_provider(&self, session_id: &str) -> Result<(), AiError> {
+        let handle = self
+            .handle()
+            .ok_or_else(|| AiError::Config("AI provider is not connected".into()))?;
         let res: Result<(), String> = self.runtime.block_on(async {
             self.agent
                 .add_extension(
@@ -141,16 +179,12 @@ impl GooseAgent {
                 .await
                 .map_err(|e| e.to_string())?;
 
-            let config = Config::global();
-            let provider_name = config.get_goose_provider().map_err(|e| e.to_string())?;
-            let model_name = config.get_goose_model().map_err(|e| e.to_string())?;
-            let model_config = goose::model_config::model_config_from_user_config(
-                &provider_name,
-                &model_name,
-            )
-            .map_err(|e| e.to_string())?;
             self.agent
-                .recreate_provider_for_session(session_id, &provider_name, model_config)
+                .update_provider(
+                    handle.provider.clone(),
+                    handle.text_model_config(),
+                    session_id,
+                )
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -186,8 +220,23 @@ impl GooseAgent {
             );
         }
 
-        let mut msg = Message::user().with_text(request.prompt.clone());
-        for attachment in &request.images {
+        // Route image attachments through the vision role when it is ready:
+        // the vision model describes them and the descriptions ride along as
+        // text, so the chat model never needs image input. Without vision, the
+        // raw images are attached to the chat model as before.
+        let mut prompt_text = request.prompt.clone();
+        let mut images = request.images.clone();
+        if !images.is_empty() {
+            if let Some(handle) = self.handle() {
+                if let Some(descriptions) = handle.describe_attachments(&images) {
+                    prompt_text.push_str(&descriptions);
+                    images = vec![];
+                }
+            }
+        }
+
+        let mut msg = Message::user().with_text(prompt_text);
+        for attachment in &images {
             msg = msg.with_image(attachment.data.clone(), "image/png".to_string());
         }
 
@@ -357,8 +406,7 @@ mod workspace_tests {
 
     #[test]
     fn conversations_reuse_only_their_own_workspace_session() {
-        let settings = AiSettings { api_key: "dummy-no-network".into(), ..Default::default() };
-        let agent = GooseAgent::new(settings).unwrap();
+        let agent = GooseAgent::new().unwrap();
         let base = std::env::temp_dir().join(format!("bixel-context-{}", std::process::id()));
         let a = base.join("project-a/chat-a").to_string_lossy().into_owned();
         let b = base.join("project-b/chat-a").to_string_lossy().into_owned();

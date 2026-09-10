@@ -3,7 +3,6 @@
 
 use base64::Engine as _;
 
-use crate::config::AiSettings;
 use crate::error::AiError;
 use crate::image::{encode_png, decode_any, RgbaImage};
 
@@ -15,12 +14,16 @@ pub struct ImageGen {
 }
 
 impl ImageGen {
-    pub fn new(settings: &AiSettings) -> Self {
+    pub fn new(base_url: &str, api_key: &str, image_model: &str) -> Self {
         ImageGen {
-            base_url: settings.base_url.trim_end_matches('/').to_string(),
-            api_key: settings.api_key.clone(),
-            image_model: settings.image_model.clone(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key: api_key.to_string(),
+            image_model: image_model.to_string(),
         }
+    }
+
+    pub fn model(&self) -> &str {
+        &self.image_model
     }
 
     /// Generate an image (optionally conditioned on an input image for edits).

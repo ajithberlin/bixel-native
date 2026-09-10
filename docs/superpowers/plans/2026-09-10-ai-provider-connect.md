@@ -40,14 +40,14 @@
 
 ## Tasks
 
-- [ ] `bixel-ai`: introduce `ConnectionConfig` + `ProviderHandle` (cached `Arc<dyn Provider>` + `ImageGen` + readiness); set `GOOSE_PATH_ROOT` to app-support dir before `Config::global()`; delete `apply_goose_env`'s provider/key env writes.
-- [ ] `bixel-ai`: connect flow — `connect(cfg)` builds/caches provider via `providers::create` (+ `set_secret` for OpenRouter key, + `configure_oauth()` for Codex), validates all three roles, returns `ModelReadiness`; `disconnect` clears secrets + cache.
-- [ ] `bixel-ai`: switch sessions to `agent.update_provider(cached, ModelConfig::new(text_model), …)`; remove `get_goose_provider/model` + `recreate_provider_for_session` path.
-- [ ] `bixel-ai`: implement real vision usage (direct vision call helper) or route image attachments through it; skill failures name the missing role.
-- [ ] `bixel-ffi`: replace `OnceLock` engine with reconfigurable holder; add write-only `bixel_ai_connect(json)`, `bixel_ai_disconnect`, `bixel_ai_connection_status` (masked, per-role readiness), `bixel_ai_start_codex_oauth`. Regenerate `generated/bixel.h`.
-- [ ] Swift: AI settings UI — provider picker (OpenRouter key paste / "Sign in with ChatGPT"), three model fields with defaults, per-role ready indicators; `AIService` + `AssistantSession` gating on readiness; fix `AIPanel.swift:208` copy.
-- [ ] Keep `.env` as dev fallback (precedence: UI/stored config > env > built-in defaults); update `.env.example`, `README.md`, `AGENTS.md`.
-- [ ] Tests: config precedence, readiness logic (no network), FFI JSON shapes + never-returns-secret invariant, connect/disconnect re-entry. Then `cargo test -p bixel-ai`, `scripts/build-rust.sh`, Xcode build.
+- [x] `bixel-ai`: introduce `ConnectionConfig` + `ProviderHandle` (cached `Arc<dyn Provider>` + `ImageGen` + readiness); set `GOOSE_PATH_ROOT` to app-support dir before `Config::global()`; delete `apply_goose_env`'s provider/key env writes.
+- [x] `bixel-ai`: connect flow — `connect(cfg)` builds/caches provider via `providers::create` (+ `set_secret` for OpenRouter key, + `configure_oauth()` for Codex), validates all three roles, returns `ModelReadiness`; `disconnect` clears secrets + cache.
+- [x] `bixel-ai`: switch sessions to `agent.update_provider(cached, ModelConfig::new(text_model), …)`; remove `get_goose_provider/model` + `recreate_provider_for_session` path.
+- [x] `bixel-ai`: implement real vision usage (direct vision call helper) or route image attachments through it; skill failures name the missing role.
+- [x] `bixel-ffi`: replace `OnceLock` engine with reconfigurable holder; add write-only `bixel_ai_connect(json)`, `bixel_ai_disconnect`, `bixel_ai_connection_status` (masked, per-role readiness), `bixel_ai_start_codex_oauth`. Regenerate `generated/bixel.h`.
+- [x] Swift: AI settings UI — provider picker (OpenRouter key paste / "Sign in with ChatGPT"), three model fields with defaults, per-role ready indicators; `AIService` + `AssistantSession` gating on readiness; fix `AIPanel.swift:208` copy.
+- [x] Keep `.env` as dev fallback (precedence: UI/stored config > env > built-in defaults); update `.env.example`, `README.md`, `AGENTS.md`.
+- [x] Tests: config precedence, readiness logic (no network), FFI JSON shapes + never-returns-secret invariant, connect/disconnect re-entry. Then `cargo test -p bixel-ai`, `scripts/build-rust.sh`, Xcode build.
 
 ## Decisions
 

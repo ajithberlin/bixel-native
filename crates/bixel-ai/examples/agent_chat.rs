@@ -1,10 +1,15 @@
 use bixel_ai::native_stream::{NativeEvent, NativeRequest};
-use bixel_ai::{AiSettings, GooseAgent};
+use bixel_ai::{ConnectionConfig, GooseAgent};
 
 fn main() {
-    let settings = AiSettings::from_env_file();
-    println!("models: text={} image={}", settings.text_model, settings.image_model);
-    let agent = GooseAgent::new(settings).expect("failed to build goose agent");
+    let cfg = ConnectionConfig::from_env();
+    println!("models: text={} image={}", cfg.models.text, cfg.models.image);
+    let agent = GooseAgent::new().expect("failed to build goose agent");
+    let readiness = agent
+        .connect(cfg)
+        .expect("connect failed (set OPENROUTER_API_KEY or use the UI)");
+    println!("readiness: text={} vision={} image={}",
+        readiness.text.ready, readiness.vision.ready, readiness.image.ready);
 
     let base = std::env::temp_dir().join("bixel-headless-test");
     let request = NativeRequest {

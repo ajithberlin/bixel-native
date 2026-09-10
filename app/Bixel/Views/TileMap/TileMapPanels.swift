@@ -120,101 +120,33 @@ struct TilesetPanel: View {
     @State private var showAddSheet = false
     @State private var pendingAdd: AddTilesetSource?
     @State private var autotileEditing = false
+    @State private var autotileSlotToAssign: Int?
+    @State private var activeTileset = 0
+    @State private var showAssetChooser = false
+
+    private var tilesetList: [MapTilesetInfo] { model.tilesetList }
 
     private var tileset: MapTilesetInfo? {
-        model.tilesetList.first
+        guard activeTileset < tilesetList.count else { return nil }
+        return tilesetList[activeTileset]
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Tileset")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
-                    .foregroundColor(Color.white.opacity(0.92))
-                Spacer()
-                if model.tilesetList.count > 1 {
-                    Text("\(model.tilesetList.count)")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundColor(.secondary)
-                }
-                Button { pickImage() } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.plain)
-                .help("Add tileset image")
-                if let ts = tileset {
-                    Button { model.removeTileset(ts.index) } label: {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12))
-                            .foregroundColor(.white.opacity(0.5))
-                            .frame(width: 24, height: 24)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Remove tileset")
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-
-            if let cg = tileset.flatMap({ model.tilesetDisplayImage($0.index) }), let ts = tileset {
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(spacing: 10) {
-                        TileSheetView(
-                            cgImage: cg,
-                            tileset: ts,
-                            onPickSingle: { local in model.armTile(tilesetIndex: ts.index, localTile: local) },
-                            onPickRegion: { cols, rows in model.armRegion(tilesetIndex: ts.index, cols: cols, rows: rows) },
-                            assignSlot: autotileEditing ? autotileSlotToAssign : nil,
-                            onAssign: { local in
-                                if let mask = autotileSlotToAssign {
-                                    model.setTilesetAutotile(tileset: ts.index, mask: mask, local: Int32(local))
-                                    model.autotileEnabled = true
-                                    autotileEditing = false
-                                }
-                            }
-                        )
-                        .frame(maxWidth: .infinity)
-                        .background(CheckerboardView(cell: 5))
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
-                        .help("Click to arm a tile; drag to arm a multi-tile brush")
-
-                        Text("\(ts.imageWidth) × \(ts.imageHeight) px · \(ts.tileWidth)×\(ts.tileHeight) tiles")
-                            .font(.system(size: 9, weight: .regular))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 12)
-                }
-                .frame(maxHeight: 340)
-
-                // Autotile slot editor
-                autotileSection(ts: ts)
+            header
+            if tilesetList.count > 1 { tilesetTabs }
+            if let ts = tileset, let cg = model.tilesetDisplayImage(ts.index) {
+                tilesetContent(ts: ts, cg: cg)
             } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.system(size: 30, weight: .light))
-                        .foregroundColor(.white.opacity(0.25))
-                    Text("Add a tileset PNG to start painting.")
-                        .font(.system(size: 11))
-                        .foregroundColor(StudioTheme.textSecondary)
-                    Button {
-                        pickImage()
-                    } label: {
-                        Label("Choose image…", systemImage: "photo")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 26)
+                emptyState
             }
+            dividerAndHint
         }
-        .frame(width: 236)
+        .frame(width: 244)
         .procreatePanel(radius: 16)
+        .onChange(of: tilesetList.count) { _ in
+            if activeTileset >= tilesetList.count { activeTileset = max(0, tilesetList.count - 1) }
+        }
         .sheet(isPresented: $showAddSheet) {
             if let pending = pendingAdd {
                 AddTilesetSheet(
@@ -227,12 +159,226 @@ struct TilesetPanel: View {
                         showAddSheet = false
                     }
                 )
-                .frame(width: 420, height: 440)
+                .frame(width: 440, height: 460)
             }
+        }
+        .sheet(isPresented: $showAssetChooser) {
+            ProjectTilesetPicker(store: store) { name, data in
+                beginAdd(name: name, data: data)
+            }
+            .frame(width: 360, height: 420)
         }
     }
 
-    @State private var autotileSlotToAssign: Int?
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 6) {
+            Text("Tilesets")
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundColor(Color.white.opacity(0.92))
+            Text("\(tilesetList.count)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+            Spacer()
+
+            if let ts = tileset {
+                Button {
+                    let removing = ts.index
+                    activeTileset = 0
+                    model.removeTileset(removing)
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.55))
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .help("Remove the selected tileset")
+            }
+
+            Menu {
+                Button {
+                    pickImage()
+                } label: {
+                    Label("Image file…", systemImage: "folder")
+                }
+                Button {
+                    showAssetChooser = true
+                } label: {
+                    Label("From project assets…", systemImage: "square.stack")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(width: 26, height: 26)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.08)))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Add a tileset (image file or an existing project asset)")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var tilesetTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                ForEach(Array(tilesetList.enumerated()), id: \.element.index) { pos, ts in
+                    Button {
+                        activeTileset = pos
+                    } label: {
+                        Text(ts.name.isEmpty ? "Tileset \(pos + 1)" : ts.name)
+                            .font(.system(size: 10, weight: .medium))
+                            .lineLimit(1)
+                            .foregroundColor(pos == activeTileset ? .white : Color.white.opacity(0.6))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule().fill(pos == activeTileset ? StudioTheme.accent : Color.white.opacity(0.08))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+        }
+    }
+
+    private func tilesetContent(ts: MapTilesetInfo, cg: CGImage) -> some View {
+        VStack(spacing: 8) {
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    TileSheetView(
+                        cgImage: cg,
+                        tileset: ts,
+                        onPickSingle: { local in
+                            model.armTile(tilesetIndex: ts.index, localTile: local)
+                        },
+                        onPickRegion: { cols, rows in
+                            model.armRegion(tilesetIndex: ts.index, cols: cols, rows: rows)
+                        },
+                        assignSlot: autotileEditing ? autotileSlotToAssign : nil,
+                        onAssign: { local in
+                            if let mask = autotileSlotToAssign {
+                                model.setTilesetAutotile(tileset: ts.index, mask: mask, local: Int32(local))
+                                model.autotileEnabled = true
+                                autotileEditing = false
+                            }
+                        }
+                    )
+                    .frame(maxWidth: .infinity)
+                    .background(CheckerboardView(cell: 5))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
+                    .help("Click a tile to choose a 1×1 brush — drag across tiles for a bigger brush")
+
+                    brushStrip(ts: ts)
+
+                    Text("\(ts.imageWidth) × \(ts.imageHeight) px · \(ts.tileWidth)×\(ts.tileHeight)px tiles")
+                        .font(.system(size: 9, weight: .regular))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 2)
+            }
+            .frame(maxHeight: 300)
+
+            autotileSection(ts: ts)
+        }
+    }
+
+    /// Shows the currently armed brush and how to use it.
+    private func brushStrip(ts: MapTilesetInfo) -> some View {
+        let brush = model.brush
+        return HStack(spacing: 8) {
+            if !brush.pattern.isEmpty {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(StudioTheme.accentSoft)
+                    .frame(width: 22, height: 22)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4).strokeBorder(StudioTheme.accent, lineWidth: 1)
+                    )
+                    .overlay {
+                        Image(systemName: "paintbrush.pointed")
+                            .font(.system(size: 10))
+                            .foregroundColor(StudioTheme.accent)
+                    }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(brush.pattern.width)×\(brush.pattern.height) brush armed")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text("Click the canvas to paint")
+                        .font(.system(size: 8, weight: .regular))
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Text("Click or drag a tile above to choose a brush")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if !brush.pattern.isEmpty {
+                Button { model.clearBrush() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+        )
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "square.grid.2x2")
+                .font(.system(size: 28, weight: .light))
+                .foregroundColor(.white.opacity(0.25))
+            Text("No tileset yet — add one to start painting tiles.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            Menu {
+                Button { pickImage() } label: { Label("Image file…", systemImage: "folder") }
+                Button { showAssetChooser = true } label: { Label("From project assets…", systemImage: "square.stack") }
+            } label: {
+                Label("Add tileset", systemImage: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .padding(.horizontal, 8)
+    }
+
+    private var dividerAndHint: some View {
+        VStack(spacing: 0) {
+            Divider().overlay(StudioTheme.hairline)
+            Text("Click tile = brush · Drag = region brush · Shift-click drag area then paint")
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    // MARK: Autotile
 
     private func autotileSection(ts: MapTilesetInfo) -> some View {
         let slots = model.tilesetAutotile(ts.index)
@@ -299,7 +445,7 @@ struct TilesetPanel: View {
                 .padding(.bottom, 10)
             }
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 6)
     }
 
     private func maskLabel(_ mask: Int) -> String {
@@ -331,20 +477,23 @@ struct TilesetPanel: View {
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            guard let data = try? Data(contentsOf: url),
-                  let image = AIService.pngToRGBA(data) else {
-                store.error = "Could not decode that tileset image."
-                return
-            }
-            guard let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
-                store.error = "Unsupported tileset image."
-                return
-            }
-            pendingAdd = AddTilesetSource(name: url.deletingPathExtension().lastPathComponent,
-                                          data: data, cgImage: cg,
-                                          rgba: image.rgba, width: image.width, height: image.height)
-            showAddSheet = true
+            guard let data = try? Data(contentsOf: url) else { return }
+            beginAdd(name: url.deletingPathExtension().lastPathComponent, data: data)
         }
+    }
+
+    private func beginAdd(name: String, data: Data) {
+        guard let image = AIService.pngToRGBA(data) else {
+            store.error = "Could not decode that tileset image."
+            return
+        }
+        guard let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
+            store.error = "Unsupported tileset image."
+            return
+        }
+        pendingAdd = AddTilesetSource(name: name, data: data, cgImage: cg,
+                                      rgba: image.rgba, width: image.width, height: image.height)
+        showAddSheet = true
     }
 
     private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int) {
@@ -359,10 +508,65 @@ struct TilesetPanel: View {
                                                  tileWidth: tw, tileHeight: th, margin: margin, spacing: spacing)
             model.attachTilesetImage(index, cgImage: source.cgImage)
             model.snapshotAndRefresh()
-            if model.tilesetList.count == 1 { model.autotileEnabled = false }
+            activeTileset = max(0, tilesetList.count - 1)
         } catch {
             store.error = error.localizedDescription
         }
+    }
+}
+
+/// Lets the user pick one of the project's image assets as a tileset source.
+private struct ProjectTilesetPicker: View {
+    @ObservedObject var store: ProjectStore
+    let onPick: (String, Data) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var search = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Choose a tileset image").font(.headline)
+                Spacer()
+                Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+            }
+            TextField("Search project assets", text: $search)
+                .textFieldStyle(.roundedBorder)
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    ForEach(store.assets.filter { $0.isImage && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }, id: \.path) { asset in
+                        Button {
+                            if let data = try? store.assetData(asset) {
+                                onPick(asset.name, data)
+                                dismiss()
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "photo")
+                                    .foregroundColor(.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(asset.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                    Text("\(asset.bytes / 1024) KB").font(.system(size: 9)).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "plus.circle").foregroundColor(StudioTheme.accent)
+                            }
+                            .padding(8)
+                            .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if store.assets.filter({ $0.isImage }).isEmpty {
+                        Text("No images in this project yet. Generate some with the AI assistant, or drag files into the library.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(10)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(StudioTheme.background)
     }
 }
 
@@ -706,76 +910,247 @@ struct MapLayersPanel: View {
 
     @State private var editingDraft = ""
 
-    // MARK: Object inspector (numeric resize + object rows)
+    // MARK: Object inspector
+
+    /// Target for the object properties editor sheet (phase-2 properties UI).
+    struct PropsTarget: Identifiable {
+        let layer: Int
+        let objectID: Int
+        var id: Int { objectID }
+    }
+
+    @State private var propsObject: PropsTarget?
+
+    private func addObjectOnLayer(_ layerIndex: Int, kind: String) {
+        model.snapshotAndRefresh()
+        let isPoint = kind == "point"
+        let w = isPoint ? 0.0 : Double(model.map.cellWidth * 3)
+        let h = isPoint ? 0.0 : Double(model.map.cellHeight * 3)
+        let id = model.map.addObject(layer: layerIndex, name: kind == "point" ? "Point" : "Rect",
+                                     kind: kind, x: 0, y: 0, w: w, h: h)
+        if id > 0 { model.selectedObjectID = Int(id) }
+    }
 
     private func objectInspector(layerIndex: Int) -> some View {
         let objects = model.map.objects(layer: layerIndex)
         return VStack(alignment: .leading, spacing: 6) {
             Divider().overlay(StudioTheme.hairline)
-            HStack {
+
+            // Action bar: create objects / edit properties of the selection.
+            HStack(spacing: 5) {
                 Text("Objects")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(.secondary)
                 Spacer()
-                Button {
-                    model.snapshotAndRefresh()
-                    _ = model.map.addObject(layer: layerIndex, name: "Object", kind: "rect",
-                                            x: 16, y: 16, w: 32, h: 32)
-                    model.selectedObjectID = nil
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .buttonStyle(.plain)
+                actionChip("Rect", icon: "rectangle.dashed") { addObjectOnLayer(layerIndex, kind: "rect") }
+                actionChip("Point", icon: "plus.square") { addObjectOnLayer(layerIndex, kind: "point") }
             }
             .padding(.horizontal, 12)
 
             if objects.isEmpty {
-                Text("Click on the canvas to place a rectangle.")
-                    .font(.system(size: 10))
+                Text("Add a Rect or Point below, then drag it on the canvas. Give objects a type & properties for your engine.")
+                    .font(.system(size: 9))
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 6)
             } else {
-                ForEach(objects, id: \.id) { obj in
-                    HStack(spacing: 8) {
-                        Button {
-                            model.selectedObjectID = (model.selectedObjectID == obj.id) ? nil : obj.id
-                        } label: {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 3) {
+                        ForEach(objects, id: \.id) { obj in
                             HStack(spacing: 6) {
-                                Image(systemName: obj.type == "point" ? "plus" : "rectangle.dashed")
-                                    .font(.system(size: 10))
-                                Text(obj.name.isEmpty ? "Object \(obj.id)" : obj.name)
-                                    .font(.system(size: 11))
-                                    .lineLimit(1)
-                                Spacer()
-                                Text("\(Int(obj.x)),\(Int(obj.y))")
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(6)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(model.selectedObjectID == obj.id ? StudioTheme.accent.opacity(0.28) : Color.clear)
-                            )
-                        }
-                        .buttonStyle(.plain)
+                                Button {
+                                    model.selectedObjectID = (model.selectedObjectID == obj.id) ? nil : obj.id
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: obj.type == "point" ? "plus" : "rectangle.dashed")
+                                            .font(.system(size: 9))
+                                        Text(obj.name.isEmpty ? "Object \(obj.id)" : obj.name)
+                                            .font(.system(size: 10, weight: .medium))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(Int(obj.x)),\(Int(obj.y))")
+                                            .font(.system(size: 8, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(model.selectedObjectID == obj.id ? StudioTheme.accent.opacity(0.3) : Color.white.opacity(0.05))
+                                    )
+                                }
+                                .buttonStyle(.plain)
 
-                        Button {
-                            model.deleteObject(obj.id)
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 9))
-                                .foregroundColor(.white.opacity(0.5))
+                                Button {
+                                    propsObject = PropsTarget(layer: layerIndex, objectID: obj.id)
+                                } label: {
+                                    Image(systemName: "gearshape")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.white.opacity(0.6))
+                                        .frame(width: 18, height: 18)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Object properties (name, type, custom fields)")
+
+                                Button {
+                                    model.deleteObject(obj.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.white.opacity(0.5))
+                                        .frame(width: 18, height: 18)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 12)
                         }
-                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
                 }
-                .padding(.bottom, 6)
+                .frame(maxHeight: 120)
+
+                // Selected-object inspector: name / type / geometry.
+                if let selected = model.selectedObjectID,
+                   let obj = objects.first(where: { $0.id == selected }) {
+                    selectedObjectFields(layerIndex: layerIndex, obj: obj)
+                }
             }
         }
+        .sheet(item: $propsObject) { target in
+            MapPropertiesEditor(model: model, target: .object(layer: target.layer, objectID: target.objectID))
+                .frame(width: 340, height: 400)
+        }
+    }
+
+    /// Inline editable fields for the selected object (name, type, x/y/w/h).
+    private func selectedObjectFields(layerIndex: Int, obj: MapObjectRow) -> some View {
+        SelectedObjectEditor(
+            obj: obj,
+            onName: { commitName(layerIndex, obj: obj, name: $0) },
+            onKind: { commitKind(layerIndex, obj: obj, kind: $0) },
+            onGeometry: { x, y, w, h in commitGeometry(layerIndex, obj: obj, x: x, y: y, w: w, h: h) }
+        )
+        .id(obj.id)
+    }
+
+    private func commitName(_ layer: Int, obj: MapObjectRow, name: String) {
+        model.snapshotAndRefresh()
+        model.map.setObject(layer: layer, objectID: obj.id, name: name, kind: obj.type,
+                            x: obj.x, y: obj.y, w: obj.width, h: obj.height)
+    }
+
+    private func commitKind(_ layer: Int, obj: MapObjectRow, kind: String) {
+        model.snapshotAndRefresh()
+        model.map.setObject(layer: layer, objectID: obj.id, name: obj.name, kind: kind,
+                            x: obj.x, y: obj.y, w: kind == "point" ? 0 : max(obj.width, 1),
+                            h: kind == "point" ? 0 : max(obj.height, 1))
+    }
+
+    private func commitGeometry(_ layer: Int, obj: MapObjectRow, x: Double, y: Double, w: Double, h: Double) {
+        model.snapshotAndRefresh()
+        model.map.setObject(layer: layer, objectID: obj.id, name: obj.name, kind: obj.type,
+                            x: x, y: y, w: w, h: h)
+    }
+
+    private func actionChip(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 9, weight: .medium))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Selected object editor
+
+/// Name/type/geometry editor for the object currently selected in the panel.
+private struct SelectedObjectEditor: View {
+    let obj: MapObjectRow
+    let onName: (String) -> Void
+    let onKind: (String) -> Void
+    let onGeometry: (Double, Double, Double, Double) -> Void
+
+    @State private var name = ""
+    @State private var x = ""
+    @State private var y = ""
+    @State private var w = ""
+    @State private var h = ""
+
+    private func intText(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0)))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Selected object")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button { onGeometry(parse(x) ?? 0, parse(y) ?? 0, parse(w) ?? 0, parse(h) ?? 0) } label: {
+                    Text("Apply")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(StudioTheme.accent)
+            }
+
+            HStack(spacing: 6) {
+                TextField("Name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 10))
+                    .onSubmit { onName(name) }
+                Picker("", selection: kindBinding) {
+                    Text("Rect").tag("rect")
+                    Text("Point").tag("point")
+                }
+                .pickerStyle(.menu)
+                .frame(width: 80)
+            }
+
+            if obj.type != "point" {
+                HStack(spacing: 6) {
+                    field("x", $x)
+                    field("y", $y)
+                    field("w", $w)
+                    field("h", $h)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(StudioTheme.panelElevated.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .onAppear {
+            name = obj.name
+            x = intText(obj.x); y = intText(obj.y)
+            w = intText(obj.width); h = intText(obj.height)
+        }
+    }
+
+    private func field(_ label: String, _ value: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.secondary)
+            TextField("", text: value)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 9, design: .monospaced))
+        }
+    }
+
+    private func parse(_ text: String) -> Double? {
+        Double(text.replacingOccurrences(of: ",", with: "."))
+    }
+
+    private var kindBinding: Binding<String> {
+        Binding<String>(
+            get: { obj.type == "point" ? "point" : "rect" },
+            set: { onKind($0) }
+        )
     }
 }
 

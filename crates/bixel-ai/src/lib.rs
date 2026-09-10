@@ -34,14 +34,19 @@
 
 pub mod agent;
 pub mod config;
+pub mod connection;
 pub mod error;
 pub mod image;
 pub mod image_gen;
 pub mod native_stream;
 pub mod skill_server;
 pub mod skills;
+pub mod vision;
 
 pub use agent::GooseAgent;
 pub use config::AiSettings;
+pub use connection::{
+    ConnectionConfig, ModelReadiness, ModelRoles, ProviderChoice, ProviderHandle, RoleReadiness,
+};
 pub use error::AiError;
 pub use image::RgbaImage;

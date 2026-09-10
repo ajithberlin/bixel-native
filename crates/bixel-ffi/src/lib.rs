@@ -743,29 +743,101 @@ pub unsafe extern "C" fn bixel_timeline_loop_mode(ptr: *const BixelTimeline) -> 
 
 // --------------------------------------------------------------------- AI
 
-use std::sync::OnceLock;
-
 use bixel_ai::native_stream::{NativeEvent, NativeRequest};
+use bixel_ai::{ConnectionConfig, GooseAgent, ModelReadiness};
 
 static AI_TURN: Mutex<()> = Mutex::new(());
 
-static AI_ENGINE: OnceLock<Result<bixel_ai::GooseAgent, String>> = OnceLock::new();
-
-fn ai_engine() -> Result<&'static bixel_ai::GooseAgent, String> {
-    AI_ENGINE
-        .get_or_init(|| {
-            let settings = bixel_ai::AiSettings::from_env_file();
-            bixel_ai::GooseAgent::new(settings).map_err(|e| e.to_string())
-        })
-        .as_ref()
-        .map_err(|e| e.clone())
+/// Reconfigurable holder for the shared agent (one per process). Replaces the
+/// old non-resettable `OnceLock`: connect/disconnect swap the connection
+/// underneath the agent; dropping it resets sessions too.
+struct AiState {
+    agent: Option<std::sync::Arc<GooseAgent>>,
+    last_error: Option<String>,
 }
 
-static IMAGE_GEN: OnceLock<bixel_ai::image_gen::ImageGen> = OnceLock::new();
+static AI_STATE: Mutex<AiState> = Mutex::new(AiState { agent: None, last_error: None });
 
-fn image_gen() -> &'static bixel_ai::image_gen::ImageGen {
-    IMAGE_GEN
-        .get_or_init(|| bixel_ai::image_gen::ImageGen::new(&bixel_ai::AiSettings::from_env_file()))
+/// Connect (or reconnect) the shared agent with a new credential set.
+fn connect_agent(cfg: ConnectionConfig) -> Result<std::sync::Arc<GooseAgent>, String> {
+    let mut state = AI_STATE.lock().unwrap();
+    let agent = match &state.agent {
+        Some(agent) => agent.clone(),
+        None => {
+            let agent =
+                std::sync::Arc::new(GooseAgent::new().map_err(|e| e.to_string())?);
+            state.agent = Some(agent.clone());
+            agent
+        }
+    };
+    match agent.connect(cfg) {
+        Ok(_) => {
+            state.last_error = None;
+            Ok(agent)
+        }
+        Err(e) => {
+            let message = e.to_string();
+            state.last_error = Some(message.clone());
+            Err(message)
+        }
+    }
+}
+
+/// The shared agent. When the UI has not connected one yet, fall back to the
+/// `.env` / process-env credential set (lowest precedence).
+fn ai_agent() -> Result<std::sync::Arc<GooseAgent>, String> {
+    {
+        let state = AI_STATE.lock().unwrap();
+        if let Some(agent) = &state.agent {
+            return Ok(agent.clone());
+        }
+    }
+    let cfg = ConnectionConfig::from_env();
+    if cfg.api_key.is_none() {
+        return Err("AI provider is not connected".to_string());
+    }
+    connect_agent(cfg)
+}
+
+/// Connection status as a JSON value. Credentials never appear here — only a
+/// masked `…last4` label. `connected`/`readiness` are None until the UI (or
+/// the env fallback) has connected; `env` always reflects the `.env` fallback
+/// so the UI can show what connecting from env would use.
+fn connection_status_json() -> serde_json::Value {
+    let (connected_cfg, readiness, connected) = {
+        let state = AI_STATE.lock().unwrap();
+        match &state.agent {
+            Some(agent) if agent.handle().is_some() => {
+                let handle = agent.handle().unwrap();
+                (Some(handle.config.clone()), agent.readiness(), true)
+            }
+            _ => (None, None, false),
+        }
+    };
+    let env_cfg = ConnectionConfig::from_env();
+
+    let active = connected_cfg.as_ref().unwrap_or(&env_cfg);
+    let readiness_json = |r: Option<&ModelReadiness>| {
+        serde_json::json!({
+            "text": r.map(|r| serde_json::to_value(&r.text).unwrap()),
+            "vision": r.map(|r| serde_json::to_value(&r.vision).unwrap()),
+            "image": r.map(|r| serde_json::to_value(&r.image).unwrap()),
+        })
+    };
+    serde_json::json!({
+        "connected": connected,
+        "provider": active.provider.goose_name(),
+        "provider_label": active.provider.label(),
+        "key": active.masked_key(),
+        "models": {
+            "text": active.models.text,
+            "vision": active.models.vision,
+            "image": active.models.image,
+        },
+        "base_url": active.base_url,
+        "readiness": readiness_json(readiness.as_ref()),
+        "env_available": env_cfg.api_key.is_some(),
+    })
 }
 
 /// Load a `.env` file into the process environment (`null`/empty = auto-detect).
@@ -776,10 +848,73 @@ pub extern "C" fn bixel_ai_load_env(path: *const c_char) {
     bixel_core::config::load_env(path.as_deref(), false);
 }
 
-/// Lightweight configuration check; provider/runtime startup belongs on the worker thread.
+/// Connect the assistant through goose's provider API. `config_json` is a
+/// [`ConnectionConfig`] (provider, api_key, models, base_url); keys are
+/// write-only — they are stored in goose's secret store and never returned.
+/// Returns null on success or an owned error string.
+#[no_mangle]
+pub extern "C" fn bixel_ai_connect(config_json: *const c_char) -> *mut c_char {
+    let cfg: ConnectionConfig = match serde_json::from_str(&arg_str(config_json)) {
+        Ok(cfg) => cfg,
+        Err(e) => return out_cstr(format!("invalid connection config: {e}")),
+    };
+    match connect_agent(cfg) {
+        Ok(_) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Drop the cached provider, clear stored credentials, and forget sessions.
+#[no_mangle]
+pub extern "C" fn bixel_ai_disconnect() {
+    let mut state = AI_STATE.lock().unwrap();
+    if let Some(agent) = state.agent.take() {
+        let _ = agent.disconnect();
+    }
+    state.last_error = None;
+}
+
+/// Masked connection status + per-role model readiness. Free with
+/// [`bixel_string_free`]. Never contains a full credential.
+#[no_mangle]
+pub extern "C" fn bixel_ai_connection_status() -> *mut c_char {
+    out_cstr(connection_status_json().to_string())
+}
+
+/// Run the ChatGPT (Codex) browser sign-in (OAuth PKCE) ahead of `connect`.
+/// Returns null on success or an owned error string.
+#[no_mangle]
+pub extern "C" fn bixel_ai_start_codex_oauth() -> *mut c_char {
+    let result = (|| {
+        let agent = ai_agent().or_else(|_| {
+            let mut state = AI_STATE.lock().unwrap();
+            let agent = std::sync::Arc::new(
+                GooseAgent::new().map_err(|e| e.to_string())?,
+            );
+            state.agent = Some(agent.clone());
+            Ok::<_, String>(agent)
+        })?;
+        bixel_ai::connection::start_codex_oauth(agent.runtime()).map_err(|e| e.to_string())
+    })();
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Lightweight availability check: connected through the UI, or a usable
+/// `.env` fallback exists. Provider startup belongs on the worker thread.
 #[no_mangle]
 pub extern "C" fn bixel_ai_available() -> bool {
-    bixel_ai::AiSettings::from_env_file().has_key()
+    {
+        let state = AI_STATE.lock().unwrap();
+        if let Some(agent) = &state.agent {
+            if agent.handle().is_some() {
+                return true;
+            }
+        }
+    }
+    ConnectionConfig::from_env().api_key.is_some()
 }
 
 /// JSON array of the available skills (id, name, description, params schema).
@@ -809,7 +944,7 @@ pub extern "C" fn bixel_ai_chat(prompt: *const c_char, system: *const c_char) ->
     } else {
         system
     };
-    let Ok(agent) = ai_engine() else { return std::ptr::null_mut(); };
+    let Ok(agent) = ai_agent() else { return std::ptr::null_mut(); };
     let base = std::env::temp_dir().join("bixel-assistant");
     let request = NativeRequest {
         prompt,
@@ -848,7 +983,7 @@ pub extern "C" fn bixel_ai_chat_stream(
     let _turn = AI_TURN.lock().unwrap();
     let result = (|| {
         let request: NativeRequest = serde_json::from_str(&arg_str(request_json)).map_err(|e| e.to_string())?;
-        ai_engine()?.chat_stream(request, emit).map_err(|e| e.to_string())
+        ai_agent()?.chat_stream(request, emit).map_err(|e| e.to_string())
     })();
     if let Err(message) = result {
         emit(NativeEvent::Error { message });
@@ -857,21 +992,26 @@ pub extern "C" fn bixel_ai_chat_stream(
     true
 }
 
-/// Public model labels only. Credentials never cross this boundary.
+/// Public model labels only, from the active connection (or the `.env`
+/// fallback). Credentials never cross this boundary.
 #[no_mangle]
 pub extern "C" fn bixel_ai_model_info() -> *mut c_char {
-    let settings = bixel_ai::AiSettings::from_env_file();
+    let status = connection_status_json();
     out_cstr(serde_json::json!({
-        "text": settings.text_model, "vision": settings.vision_model,
-        "image": settings.image_model, "available": settings.has_key(),
-    }).to_string())
+        "text": status["models"]["text"],
+        "vision": status["models"]["vision"],
+        "image": status["models"]["image"],
+        "available": status["connected"].as_bool().unwrap_or(false)
+            || status["env_available"].as_bool().unwrap_or(false),
+    })
+    .to_string())
 }
 
 /// Forget the current chat conversation so the next `bixel_ai_chat` starts
 /// fresh with no prior context.
 #[no_mangle]
 pub extern "C" fn bixel_ai_chat_reset() {
-    if let Ok(agent) = ai_engine() {
+    if let Ok(agent) = ai_agent() {
         agent.reset();
     }
 }
@@ -910,13 +1050,19 @@ pub unsafe extern "C" fn bixel_ai_free_buffer(ptr: *mut u8) {
 
 // -- model-backed skills (blocking; return PNG bytes via the length out-param)
 
+/// The image-role client from the active connection, if the image role is ready.
+fn image_gen() -> Option<std::sync::Arc<bixel_ai::image_gen::ImageGen>> {
+    ai_agent().ok().and_then(|agent| agent.image_gen())
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_ai_generate_art(
     prompt: *const c_char,
     out_len: *mut u64,
 ) -> *mut u8 {
     let prompt = arg_str(prompt);
-    match image_gen().generate_image(&prompt, None) {
+    let Some(gen) = image_gen() else { return std::ptr::null_mut() };
+    match gen.generate_image(&prompt, None) {
         Ok(img) => match bixel_ai::image::encode_png(&img) {
             Ok(png) => unsafe { return_bytes(png, out_len) },
             Err(_) => std::ptr::null_mut(),
@@ -935,12 +1081,13 @@ pub unsafe extern "C" fn bixel_ai_next_frame(
     if png_in.is_null() {
         return std::ptr::null_mut();
     }
+    let Some(gen) = image_gen() else { return std::ptr::null_mut() };
     let bytes = unsafe { std::slice::from_raw_parts(png_in, in_len as usize) };
     let Ok(current) = bixel_ai::image::decode_png(bytes) else {
         return std::ptr::null_mut();
     };
     let prompt = arg_str(prompt);
-    match image_gen().generate_image(&prompt, Some(&current)) {
+    match gen.generate_image(&prompt, Some(&current)) {
         Ok(img) => match bixel_ai::image::encode_png(&img) {
             Ok(png) => unsafe { return_bytes(png, out_len) },
             Err(_) => std::ptr::null_mut(),
@@ -1024,8 +1171,10 @@ pub unsafe extern "C" fn bixel_ai_run_skill(
         params,
     };
 
-    let engine = if kind.is_deterministic() { None } else { Some(image_gen()) };
-    let output = bixel_ai::skills::Skills::run(engine, kind, input);
+    // Deterministic skills need no engine; model-backed skills need the image
+    // role to be ready (otherwise the run fails naming the missing role).
+    let engine = if kind.is_deterministic() { None } else { image_gen() };
+    let output = bixel_ai::skills::Skills::run(engine.as_deref(), kind, input);
     match output {
         Ok(o) => out_cstr(bixel_ai::skills::skill_output_to_json(&o)),
         Err(e) => out_cstr(format!(
@@ -1691,4 +1840,44 @@ pub unsafe extern "C" fn bixel_map_composite(ptr: *const BixelMap, out: *mut u8,
 pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -> *mut c_char {
     let csv = unsafe { map_ref(ptr) }.lock().unwrap().layer_to_csv(layer as usize);
     out_cstr(csv)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The status JSON must expose the masked credential and model readiness
+    /// shapes, and must never contain a full API key.
+    #[test]
+    fn connection_status_json_never_returns_secrets() {
+        std::env::set_var("OPENROUTER_API_KEY", "sk-or-testsecret9876");
+        let value = connection_status_json();
+        let text = value.to_string();
+        assert!(!text.contains("sk-or-testsecret9876"), "status leaked the API key: {text}");
+        assert_eq!(value["key"], "…9876");
+        assert_eq!(value["provider"], "openrouter");
+        for role in ["text", "vision", "image"] {
+            assert!(value["models"][role].is_string(), "missing model role {role}");
+            assert!(value["readiness"][role].is_null(), "unexpected readiness while offline");
+        }
+        assert_eq!(value["env_available"], true);
+        assert_eq!(value["connected"], false);
+        std::env::remove_var("OPENROUTER_API_KEY");
+    }
+
+    #[test]
+    fn connection_status_masks_codex_image_key_as_absent() {
+        // Codex OAuth has no primary key to mask; the secondary image key is
+        // write-only and must not appear either.
+        let mut cfg = ConnectionConfig {
+            provider: bixel_ai::ProviderChoice::ChatgptCodex,
+            api_key: None,
+            image_api_key: Some("sk-or-secondary4321".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("sk-or-secondary4321"), "config round-trips locally");
+        cfg.validate = false;
+        assert!(cfg.masked_key().is_none());
+    }
 }

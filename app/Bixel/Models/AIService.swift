@@ -13,6 +13,86 @@ enum AIService {
         bixel_ai_available()
     }
 
+    // MARK: - Connection
+
+    /// Per-role model readiness (`text`, `vision`, `image`).
+    struct AIRoleReadiness {
+        var model = ""
+        var ready = false
+        var reason = ""
+    }
+
+    /// Masked connection status (never contains a full credential).
+    struct AIConnectionStatus {
+        var connected = false
+        var provider = "openrouter"
+        var providerLabel = "OpenRouter"
+        var key: String?
+        var models: [String: String] = [:]
+        var baseURL = "https://openrouter.ai/api/v1"
+        var envAvailable = false
+        var readiness: [String: AIRoleReadiness] = [:]
+    }
+
+    static func connectionStatus() -> AIConnectionStatus {
+        guard let ptr = bixel_ai_connection_status() else { return AIConnectionStatus() }
+        defer { bixel_string_free(ptr) }
+        guard let data = String(cString: ptr).data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return AIConnectionStatus() }
+        var status = AIConnectionStatus()
+        status.connected = json["connected"] as? Bool ?? false
+        status.provider = json["provider"] as? String ?? "openrouter"
+        status.providerLabel = json["provider_label"] as? String ?? status.provider
+        status.key = json["key"] as? String
+        status.models = json["models"] as? [String: String] ?? [:]
+        status.baseURL = json["base_url"] as? String ?? status.baseURL
+        status.envAvailable = json["env_available"] as? Bool ?? false
+        if let readiness = json["readiness"] as? [String: Any] {
+            for (role, value) in readiness {
+                guard let roleJSON = value as? [String: Any] else { continue }
+                status.readiness[role] = AIRoleReadiness(
+                    model: roleJSON["model"] as? String ?? "",
+                    ready: roleJSON["ready"] as? Bool ?? false,
+                    reason: roleJSON["reason"] as? String ?? ""
+                )
+            }
+        }
+        return status
+    }
+
+    /// Connect the assistant. Keys are write-only (stored in the system
+    /// secret store); returns nil on success or an error message.
+    static func connect(provider: String, apiKey: String, imageAPIKey: String,
+                        textModel: String, visionModel: String, imageModel: String,
+                        baseURL: String) -> String? {
+        var cfg: [String: Any] = [
+            "provider": provider,
+            "models": ["text": textModel, "vision": visionModel, "image": imageModel],
+            "base_url": baseURL,
+            "validate": true,
+        ]
+        if !apiKey.isEmpty { cfg["api_key"] = apiKey }
+        if !imageAPIKey.isEmpty { cfg["image_api_key"] = imageAPIKey }
+        guard let data = try? JSONSerialization.data(withJSONObject: cfg),
+              let json = String(data: data, encoding: .utf8) else {
+            return "Could not encode the connection config."
+        }
+        guard let errorPtr = bixel_ai_connect(json) else { return nil }
+        defer { bixel_string_free(errorPtr) }
+        return String(cString: errorPtr)
+    }
+
+    static func disconnect() {
+        bixel_ai_disconnect()
+    }
+
+    /// Run the ChatGPT (Codex) browser sign-in. Returns nil on success.
+    static func startCodexOAuth() -> String? {
+        guard let errorPtr = bixel_ai_start_codex_oauth() else { return nil }
+        defer { bixel_string_free(errorPtr) }
+        return String(cString: errorPtr)
+    }
+
     static func listSkills() -> [SkillInfo] {
         let ptr = bixel_ai_list_skills()
         defer { bixel_string_free(ptr) }

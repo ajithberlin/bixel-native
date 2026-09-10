@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A base64 image attachment sent from the host with a request.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NativeAttachment {
     pub name: String,
     pub data: String,

@@ -188,7 +188,13 @@ impl Skills {
 }
 
 fn require_gen(gen: Option<&ImageGen>) -> Result<&ImageGen, AiError> {
-    gen.ok_or_else(|| AiError::Config("this skill requires a configured image model".into()))
+    gen.ok_or_else(|| {
+        AiError::Config(
+            "this skill needs the image model role, which is not ready — \
+             add an OpenRouter API key in the AI settings"
+                .into(),
+        )
+    })
 }
 
 fn spec(kind: SkillKind) -> SkillSpec {

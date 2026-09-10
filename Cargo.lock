@@ -648,6 +648,7 @@ dependencies = [
  "bixel-core",
  "futures",
  "goose",
+ "goose-providers",
  "idna_adapter",
  "image 0.25.10",
  "png 0.17.16",

@@ -223,7 +223,6 @@ struct TopBar: View {
             Divider().frame(height: 20).overlay(StudioTheme.hairlineStrong)
 
             layersToggle
-            colorToggle(isSpriteColor: false)
         }
     }
 

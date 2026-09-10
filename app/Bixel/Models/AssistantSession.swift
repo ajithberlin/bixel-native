@@ -77,7 +77,9 @@ final class AssistantSession: ObservableObject {
     @Published var startedAt = Date()
     @Published var tokenCount = 0
     let commands = AIService.listSkills().map(AssistantCommand.init)
-    let models = AIService.modelInfo()
+    /// Live connection status (models + per-role readiness).
+    var status: AIService.AIConnectionStatus { AIService.connectionStatus() }
+    var models: [String: String] { status.models }
     private let queue = DispatchQueue(label: "studio.bixel.assistant", qos: .userInitiated)
     private var cancellation: AssistantCancellation?
     private(set) var projectRoot: URL?
@@ -181,9 +183,19 @@ final class AssistantSession: ObservableObject {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let selected = selectedCommands
         let files = attachments
-        let offlineTool = selected.count == 1 && selected[0].local && !AIService.available() ? selected[0] : nil
-        guard offlineTool != nil || AIService.available() else {
-            error = "Configure an OpenRouter key to start the agent. Local skills can run without a key."; return
+        let status = self.status
+        let textReady = status.readiness["text"]?.ready ?? false
+        let imageReady = status.readiness["image"]?.ready ?? false
+        let offlineTool = selected.count == 1 && selected[0].local && !textReady ? selected[0] : nil
+        guard offlineTool != nil || textReady else {
+            error = "Connect an AI provider in AI settings (OpenRouter key or ChatGPT sign-in). Local skills can run without one."
+            return
+        }
+        let imageSkills = selected.filter { !$0.local }
+        if offlineTool == nil && !imageSkills.isEmpty && !imageReady {
+            let reason = status.readiness["image"]?.reason ?? "Add an OpenRouter API key in AI settings."
+            error = "The skills \(imageSkills.map(\.id).joined(separator: ", ")) need the image model role: \(reason)"
+            return
         }
         var prompt = readable(text)
         if prompt.isEmpty { prompt = "Review the attached files." }

@@ -53,8 +53,10 @@ xcodegen generate
 open Bixel.xcodeproj
 ```
 
-Image generation uses OpenRouter's `/api/v1/images` endpoint, while chat and
-vision go through the embedded goose agent's OpenRouter provider.
+Image generation uses OpenRouter's `/api/v1/images` endpoint, chat goes
+through the embedded goose agent (OpenRouter or ChatGPT Codex provider), and
+vision (attachment descriptions) calls OpenRouter's `chat/completions` with
+the configured vision model.
 
 ## Repository layout
 
@@ -80,12 +82,14 @@ crates/
       audits.rs            # persisted validation reports
       jobs.rs              # subprocess execution queue (cancel, logs)
     tests/                 # integration tests
-  bixel-ai/                # embedded goose agent → OpenRouter + pixel-art skills
+  bixel-ai/                # embedded goose agent → OpenRouter/Codex + pixel-art skills
     src/
       agent.rs             # GooseAgent: builds goose Agent, drives reply(), event mapping
-      config.rs            # .env settings + goose env wiring (OpenRouter provider)
+      connection.rs        # ConnectionConfig + ProviderHandle + 3-model readiness gate
+      config.rs            # .env settings (lowest-precedence dev fallback)
       skill_server.rs      # rmcp extension exposing skills as the `run_skill` tool
       image_gen.rs         # OpenRouter image endpoints (text/image → image)
+      vision.rs            # vision-role chat/completions client (image → text)
       skills.rs            # skill registry + prompts + dispatch
       image.rs             # PNG encode/decode, quantize, background removal, slicing
       native_stream.rs     # NativeEvent/NativeRequest FFI contract
@@ -111,11 +115,20 @@ generated/                 # (gitignored) libbixel.a + bixel.h
 * **cbindgen** — `cargo install cbindgen` (or `brew install cbindgen`).
 * **XcodeGen** — `brew install xcodegen`.
 
-## AI assistant (goose + OpenRouter)
+## AI assistant (goose + OpenRouter / ChatGPT Codex)
 
-The AI engine (`crates/bixel-ai`) embeds the goose agent and points it at
-OpenRouter's OpenAI-compatible gateway via the environment. Configure it with a
-`.env` file:
+The AI engine (`crates/bixel-ai`) embeds the goose agent over goose's provider
+API. Connect from the app's **AI settings** (assistant panel → model popover →
+*Open AI settings…*): paste an **OpenRouter API key**, or **Sign in with
+ChatGPT** (Codex OAuth — text + vision only; the image role always needs an
+OpenRouter key because goose has no image-generation API). All three model
+roles (text, vision, image) are validated at connect time and shown as a
+readiness gate; model-backed skills are blocked with the precise missing role
+instead of failing at HTTP time. Keys are stored in the system secret store
+(Keychain, file fallback under `~/Library/Application Support/Bixel/goose`)
+and are write-only across the FFI.
+
+For headless/dev use, `.env` remains the lowest-precedence fallback:
 
 ```bash
 cp .env.example .env   # then edit and add your key
@@ -138,8 +151,9 @@ The built-in **skills**:
 | `compress` | *local* | reduce to `2^bits` colors (median-cut) |
 | `remove_background` | *local* | strip a near-uniform background |
 
-Local skills need no network and run on-device; model skills require the key.
-The AI panel (sparkles button) exposes all of them in the UI.
+Local skills need no network and run on-device; model skills require the
+corresponding role to be ready. The AI panel (sparkles button) exposes all of
+them in the UI.
 
 ## Build & run
 

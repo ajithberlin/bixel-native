@@ -76,11 +76,20 @@ Module → original Python/JS source (porting reference):
 ## AI / skills
 
 The AI engine (`bixel-ai`) embeds the full goose agent (`goose` crate): it builds
-a `goose::agents::Agent`, points it at the `openrouter` provider via env
-(`GOOSE_PROVIDER`, `GOOSE_MODEL`, `OPENROUTER_API_KEY`, `OPENROUTER_HOST`), and
-drives `Agent::reply` while mapping `AgentEvent`s to FFI `NativeEvent`s
-(`agent.rs`). Models come from `.env`
-(`BIXEL_TEXT_MODEL`/`BIXEL_VISION_MODEL`/`BIXEL_IMAGE_MODEL`).
+a `goose::agents::Agent`, connects a provider through goose's provider API
+(`connection.rs` — `ConnectionConfig` + cached `ProviderHandle`, shared across
+sessions via `Agent::update_provider`), and drives `Agent::reply` while mapping
+`AgentEvent`s to FFI `NativeEvent`s (`agent.rs`). Providers: **OpenRouter (API
+key)** and **ChatGPT Codex (OAuth PKCE)**; goose state lives under an
+app-owned `GOOSE_PATH_ROOT` (`~/Library/Application Support/Bixel/goose`).
+Credentials are write-only across the FFI and stored in goose's secret store
+(Keychain, file fallback); status is masked (`…last4`). A three-model
+readiness gate (`ModelReadiness`: text/vision/image) is computed at connect
+and blocks model-backed skills with the precise missing role. Image
+generation has no goose abstraction and stays on bixel's own OpenRouter
+client (`image_gen.rs`); vision (attachment descriptions) uses `vision.rs`.
+`.env` (`OPENROUTER_API_KEY`, `BIXEL_{TEXT,VISION,IMAGE}_MODEL`) is the
+lowest-precedence dev fallback (`ConnectionConfig::from_env`).
 
 Pixel-art skills are exposed to the agent as an in-process `rmcp` builtin
 extension (`skill_server.rs` → `run_skill` tool) that dispatches to the skill

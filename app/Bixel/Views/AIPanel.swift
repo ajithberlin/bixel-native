@@ -9,6 +9,7 @@ struct AIPanel: View {
     var onExpand: () -> Void
     @State private var showHistory = false
     @State private var showModel = false
+    @State private var showSettings = false
     @State private var showFormatting = false
     @State private var showCommands = false
     @State private var dropTarget = false
@@ -68,6 +69,14 @@ struct AIPanel: View {
                     .overlay(Label("Drop files to attach", systemImage: "paperclip")).padding(8).allowsHitTesting(false)
             }
         }
+        .sheet(isPresented: $showSettings) {
+            AISettingsView()
+        }
+    }
+
+    private func roleDot(_ role: String) -> Color {
+        guard let readiness = session.status.readiness[role] else { return StudioTheme.textDisabled }
+        return readiness.ready ? .green : .orange
     }
 
     private var header: some View {
@@ -198,15 +207,29 @@ struct AIPanel: View {
                     }.font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary)
                 }.buttonStyle(.plain).popover(isPresented: $showModel) {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Project models").font(.headline)
-                        ForEach(["text", "vision", "image"], id: \.self) { role in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(role.capitalized).font(.system(size: 10)).foregroundColor(.secondary)
-                                Text(session.models[role] ?? "Not configured").font(.system(size: 12)).textSelection(.enabled)
+                        HStack {
+                            Text("AI models").font(.headline)
+                            Spacer()
+                            if !session.status.connected {
+                                Circle().fill(StudioTheme.textDisabled).frame(width: 7, height: 7)
                             }
                         }
-                        Text("Configured in the project’s .env. Image attachments use the vision model.").font(.system(size: 11)).foregroundColor(.secondary)
-                    }.padding(18).frame(width: 270)
+                        ForEach(["text", "vision", "image"], id: \.self) { role in
+                            HStack(spacing: 7) {
+                                Circle().fill(roleDot(role)).frame(width: 7, height: 7)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(role.capitalized).font(.system(size: 10)).foregroundColor(.secondary)
+                                    Text(session.models[role] ?? "Not configured").font(.system(size: 12)).textSelection(.enabled)
+                                        .lineLimit(1).truncationMode(.middle)
+                                }
+                            }
+                        }
+                        Text("Configured in AI settings. Image attachments are described by the vision model when that role is ready.")
+                            .font(.system(size: 11)).foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Open AI settings…") { showSettings = true }
+                            .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(StudioTheme.accent)
+                    }.padding(18).frame(width: 280)
                 }
                 Button {
                     if session.busy { session.stop() } else { send() }
