@@ -319,6 +319,49 @@ struct EditorInteractionTests {
                      cancellationModel.document.celRGBA(layer: 0, frame: 0) == cancellationPixels,
                      "Cancel must leave document frame, layer, selection, and pixels untouched")
 
+        // A coalesced geometry refresh can observe only the replacement source:
+        // cache its CGImage by source identity so a transform does not rebuild
+        // it, but cancellation followed by a new import does replace it.
+        let sourceCacheModel = EditorModel(width: 4, height: 4)
+        let sourceCacheLayer = CALayer()
+        var sourceCache = FloatingImageContentsCache()
+        sourceCacheModel.applyImageToNewFrame(nativeSource(width: 2, height: 2), width: 2, height: 2)
+        guard let sourceA = sourceCacheModel.floatingImport else {
+            fatalError("The first source must become a floating import")
+        }
+        sourceCache.update(layer: sourceCacheLayer, source: sourceA)
+        guard sourceCacheLayer.contents != nil else {
+            fatalError("The floating source cache must build the first CGImage")
+        }
+        let contentsA = sourceCacheLayer.contents! as! CGImage
+        sourceCacheModel.nudgeFloatingImport(dx: 1, dy: 0)
+        guard let transformedA = sourceCacheModel.floatingImport else {
+            fatalError("Transforming a source must keep it pending")
+        }
+        precondition(transformedA.sourceID == sourceA.sourceID,
+                     "Transforming a floating import must preserve its source identity")
+        sourceCache.update(layer: sourceCacheLayer, source: transformedA)
+        precondition((sourceCacheLayer.contents as! CGImage) === contentsA,
+                     "Transform refreshes must retain the cached floating CGImage")
+
+        sourceCacheModel.cancelFloatingImport()
+        sourceCacheModel.applyImageToNewFrame([0, 255, 0, 255], width: 1, height: 1)
+        guard let sourceB = sourceCacheModel.floatingImport else {
+            fatalError("The replacement source must become a floating import")
+        }
+        precondition(sourceB.sourceID != sourceA.sourceID,
+                     "Each floating import must receive a distinct source identity")
+        sourceCache.update(layer: sourceCacheLayer, source: sourceB)
+        guard sourceCacheLayer.contents != nil else {
+            fatalError("The replacement source must build a CGImage")
+        }
+        let contentsB = sourceCacheLayer.contents! as! CGImage
+        precondition(contentsB !== contentsA,
+                     "A replacement source observed after cancellation must replace cached pixels")
+        sourceCache.update(layer: sourceCacheLayer, source: sourceB)
+        precondition((sourceCacheLayer.contents as! CGImage) === contentsB,
+                     "Repeated geometry refreshes for one source must not rebuild its CGImage")
+
         // Commit rasterizes the native source once into the fixed canvas. The
         // canvas clips it then, not when the import begins, and the frame change
         // is a single undoable document mutation.

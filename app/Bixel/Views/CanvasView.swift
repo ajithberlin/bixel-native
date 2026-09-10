@@ -179,6 +179,29 @@ enum CanvasCursorPolicy {
     }
 }
 
+/// Caches the rasterized preview by its immutable source rather than by layer
+/// occupancy. Geometry refreshes may be coalesced across a cancel/import pair,
+/// so the current layer contents alone cannot identify the pending source.
+struct FloatingImageContentsCache {
+    private var sourceID: UUID?
+
+    mutating func update(layer: CALayer, source: FloatingImageImport) {
+        guard sourceID != source.sourceID else { return }
+        guard let contents = makeCGImage(pixels: source.rgba, width: source.width, height: source.height) else {
+            layer.contents = nil
+            sourceID = nil
+            return
+        }
+        layer.contents = contents
+        sourceID = source.sourceID
+    }
+
+    mutating func clear(layer: CALayer) {
+        layer.contents = nil
+        sourceID = nil
+    }
+}
+
 /// NSView subclass that hosts the Core Animation canvas and routes events.
 final class PixelCanvas: NSView {
     weak var coordinator: CanvasView.Coordinator?
@@ -204,6 +227,7 @@ final class PixelCanvas: NSView {
     private let floatingOutlineLayer = CAShapeLayer()
     private let floatingHandlesLayer = CAShapeLayer()
     private let floatingRotationLayer = CAShapeLayer()
+    private var floatingImageContentsCache = FloatingImageContentsCache()
 
     // Grid cache
     private var lastGridZoom: CGFloat = -1
@@ -548,12 +572,12 @@ final class PixelCanvas: NSView {
         return path
     }
 
-    /// Refreshes only CALayer geometry during gestures. The CGImage is built
-    /// once when a pending source appears and cleared when it is dismissed.
+    /// Refreshes only CALayer geometry during gestures. The CGImage is rebuilt
+    /// only when the immutable pending source changes, then cleared on dismissal.
     private func updateFloatingImportGeometry() {
         guard let coordinator, let image = coordinator.model.floatingImport,
               let geometry = coordinator.model.floatingTransformGeometry else {
-            floatingImageLayer.contents = nil
+            floatingImageContentsCache.clear(layer: floatingImageLayer)
             floatingImageLayer.isHidden = true
             floatingOutlineLayer.path = nil
             floatingOutlineLayer.isHidden = true
@@ -568,9 +592,7 @@ final class PixelCanvas: NSView {
         floatingOutlineLayer.frame = rootFrame
         floatingHandlesLayer.frame = rootFrame
         floatingRotationLayer.frame = rootFrame
-        if floatingImageLayer.contents == nil {
-            floatingImageLayer.contents = makeCGImage(pixels: image.rgba, width: image.width, height: image.height)
-        }
+        floatingImageContentsCache.update(layer: floatingImageLayer, source: image)
         floatingImageLayer.bounds = CGRect(x: 0, y: 0,
                                            width: CGFloat(image.width) * coordinator.viewport.zoom,
                                            height: CGFloat(image.height) * coordinator.viewport.zoom)

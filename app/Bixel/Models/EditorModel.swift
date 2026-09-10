@@ -150,6 +150,8 @@ enum FloatingImportTarget: Equatable {
 /// deliberately separate from the document-backed transform selection: no
 /// document pixels, frames, layers, or undo history change until commit.
 struct FloatingImageImport {
+    /// Identifies the immutable native source while transform fields change.
+    let sourceID: UUID
     let rgba: [UInt8]
     let width: Int
     let height: Int
@@ -1293,7 +1295,7 @@ final class EditorModel: ObservableObject {
         operationError = nil
         clearFloatingGestureState()
         floatingImport = FloatingImageImport(
-            rgba: rgba, width: width, height: height, target: target, name: name,
+            sourceID: UUID(), rgba: rgba, width: width, height: height, target: target, name: name,
             center: resolvedCenter, scaleX: 1, scaleY: 1, angle: 0
         )
         tool = .transform
