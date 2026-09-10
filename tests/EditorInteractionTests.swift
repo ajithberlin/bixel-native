@@ -154,6 +154,97 @@ struct EditorInteractionTests {
             let offset = (y * width + x) * 4
             return Array(pixels[offset..<(offset + 4)])
         }
+        func floatingGestureModel(sourceWidth: Int = 4, sourceHeight: Int = 2) -> EditorModel {
+            let result = EditorModel(width: 16, height: 16)
+            result.beginFloatingImport(
+                rgba: nativeSource(width: sourceWidth, height: sourceHeight),
+                width: sourceWidth, height: sourceHeight,
+                target: .newFrame(layer: 0), name: "gesture-source",
+                center: CGPoint(x: 8, y: 8)
+            )
+            return result
+        }
+
+        // Floating hit testing is based on the oriented geometry, while a body
+        // press begins a move only when it lands inside that geometry.
+        let hitModel = floatingGestureModel()
+        guard let hitGeometry = hitModel.floatingTransformGeometry else {
+            fatalError("Floating import must expose transform geometry")
+        }
+        precondition(hitModel.beginFloatingMove(x: 7, y: 8),
+                     "A press inside a floating image must start a move")
+        precondition(!hitModel.beginFloatingMove(x: 2, y: 2),
+                     "A press outside a floating image must not start a move")
+        let topLeft = hitGeometry.point(for: .topLeft)
+        precondition(hitModel.hitFloatingTransformHandle(x: topLeft.x, y: topLeft.y, tolerance: 0.01) == .topLeft,
+                     "Floating transform handles must be hit at their oriented geometry positions")
+        precondition(hitModel.hitFloatingTransformHandle(x: 8, y: 8, tolerance: 0.01) == nil,
+                     "The floating transform center must not be mistaken for a handle")
+        let floatingRotationHandle = hitGeometry.rotationHandlePoint
+        precondition(hitModel.hitFloatingRotationHandle(x: floatingRotationHandle.x, y: floatingRotationHandle.y, tolerance: 0.01),
+                     "Floating rotation handles must be hit at their oriented geometry position")
+        precondition(!hitModel.hitFloatingRotationHandle(x: 8, y: 8, tolerance: 0.01),
+                     "The floating center must not be mistaken for the rotation handle")
+
+        // A move preserves the pointer's original offset instead of snapping
+        // the floating center beneath the cursor, and nudge applies document-space deltas.
+        let moveModel = floatingGestureModel()
+        precondition(moveModel.beginFloatingMove(x: 6.5, y: 7.5))
+        moveModel.updateFloatingMove(x: 11.5, y: 12.5)
+        assertNear(moveModel.floatingImport!.center, CGPoint(x: 13, y: 13),
+                   "Floating move must preserve press-to-center offset")
+        moveModel.nudgeFloatingImport(dx: 2, dy: -3)
+        assertNear(moveModel.floatingImport!.center, CGPoint(x: 15, y: 10),
+                   "Floating nudge must apply document-space deltas")
+
+        // Crossing the -pi/pi branch is a small clockwise delta, and a cancelled
+        // rotation restores the angle from the start of that rotation gesture.
+        let rotationModel = floatingGestureModel()
+        let radius: CGFloat = 10
+        let beforeBranch = CGPoint(x: 8 + cos(.pi - 0.1) * radius, y: 8 + sin(.pi - 0.1) * radius)
+        let afterBranch = CGPoint(x: 8 + cos(-.pi + 0.1) * radius, y: 8 + sin(-.pi + 0.1) * radius)
+        rotationModel.beginFloatingRotation(x: beforeBranch.x, y: beforeBranch.y)
+        rotationModel.updateFloatingRotation(x: afterBranch.x, y: afterBranch.y)
+        precondition(abs(rotationModel.floatingImport!.angle - 0.2) <= tolerance,
+                     "Floating rotation must accumulate the shortest angle across the pi boundary")
+        rotationModel.endFloatingRotation(commit: false)
+        precondition(abs(rotationModel.floatingImport!.angle) <= tolerance,
+                     "Cancelling a floating rotation must restore its starting angle")
+
+        // A rotated edge resize keeps its opposite edge anchored in document
+        // space and changes only the requested local axis.
+        let rotatedResizeModel = floatingGestureModel()
+        rotatedResizeModel.beginFloatingRotation(x: 8, y: 0)
+        rotatedResizeModel.updateFloatingRotation(x: 16, y: 8)
+        rotatedResizeModel.endFloatingRotation(commit: true)
+        let anchoredLeft = rotatedResizeModel.floatingTransformGeometry!.point(for: .left)
+        rotatedResizeModel.beginFloatingResize(handle: .right, x: 8, y: 10, uniform: false)
+        rotatedResizeModel.updateFloatingResize(x: 8, y: 12)
+        let rotatedResize = rotatedResizeModel.floatingImport!
+        assertNear(rotatedResizeModel.floatingTransformGeometry!.point(for: .left), anchoredLeft,
+                   "Rotated resize must keep the opposite edge anchored")
+        precondition(abs(rotatedResize.scaleX - 1.5) <= tolerance && abs(rotatedResize.scaleY - 1) <= tolerance,
+                     "Rotated right-edge resize must change only local width")
+
+        // Uniform corner resize uses one scale factor and keeps the opposite
+        // corner fixed; an ordinary edge resize still changes only its axis.
+        let uniformResizeModel = floatingGestureModel()
+        uniformResizeModel.uniformTransform = true
+        let anchoredTopLeft = uniformResizeModel.floatingTransformGeometry!.point(for: .topLeft)
+        uniformResizeModel.beginFloatingResize(handle: .bottomRight, x: 10, y: 9, uniform: false)
+        uniformResizeModel.updateFloatingResize(x: 14, y: 11)
+        let uniformResize = uniformResizeModel.floatingImport!
+        assertNear(uniformResizeModel.floatingTransformGeometry!.point(for: .topLeft), anchoredTopLeft,
+                   "Uniform corner resize must keep the opposite corner anchored")
+        precondition(abs(uniformResize.scaleX - 2) <= tolerance && abs(uniformResize.scaleY - 2) <= tolerance,
+                     "Uniform corner resize must preserve the source aspect ratio")
+
+        let edgeResizeModel = floatingGestureModel()
+        edgeResizeModel.beginFloatingResize(handle: .right, x: 10, y: 8, uniform: true)
+        edgeResizeModel.updateFloatingResize(x: 12, y: 30)
+        let edgeResize = edgeResizeModel.floatingImport!
+        precondition(abs(edgeResize.scaleX - 1.5) <= tolerance && abs(edgeResize.scaleY - 1) <= tolerance,
+                     "Edge resize must ignore uniform scaling and change only its corresponding axis")
 
         // A new-frame import must retain native RGBA until the user commits it,
         // and it must target the selected layer rather than layer zero.
