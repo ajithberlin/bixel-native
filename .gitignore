@@ -21,6 +21,10 @@ app/Bixel/Info.plist
 # macOS
 .DS_Store
 
+# Local agent and Xcode caches
+docs/superpowers/
+com.apple.DeveloperTools/
+
 __PYCACHE__/
 build/
 *.xcarchive
