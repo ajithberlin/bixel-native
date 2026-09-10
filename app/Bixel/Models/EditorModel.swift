@@ -141,6 +141,34 @@ struct TransformGeometry {
     }
 }
 
+enum FloatingImportTarget: Equatable {
+    case newFrame(layer: Int)
+    case newLayer(frame: Int, name: String)
+}
+
+/// Native-resolution source data awaiting a user-confirmed transform. This is
+/// deliberately separate from the document-backed transform selection: no
+/// document pixels, frames, layers, or undo history change until commit.
+struct FloatingImageImport {
+    let rgba: [UInt8]
+    let width: Int
+    let height: Int
+    let target: FloatingImportTarget
+    let name: String
+    var center: CGPoint
+    var scaleX: CGFloat
+    var scaleY: CGFloat
+    var angle: CGFloat
+
+    var geometry: TransformGeometry {
+        TransformGeometry(
+            center: center,
+            size: CGSize(width: CGFloat(width) * scaleX, height: CGFloat(height) * scaleY),
+            angle: angle
+        )
+    }
+}
+
 struct LayerInfo: Identifiable {
     let index: Int
     var name: String
@@ -198,6 +226,7 @@ final class EditorModel: ObservableObject {
     @Published var snapping = true
     /// Aspect-ratio lock for free-transform resizing (the "Uniform" toggle).
     @Published var uniformTransform = false
+    @Published private(set) var floatingImport: FloatingImageImport?
     private var selectionStart: CGPoint?
     private var transformStart: CGPoint?
     private var transformOrigin: CGRect?
@@ -208,6 +237,14 @@ final class EditorModel: ObservableObject {
     private var rotationStartAngle: CGFloat?
     private var rotationBaseAngle: CGFloat = 0
     private var rotationBaseRect: CGRect?
+    private var floatingMoveOffset: CGPoint?
+    private var floatingResizeHandle: TransformHandle?
+    private var floatingResizeBase: FloatingImageImport?
+    private var floatingResizeUniform = false
+    private var floatingRotationCenter: CGPoint?
+    private var floatingRotationLastAngle: CGFloat?
+    private var floatingRotationBaseAngle: CGFloat = 0
+    private let minimumFloatingScale: CGFloat = 0.0001
 
     // Playback settings
     @Published var fps: Double = 12 {
@@ -1193,6 +1230,251 @@ final class EditorModel: ObservableObject {
         return pixels
     }
 
+    // MARK: - Floating image import
+
+    var floatingTransformGeometry: TransformGeometry? { floatingImport?.geometry }
+
+    private func validFloatingImageDimensions(width: Int, height: Int, rgbaCount: Int) -> Bool {
+        guard width > 0, height > 0,
+              height <= Int.max / 4,
+              width <= Int.max / (height * 4) else { return false }
+        return rgbaCount == width * height * 4
+    }
+
+    private func rotateFloatingPoint(_ point: CGPoint, by angle: CGFloat) -> CGPoint {
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        return CGPoint(x: point.x * cosine - point.y * sine,
+                       y: point.x * sine + point.y * cosine)
+    }
+
+    private func floatingPoint(fromLocal point: CGPoint, in base: FloatingImageImport) -> CGPoint {
+        let rotated = rotateFloatingPoint(point, by: base.angle)
+        return CGPoint(x: base.center.x + rotated.x, y: base.center.y + rotated.y)
+    }
+
+    private func clearFloatingGestureState() {
+        floatingMoveOffset = nil
+        floatingResizeHandle = nil
+        floatingResizeBase = nil
+        floatingResizeUniform = false
+        floatingRotationCenter = nil
+        floatingRotationLastAngle = nil
+        floatingRotationBaseAngle = 0
+    }
+
+    func beginFloatingImport(
+        rgba: [UInt8], width: Int, height: Int,
+        target: FloatingImportTarget, name: String,
+        center: CGPoint? = nil
+    ) {
+        guard floatingImport == nil else {
+            operationError = "Finish or cancel the current floating import first."
+            return
+        }
+        guard validFloatingImageDimensions(width: width, height: height, rgbaCount: rgba.count) else {
+            operationError = "Invalid RGBA image dimensions or buffer length."
+            return
+        }
+        let resolvedCenter = center ?? CGPoint(x: CGFloat(self.width) / 2, y: CGFloat(self.height) / 2)
+        guard resolvedCenter.x.isFinite && resolvedCenter.y.isFinite else {
+            operationError = "Invalid floating import position."
+            return
+        }
+        operationError = nil
+        clearFloatingGestureState()
+        floatingImport = FloatingImageImport(
+            rgba: rgba, width: width, height: height, target: target, name: name,
+            center: resolvedCenter, scaleX: 1, scaleY: 1, angle: 0
+        )
+        tool = .transform
+    }
+
+    func hitFloatingTransformHandle(x: CGFloat, y: CGFloat, tolerance: CGFloat) -> TransformHandle? {
+        guard let geometry = floatingTransformGeometry else { return nil }
+        let point = CGPoint(x: x, y: y)
+        return TransformHandle.allCases.first { handle in
+            hypot(point.x - geometry.point(for: handle).x, point.y - geometry.point(for: handle).y) <= tolerance
+        }
+    }
+
+    func hitFloatingRotationHandle(x: CGFloat, y: CGFloat, tolerance: CGFloat) -> Bool {
+        guard let geometry = floatingTransformGeometry else { return false }
+        return hypot(x - geometry.rotationHandlePoint.x, y - geometry.rotationHandlePoint.y) <= tolerance
+    }
+
+    @discardableResult
+    func beginFloatingMove(x: CGFloat, y: CGFloat) -> Bool {
+        guard let image = floatingImport, image.geometry.contains(CGPoint(x: x, y: y)) else { return false }
+        floatingMoveOffset = CGPoint(x: x - image.center.x, y: y - image.center.y)
+        return true
+    }
+
+    func updateFloatingMove(x: CGFloat, y: CGFloat) {
+        guard let offset = floatingMoveOffset, var image = floatingImport,
+              x.isFinite, y.isFinite else { return }
+        image.center = CGPoint(x: x - offset.x, y: y - offset.y)
+        floatingImport = image
+    }
+
+    func beginFloatingResize(handle: TransformHandle, x: CGFloat, y: CGFloat, uniform: Bool) {
+        guard let image = floatingImport else { return }
+        floatingResizeHandle = handle
+        floatingResizeBase = image
+        floatingResizeUniform = handle.isCorner && (uniformTransform || uniform)
+        _ = x; _ = y
+    }
+
+    func updateFloatingResize(x: CGFloat, y: CGFloat) {
+        guard let base = floatingResizeBase, let handle = floatingResizeHandle,
+              x.isFinite, y.isFinite else { return }
+        let local = base.geometry.localPoint(CGPoint(x: x, y: y))
+        let baseSize = base.geometry.size
+        let minimumWidth = max(CGFloat(base.width) * minimumFloatingScale, .leastNonzeroMagnitude)
+        let minimumHeight = max(CGFloat(base.height) * minimumFloatingScale, .leastNonzeroMagnitude)
+
+        let movesLeft = handle == .topLeft || handle == .bottomLeft || handle == .left
+        let movesRight = handle == .topRight || handle == .bottomRight || handle == .right
+        let movesTop = handle == .topLeft || handle == .topRight || handle == .top
+        let movesBottom = handle == .bottomLeft || handle == .bottomRight || handle == .bottom
+
+        var localCenter = CGPoint.zero
+        var newWidth = baseSize.width
+        var newHeight = baseSize.height
+
+        if movesLeft {
+            let fixed = baseSize.width / 2
+            let dragged = min(local.x, fixed - minimumWidth)
+            newWidth = fixed - dragged
+            localCenter.x = (fixed + dragged) / 2
+        } else if movesRight {
+            let fixed = -baseSize.width / 2
+            let dragged = max(local.x, fixed + minimumWidth)
+            newWidth = dragged - fixed
+            localCenter.x = (fixed + dragged) / 2
+        }
+        if movesTop {
+            let fixed = baseSize.height / 2
+            let dragged = min(local.y, fixed - minimumHeight)
+            newHeight = fixed - dragged
+            localCenter.y = (fixed + dragged) / 2
+        } else if movesBottom {
+            let fixed = -baseSize.height / 2
+            let dragged = max(local.y, fixed + minimumHeight)
+            newHeight = dragged - fixed
+            localCenter.y = (fixed + dragged) / 2
+        }
+
+        if floatingResizeUniform {
+            let scale = max(
+                minimumFloatingScale,
+                max(newWidth / max(baseSize.width, minimumWidth),
+                    newHeight / max(baseSize.height, minimumHeight))
+            )
+            newWidth = baseSize.width * scale
+            newHeight = baseSize.height * scale
+            localCenter.x = movesLeft ? (baseSize.width - newWidth) / 2 : (newWidth - baseSize.width) / 2
+            localCenter.y = movesTop ? (baseSize.height - newHeight) / 2 : (newHeight - baseSize.height) / 2
+        }
+
+        var image = base
+        image.center = floatingPoint(fromLocal: localCenter, in: base)
+        image.scaleX = max(minimumFloatingScale, newWidth / CGFloat(base.width))
+        image.scaleY = max(minimumFloatingScale, newHeight / CGFloat(base.height))
+        floatingImport = image
+    }
+
+    func beginFloatingRotation(x: CGFloat, y: CGFloat) {
+        guard let image = floatingImport else { return }
+        floatingRotationCenter = image.center
+        floatingRotationLastAngle = atan2(y - image.center.y, x - image.center.x)
+        floatingRotationBaseAngle = image.angle
+    }
+
+    func updateFloatingRotation(x: CGFloat, y: CGFloat) {
+        guard let center = floatingRotationCenter, let last = floatingRotationLastAngle,
+              var image = floatingImport else { return }
+        let current = atan2(y - center.y, x - center.x)
+        var delta = current - last
+        while delta > .pi { delta -= 2 * .pi }
+        while delta < -.pi { delta += 2 * .pi }
+        image.angle += delta
+        floatingRotationLastAngle = current
+        floatingImport = image
+    }
+
+    func endFloatingRotation(commit: Bool) {
+        guard floatingRotationCenter != nil else { return }
+        if !commit, var image = floatingImport {
+            image.angle = floatingRotationBaseAngle
+            floatingImport = image
+        }
+        floatingRotationCenter = nil
+        floatingRotationLastAngle = nil
+        floatingRotationBaseAngle = 0
+    }
+
+    func nudgeFloatingImport(dx: Int, dy: Int) {
+        guard var image = floatingImport else { return }
+        image.center.x += CGFloat(dx)
+        image.center.y += CGFloat(dy)
+        floatingImport = image
+    }
+
+    func commitFloatingImport() {
+        guard let image = floatingImport else { return }
+        let rasterized = AIService.rasterizeNativeImage(
+            rgba: image.rgba, srcWidth: image.width, srcHeight: image.height,
+            center: image.center, scaleX: image.scaleX, scaleY: image.scaleY,
+            angle: image.angle, dstWidth: width, dstHeight: height
+        )
+        guard rasterized.count == width * height * 4 else {
+            operationError = "Could not rasterize the floating image."
+            return
+        }
+
+        do {
+            switch image.target {
+            case let .newFrame(layer: layer):
+                guard layer >= 0 && layer < document.layerCount else {
+                    throw StorageError.message("The floating import's target layer is no longer available.")
+                }
+                document.snapshot()
+                let newFrame = document.addFrame(durationMs: 125)
+                document.loadImageData(rasterized, width: width, height: height, layer: layer, frame: newFrame)
+                frame = newFrame
+                activeLayer = layer
+            case let .newLayer(frame: targetFrame, name: name):
+                guard targetFrame >= 0 && targetFrame < document.frameCount else {
+                    throw StorageError.message("The floating import's target frame is no longer available.")
+                }
+                // `placeImageData` owns its single document snapshot. Supplying
+                // the already-rasterized canvas buffer avoids a second mutation.
+                activeLayer = try document.placeImageData(
+                    rasterized, width: width, height: height, x: 0, y: 0,
+                    frame: targetFrame, name: name
+                )
+                frame = targetFrame
+            }
+            reloadLayers()
+            selectionRect = activeLayerContentBounds()
+            transformRect = selectionRect
+            transformAngle = 0
+            clearFloatingGestureState()
+            floatingImport = nil
+            operationError = nil
+            commitChange(allFrames: true)
+        } catch {
+            operationError = error.localizedDescription
+        }
+    }
+
+    func cancelFloatingImport() {
+        clearFloatingGestureState()
+        floatingImport = nil
+        operationError = nil
+    }
+
     /// Pack the current animation with Rust and export matching frame metadata.
     func exportSpriteSheet() {
         do {
@@ -1223,16 +1505,14 @@ final class EditorModel: ObservableObject {
     func placeAsset(_ data: Data, name: String, x: Int? = nil, y: Int? = nil) {
         operationError = nil
         guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the image."; return }
-        // Keep the source at native pixels. Rust clips placement against the
-        // document, so oversized assets remain centered instead of silently
-        // being resampled or pinned to the top-left.
-        let px = x ?? (width - image.width) / 2
-        let py = y ?? (height - image.height) / 2
-        do {
-            activeLayer = try document.placeImageData(image.rgba, width: image.width, height: image.height,
-                                                       x: px, y: py, frame: frame, name: name)
-            reloadLayers(); commitChange(allFrames: true)
-        } catch { operationError = error.localizedDescription }
+        let center = CGPoint(
+            x: x.map { CGFloat($0) + CGFloat(image.width) / 2 } ?? CGFloat(width) / 2,
+            y: y.map { CGFloat($0) + CGFloat(image.height) / 2 } ?? CGFloat(height) / 2
+        )
+        beginFloatingImport(
+            rgba: image.rgba, width: image.width, height: image.height,
+            target: .newLayer(frame: frame, name: name), name: name, center: center
+        )
     }
 
     func importSheet(_ data: Data, name: String) {
@@ -1244,32 +1524,13 @@ final class EditorModel: ObservableObject {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// Apply an image to a new animation frame without resampling. The fixed
-    /// document canvas clips a larger source at its centered bounds, then the
-    /// visible pixels are selected so the user can transform them manually.
+    /// Begin a native-resolution image import for a new animation frame. The
+    /// document is untouched until the user commits its floating transform.
     func applyImageToNewFrame(_ rgba: [UInt8], width: Int, height: Int) {
-        guard width > 0, height > 0 else {
-            operationError = "Invalid image dimensions."
-            return
-        }
-        let targetData = AIService.centerNativeImage(rgba: rgba, srcWidth: width, srcHeight: height,
-                                                     dstWidth: self.width, dstHeight: self.height)
-        guard targetData.count == self.width * self.height * 4 else {
-            operationError = "Could not place the image on the canvas."
-            return
-        }
-        document.snapshot()
-        let newFrame = document.addFrame(durationMs: 125)
-        document.loadImageData(targetData, width: self.width, height: self.height, layer: 0, frame: newFrame)
-        frame = newFrame
-        reloadLayers()
-        selectionRect = activeLayerContentBounds()
-        transformRect = selectionRect
-        transformAngle = 0
-        if selectionRect != nil {
-            selectTool(.transform)
-        }
-        commitChange(allFrames: true)
+        beginFloatingImport(
+            rgba: rgba, width: width, height: height,
+            target: .newFrame(layer: activeLayer), name: "Imported Image"
+        )
     }
 
     /// Apply an image to the active layer of current frame, auto-fitting to document dimensions if needed.

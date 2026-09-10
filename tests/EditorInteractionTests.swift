@@ -140,25 +140,131 @@ struct EditorInteractionTests {
         precondition(model.selectionRect == nil && model.transformRect == nil,
                      "Changing from transform to a painting tool must close the selection")
 
-        let nativeSource = [UInt8](repeating: 0, count: 8 * 8 * 4)
-        var markedSource = nativeSource
-        let sourcePixel = (2 * 8 + 2) * 4
-        markedSource[sourcePixel..<(sourcePixel + 4)] = [255, 0, 0, 255]
-        let importModel = EditorModel(width: 4, height: 4)
-        importModel.applyImageToNewFrame(markedSource, width: 8, height: 8)
-        precondition(importModel.frame == 1, "Imported artwork must be placed on a new frame")
-        precondition(importModel.document.getPixel(layer: importModel.activeLayer, frame: 1, x: 0, y: 0).r == 255,
-                     "A larger source must retain native pixels at its centered crop instead of being resampled")
-        precondition(importModel.tool == .transform && importModel.selectionRect != nil,
-                     "Imported artwork must be immediately ready for manual transform")
+        func nativeSource(width: Int, height: Int) -> [UInt8] {
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = (y * width + x) * 4
+                    pixels[offset..<(offset + 4)] = [UInt8(x + 1), UInt8(y + 31), UInt8(x + y + 61), 255]
+                }
+            }
+            return pixels
+        }
+        func pixel(_ pixels: [UInt8], width: Int, x: Int, y: Int) -> [UInt8] {
+            let offset = (y * width + x) * 4
+            return Array(pixels[offset..<(offset + 4)])
+        }
 
-        let placementModel = EditorModel(width: 4, height: 4)
-        var oversizedSource = [UInt8](repeating: 0, count: 8 * 8 * 4)
-        let oversizedPixel = (2 * 8 + 2) * 4
-        oversizedSource[oversizedPixel..<(oversizedPixel + 4)] = [255, 0, 0, 255]
-        placementModel.placeAsset(AIService.rgbaToPNG(oversizedSource, width: 8, height: 8)!, name: "oversized.png")
-        precondition(placementModel.document.getPixel(layer: placementModel.activeLayer, frame: 0, x: 0, y: 0).r == 255,
-                     "Larger dropped assets must be centered with native pixels instead of clamping their origin")
+        // A new-frame import must retain native RGBA until the user commits it,
+        // and it must target the selected layer rather than layer zero.
+        let pendingFrameModel = EditorModel(width: 4, height: 4)
+        _ = pendingFrameModel.document.addLayer("Selected")
+        pendingFrameModel.reloadLayers()
+        pendingFrameModel.activeLayer = 1
+        let pendingFrameSource = nativeSource(width: 8, height: 8)
+        let framesBeforePendingFrame = pendingFrameModel.frameCount
+        let frameBeforePendingFrame = pendingFrameModel.frame
+        pendingFrameModel.applyImageToNewFrame(pendingFrameSource, width: 8, height: 8)
+        guard let pendingFrame = pendingFrameModel.floatingImport else {
+            fatalError("A new-frame import must become a floating import")
+        }
+        precondition((pendingFrame.width, pendingFrame.height, pendingFrame.rgba.count) == (8, 8, 8 * 8 * 4),
+                     "Floating imports must retain the complete native source")
+        guard case let .newFrame(layer: targetLayer) = pendingFrame.target else {
+            fatalError("New-frame import must keep a new-frame target")
+        }
+        precondition(targetLayer == 1, "New-frame import must target the active layer")
+        precondition(pendingFrameModel.frameCount == framesBeforePendingFrame && pendingFrameModel.frame == frameBeforePendingFrame,
+                     "Beginning an import must not create or select a document frame")
+        precondition(pendingFrameModel.tool == .transform,
+                     "A pending import must enter the transform tool")
+
+        // A dropped asset stores the requested top-left as a source center and
+        // does not add its target layer until commit.
+        let pendingLayerModel = EditorModel(width: 4, height: 4)
+        let pendingLayerSource = nativeSource(width: 8, height: 8)
+        let layersBeforePendingLayer = pendingLayerModel.document.layerCount
+        pendingLayerModel.placeAsset(
+            AIService.rgbaToPNG(pendingLayerSource, width: 8, height: 8)!,
+            name: "oversized.png", x: 3, y: -2
+        )
+        guard let pendingLayer = pendingLayerModel.floatingImport else {
+            fatalError("A dropped asset must become a floating import")
+        }
+        precondition((pendingLayer.width, pendingLayer.height, pendingLayer.rgba.count) == (8, 8, 8 * 8 * 4),
+                     "Dropped oversized PNGs must retain every source pixel")
+        guard case let .newLayer(frame: targetFrame, name: targetName) = pendingLayer.target else {
+            fatalError("Dropped assets must keep a new-layer target")
+        }
+        precondition(targetFrame == 0 && targetName == "oversized.png",
+                     "Dropped asset target must retain frame and layer name")
+        assertNear(pendingLayer.center, CGPoint(x: 7, y: 2),
+                   "Dropped asset center must derive from the requested source top-left")
+        precondition(pendingLayerModel.document.layerCount == layersBeforePendingLayer,
+                     "Beginning a dropped asset import must not add a document layer")
+
+        // Cancellation is purely transient: it cannot affect document state or pixels.
+        let cancellationModel = EditorModel(width: 4, height: 4)
+        cancellationModel.document.setPixel(layer: 0, frame: 0, x: 1, y: 1, BixelColor(r: 9, g: 8, b: 7, a: 255))
+        let cancellationPixels = cancellationModel.document.celRGBA(layer: 0, frame: 0)
+        let cancellationFrames = cancellationModel.frameCount
+        let cancellationLayers = cancellationModel.document.layerCount
+        let cancellationFrame = cancellationModel.frame
+        let cancellationActiveLayer = cancellationModel.activeLayer
+        cancellationModel.applyImageToNewFrame(nativeSource(width: 8, height: 8), width: 8, height: 8)
+        cancellationModel.cancelFloatingImport()
+        precondition(cancellationModel.floatingImport == nil,
+                     "Cancel must discard the pending import")
+        precondition(cancellationModel.frameCount == cancellationFrames && cancellationModel.document.layerCount == cancellationLayers &&
+                     cancellationModel.frame == cancellationFrame && cancellationModel.activeLayer == cancellationActiveLayer &&
+                     cancellationModel.document.celRGBA(layer: 0, frame: 0) == cancellationPixels,
+                     "Cancel must leave document frame, layer, selection, and pixels untouched")
+
+        // Commit rasterizes the native source once into the fixed canvas. The
+        // canvas clips it then, not when the import begins, and the frame change
+        // is a single undoable document mutation.
+        let commitFrameModel = EditorModel(width: 4, height: 4)
+        _ = commitFrameModel.document.addLayer("Selected")
+        commitFrameModel.reloadLayers()
+        commitFrameModel.activeLayer = 1
+        let commitFrameSource = nativeSource(width: 8, height: 8)
+        commitFrameModel.applyImageToNewFrame(commitFrameSource, width: 8, height: 8)
+        commitFrameModel.commitFloatingImport()
+        precondition(commitFrameModel.floatingImport == nil && commitFrameModel.frameCount == 2 && commitFrameModel.frame == 1 &&
+                     commitFrameModel.activeLayer == 1,
+                     "Committing a new-frame import must add and select exactly one frame on its target layer")
+        precondition(pixel(commitFrameModel.document.celRGBA(layer: 1, frame: 1), width: 4, x: 0, y: 0) ==
+                     pixel(commitFrameSource, width: 8, x: 2, y: 2),
+                     "Commit must clip the centered native source only in the document-sized result")
+        precondition(commitFrameModel.selectionRect == CGRect(x: 0, y: 0, width: 4, height: 4),
+                     "New-frame commit must select its committed content bounds")
+        precondition(commitFrameModel.document.undo() && commitFrameModel.document.frameCount == 1 && !commitFrameModel.document.canUndo,
+                     "New-frame commit must produce one undoable document mutation")
+
+        let commitLayerModel = EditorModel(width: 4, height: 4)
+        let commitLayerSource = nativeSource(width: 8, height: 8)
+        commitLayerModel.placeAsset(AIService.rgbaToPNG(commitLayerSource, width: 8, height: 8)!, name: "oversized.png")
+        commitLayerModel.commitFloatingImport()
+        precondition(commitLayerModel.floatingImport == nil && commitLayerModel.document.layerCount == 2 &&
+                     commitLayerModel.activeLayer == 1 && commitLayerModel.frame == 0,
+                     "Committing a dropped asset must add and select exactly one layer on its target frame")
+        precondition(pixel(commitLayerModel.document.celRGBA(layer: 1, frame: 0), width: 4, x: 0, y: 0) ==
+                     pixel(commitLayerSource, width: 8, x: 2, y: 2),
+                     "New-layer commit must use the document-sized raster result")
+        precondition(commitLayerModel.document.undo() && commitLayerModel.document.layerCount == 1 && !commitLayerModel.document.canUndo,
+                     "New-layer commit must remain one undoable document mutation")
+
+        // Resizing transforms the native source before the single commit raster.
+        let scaledImportModel = EditorModel(width: 8, height: 8)
+        let scaledImportSource = nativeSource(width: 4, height: 4)
+        scaledImportModel.applyImageToNewFrame(scaledImportSource, width: 4, height: 4)
+        scaledImportModel.beginFloatingResize(handle: .bottomRight, x: 6, y: 6, uniform: false)
+        scaledImportModel.updateFloatingResize(x: 4, y: 4)
+        scaledImportModel.commitFloatingImport()
+        let scaledPixels = scaledImportModel.document.celRGBA(layer: 0, frame: 1)
+        precondition(pixel(scaledPixels, width: 8, x: 2, y: 2) == pixel(scaledImportSource, width: 4, x: 1, y: 1) &&
+                     pixel(scaledPixels, width: 8, x: 3, y: 2) == pixel(scaledImportSource, width: 4, x: 3, y: 1),
+                     "Reducing floating scale must place nearest source pixels at the transformed document positions")
 
         precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: true) == .paint)
         precondition(CanvasCursorPolicy.kind(tool: .eyedropper, insideArtboard: true) == .eyedropper)
