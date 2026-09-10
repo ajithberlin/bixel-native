@@ -48,10 +48,12 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
-        # -lbixel links the Rust engine (embedded goose agent). rustls-platform-verifier
-        # needs Security/CoreFoundation; reqwest's system-proxy support needs
+        # Force-load the generated Rust archive so Release/archive links consume
+        # the C ABI exports even when Swift's references are optimized across
+        # the whole-module link. rustls-platform-verifier needs
+        # Security/CoreFoundation; reqwest's system-proxy support needs
         # SystemConfiguration.
-        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation -framework SystemConfiguration"
+        OTHER_LDFLAGS: '-force_load "$(SRCROOT)/generated/libbixel.a" -framework Security -framework CoreFoundation -framework SystemConfiguration'
         ENABLE_BITCODE: NO
         # The Rust build phase needs to read/write target/, generated/ and the
         # cargo/rustup homes, which the user-script sandbox blocks.
