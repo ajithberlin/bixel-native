@@ -206,6 +206,12 @@ struct FloatingImageContentsCache {
 final class PixelCanvas: NSView {
     weak var coordinator: CanvasView.Coordinator?
 
+    static let workspaceBaseColor = NSColor(red: 32.0 / 255.0,
+                                            green: 34.0 / 255.0,
+                                            blue: 38.0 / 255.0,
+                                            alpha: 1.0)
+    static let workspaceDimAlpha: CGFloat = 0.22
+
     // Layers
     private let artboardShadowLayer = CALayer()
     private let artboardLayer = CALayer()
@@ -296,8 +302,8 @@ final class PixelCanvas: NSView {
         wantsLayer = true
         guard let root = layer else { return }
 
-        // Workspace background: Procreate dark workspace (#121316)
-        root.backgroundColor = NSColor(red: 0.07, green: 0.073, blue: 0.085, alpha: 1.0).cgColor
+        // Workspace background: graphite gray (#202226)
+        root.backgroundColor = Self.workspaceBaseColor.cgColor
 
         // Artboard shadow layer
         artboardShadowLayer.shadowColor = NSColor.black.cgColor
@@ -372,7 +378,7 @@ final class PixelCanvas: NSView {
         // Workspace dim: darkens everything except the artboard, so the work
         // area "pops" (Photoshop/Procreate focus mode). Hole punches in the
         // even-odd path follow the artboard each pan/zoom.
-        workspaceDimLayer.fillColor = NSColor.black.withAlphaComponent(0.42).cgColor
+        workspaceDimLayer.fillColor = NSColor.black.withAlphaComponent(Self.workspaceDimAlpha).cgColor
         workspaceDimLayer.fillRule = .evenOdd
         root.addSublayer(workspaceDimLayer)
 

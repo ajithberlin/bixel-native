@@ -3,6 +3,22 @@ import AppKit
 @main
 struct EditorInteractionTests {
     static func main() {
+        var workspaceRed: CGFloat = 0
+        var workspaceGreen: CGFloat = 0
+        var workspaceBlue: CGFloat = 0
+        var workspaceAlpha: CGFloat = 0
+        PixelCanvas.workspaceBaseColor.getRed(
+            &workspaceRed, green: &workspaceGreen, blue: &workspaceBlue, alpha: &workspaceAlpha
+        )
+        let paletteTolerance: CGFloat = 0.001
+        precondition(abs(workspaceRed - 32.0 / 255.0) <= paletteTolerance &&
+                     abs(workspaceGreen - 34.0 / 255.0) <= paletteTolerance &&
+                     abs(workspaceBlue - 38.0 / 255.0) <= paletteTolerance &&
+                     abs(workspaceAlpha - 1.0) <= paletteTolerance,
+                     "Workspace base color must be approximately #202226")
+        precondition(abs(PixelCanvas.workspaceDimAlpha - 0.22) <= paletteTolerance,
+                     "Workspace dim overlay alpha must be approximately 0.22")
+
         let model = EditorModel(width: 8, height: 8)
         for _ in 1..<40 { _ = model.document.addLayer() }
         model.reloadLayers()
