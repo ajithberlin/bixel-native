@@ -29,6 +29,10 @@ pub struct GooseAgent {
     runtime: tokio::runtime::Runtime,
     session_id: Mutex<HashMap<String, String>>,
     handle: Mutex<Option<Arc<ProviderHandle>>>,
+    /// The session the in-process extension clients are currently bound to.
+    /// Goose keeps one MCP client per extension name and asserts it only ever
+    /// serves a single session, so a session switch must re-create them.
+    bound_session: Mutex<Option<String>>,
 }
 
 impl GooseAgent {
@@ -66,6 +70,7 @@ impl GooseAgent {
             runtime,
             session_id: Mutex::new(HashMap::new()),
             handle: Mutex::new(None),
+            bound_session: Mutex::new(None),
         })
     }
 
@@ -143,13 +148,43 @@ impl GooseAgent {
         Ok(id)
     }
 
+    /// Record `session_id` as the bound session, returning true when the
+    /// in-process extension clients must be re-created for it. Goose's
+    /// extension manager dedupes clients by name and its in-process MCP client
+    /// panics ("requests from different sessions") when a second session
+    /// reuses one, so any session change forces a rebind.
+    fn mark_bound_session(&self, session_id: &str) -> bool {
+        let mut bound = self.bound_session.lock().unwrap();
+        if bound.as_deref() == Some(session_id) {
+            false
+        } else {
+            *bound = Some(session_id.to_string());
+            true
+        }
+    }
+
     /// Enable the developer (file/shell) and bixel (pixel-art skills) extensions
     /// and hand the session the cached provider with the configured text model.
     fn ensure_extensions_and_provider(&self, session_id: &str) -> Result<(), AiError> {
         let handle = self
             .handle()
             .ok_or_else(|| AiError::Config("AI provider is not connected".into()))?;
+        let rebind = self.mark_bound_session(session_id);
         let res: Result<(), String> = self.runtime.block_on(async {
+            if rebind {
+                // Drop both clients so add_extension re-creates them bound to
+                // this session (fresh empty session slot, no goose assert).
+                self.agent
+                    .extension_manager
+                    .remove_extension_by_key("developer")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                self.agent
+                    .extension_manager
+                    .remove_extension_by_key("bixel")
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             self.agent
                 .add_extension(
                     ExtensionConfig::Platform {
@@ -416,5 +451,18 @@ mod workspace_tests {
         assert_eq!(a_id, agent.ensure_session(&a).unwrap());
         agent.reset();
         assert_ne!(a_id, agent.ensure_session(&a).unwrap());
+    }
+
+    #[test]
+    fn session_switch_marks_extensions_for_rebind() {
+        let agent = GooseAgent::new().unwrap();
+        // First bind of a session always rebinds (clients start unbound).
+        assert!(agent.mark_bound_session("session-a"));
+        // Re-marking the same session is a no-op.
+        assert!(!agent.mark_bound_session("session-a"));
+        // A different conversation's session forces a rebind — otherwise
+        // goose's McpClient panics ("requests from different sessions").
+        assert!(agent.mark_bound_session("session-b"));
+        assert!(!agent.mark_bound_session("session-b"));
     }
 }
