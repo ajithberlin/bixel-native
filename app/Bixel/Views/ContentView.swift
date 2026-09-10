@@ -16,7 +16,6 @@ struct ContentView: View {
     @StateObject private var viewport = CanvasViewport()
     @State private var currentScreen: StudioScreen = .home
     @State private var showProjects = false
-    @State private var showLibrary = false
     @State private var showNewDocument = false
     @State private var showAI = false
     @State private var showLayers = true
@@ -192,7 +191,17 @@ struct ContentView: View {
 
     private var projectCanvasView: some View {
         HStack(spacing: 0) {
-            // Left Window: Main Editor Workspace (Canvas, top bar, layers/color popovers, timeline, dock)
+            // Left Window: project-wide documents and generated/source assets.
+            ProjectAssetsPanel(store: projects)
+                .id(projects.current?.id)
+                .frame(width: 292)
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(StudioTheme.hairlineStrong)
+                        .frame(width: 1)
+                }
+
+            // Center Window: Main Editor Workspace (Canvas, top bar, layers/color popovers, timeline, dock)
             editorWorkspaceView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -260,20 +269,6 @@ struct ContentView: View {
                     .padding(.leading, 14)
                     .disabled(projects.activeDocument == nil)
                 Spacer()
-            }
-
-            // Workspace Library (when opened)
-            if showLibrary {
-                HStack {
-                    WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
-                        .id(projects.current?.id)
-                        .procreatePanel(radius: 16)
-                        .padding(.leading, 64)
-                        .padding(.top, 64)
-                        .padding(.bottom, 70)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    Spacer()
-                }
             }
 
             // Right floating popovers (Layers card & Color disc)
@@ -346,17 +341,25 @@ struct ContentView: View {
 
             EditorOperationFeedback(model: model)
 
-            if showTimeline && projects.activeDocument != nil && model.assetKind != .map && model.assetKind != .tileset {
+            spriteBottomChrome
+        }
+    }
+
+    private var spriteBottomChrome: some View {
+        VStack(spacing: 8) {
+            if showTimeline && projects.activeDocument?.supportsAnimationAssist == true {
                 TimelineBar(model: model)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1)
             }
 
             AdBannerView(onPresentPaywall: { showPaywall = true })
-                .padding(.horizontal, 20)
-                .padding(.bottom, 8)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
     }
 
     // MARK: Tilemap Designer workspace (.map documents)
@@ -365,7 +368,6 @@ struct ContentView: View {
         ZStack {
             mapCanvas(mapModel)
             mapPalette(mapModel)
-            mapLibrary
             mapRightLayers(mapModel)
             mapBottomOverlay(mapModel)
             mapTopChrome(mapModel)
@@ -407,28 +409,10 @@ struct ContentView: View {
         HStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 MapLeftDock(model: mapModel)
-                if !showLibrary {
-                    TilesetPanel(store: projects, model: mapModel)
-                }
+                TilesetPanel(store: projects, model: mapModel)
             }
             .padding(.leading, 14)
             Spacer(minLength: 0)
-        }
-    }
-
-    @ViewBuilder
-    private var mapLibrary: some View {
-        if showLibrary {
-            HStack {
-                WorkspaceLibrary(store: projects, onClose: { showLibrary = false })
-                    .id(projects.current?.id)
-                    .procreatePanel(radius: 16)
-                    .padding(.leading, 64)
-                    .padding(.top, 64)
-                    .padding(.bottom, 70)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                Spacer()
-            }
         }
     }
 

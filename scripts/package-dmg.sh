@@ -51,9 +51,25 @@ if [[ -z "$APP_PATH" ]]; then
   APP_PATH="$ROOT/build/DerivedData/Build/Products/Release/Bixel.app"
 fi
 
+# project.yml is version-controlled, so the version bump below is temporary:
+# back it up and restore it on exit to leave the working tree clean.
+PROJECT_YML="$ROOT/project.yml"
+PROJECT_YML_BACKUP=""
+
+restore_project_yml() {
+  if [[ -n "$PROJECT_YML_BACKUP" && -f "$PROJECT_YML_BACKUP" ]]; then
+    cp -p "$PROJECT_YML_BACKUP" "$PROJECT_YML" 2>/dev/null || true
+    rm -f "$PROJECT_YML_BACKUP" 2>/dev/null || true
+  fi
+}
+trap restore_project_yml EXIT
+
 if [[ "$DO_BUILD" -eq 1 ]]; then
+  PROJECT_YML_BACKUP="$(mktemp "${TMPDIR:-/tmp}/bixel-project-yml.XXXXXX")"
+  cp -p "$PROJECT_YML" "$PROJECT_YML_BACKUP"
+
   echo "==> Updating version in project.yml to $CLEAN_VERSION"
-  sed -i '' "s/CFBundleShortVersionString: .*/CFBundleShortVersionString: \"$CLEAN_VERSION\"/" "$ROOT/project.yml"
+  sed -i '' "s/CFBundleShortVersionString: .*/CFBundleShortVersionString: \"$CLEAN_VERSION\"/" "$PROJECT_YML"
 
   echo "==> Generating Xcode project"
   (cd "$ROOT" && xcodegen generate)

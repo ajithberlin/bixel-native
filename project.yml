@@ -59,6 +59,11 @@ targets:
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGNING_REQUIRED: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # App Store archives require the sandbox. Debug/dev builds stay
+        # unsandboxed so the Rust build phase and local project access work.
+        Release:
+          CODE_SIGN_ENTITLEMENTS: app/Bixel/Bixel-AppStore.entitlements
     info:
       path: app/Bixel/Info.plist
       properties:
@@ -68,6 +73,7 @@ targets:
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true
+        ITSAppUsesNonExemptEncryption: false
         GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
         NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication

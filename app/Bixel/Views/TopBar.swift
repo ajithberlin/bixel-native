@@ -2,7 +2,7 @@
 //
 // Procreate-style top navigation bar shared by the sprite editor and the
 // Tilemap Designer:
-// - Left group: Gallery, Actions (wrench), AI (wand), Selection (lasso), Transform (arrow)
+// - Left group: Gallery, Actions (wrench), Selection (lasso), Transform (arrow)
 // - For maps the right group becomes the map tool cluster (stamp/eraser/fill/
 //   rect/line/select/pick/wand) plus layers + tileset toggles.
 // - ActionsPopover gains Tiled JSON / CSV / PNG export rows for maps.
@@ -97,23 +97,6 @@ struct TopBar: View {
                 )
             }
 
-            // AI Copilot (Wand)
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showAI.toggle()
-                }
-            } label: {
-                Image(systemName: "wand.and.stars")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(showAI ? StudioTheme.bixelGreen : Color.white.opacity(0.85))
-                    .frame(width: 28, height: 28)
-                    .background(
-                        showAI ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.bixelGreenSoft) : nil
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("AI Copilot & Adjustments")
-
             if !isMap {
                 // Selection (Lasso)
                 Button {
@@ -204,6 +187,9 @@ struct TopBar: View {
 
             layersToggle
             colorToggle(isSpriteColor: true)
+            AICopilotButton(isPresented: showAI) {
+                withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+            }
         }
     }
 
@@ -223,6 +209,9 @@ struct TopBar: View {
             Divider().frame(height: 20).overlay(StudioTheme.hairlineStrong)
 
             layersToggle
+            AICopilotButton(isPresented: showAI) {
+                withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+            }
         }
     }
 
@@ -308,6 +297,57 @@ struct TopBar: View {
             green: Double(model.currentColor.g) / 255,
             blue: Double(model.currentColor.b) / 255
         )
+    }
+}
+
+/// The AI entry point is deliberately placed after the color/tileset control:
+/// it reads as the final creative tool in the top bar and remains discoverable
+/// when the assistant panel is closed.
+private struct AICopilotButton: View {
+    let isPresented: Bool
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill((isPresented ? StudioTheme.bixelGreen : StudioTheme.procreateBlue)
+                        .opacity(pulse ? 0.25 : 0.12))
+                    .frame(width: 31, height: 31)
+                Circle()
+                    .strokeBorder(
+                        AngularGradient(
+                            colors: [StudioTheme.procreateBlue, StudioTheme.bixelGreen, StudioTheme.procreateBlue],
+                            center: .center
+                        ),
+                        lineWidth: 1.5
+                    )
+                    .frame(width: 29, height: 29)
+                    .rotationEffect(.degrees(reduceMotion ? 0 : (pulse ? 180 : 0)))
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(isPresented ? StudioTheme.bixelGreen : .white)
+                    .scaleEffect(reduceMotion ? 1 : (pulse ? 1.08 : 0.94))
+            }
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.plain)
+        .help("AI Copilot & Adjustments")
+        .accessibilityLabel(isPresented ? "Hide AI Copilot" : "Show AI Copilot")
+        .onAppear { startAnimationIfNeeded() }
+        .onChange(of: reduceMotion) { _ in startAnimationIfNeeded() }
+    }
+
+    private func startAnimationIfNeeded() {
+        guard !reduceMotion else {
+            pulse = false
+            return
+        }
+        withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
+            pulse = true
+        }
     }
 }
 

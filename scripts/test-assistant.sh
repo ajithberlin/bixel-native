@@ -8,6 +8,15 @@ SOURCES=()
 while IFS= read -r source; do
     [[ "$source" == */BixelApp.swift ]] || SOURCES+=("$source")
 done < <(rg --files app/Bixel -g '*.swift')
+xcrun swiftc -module-name BixelArtifactPersistenceTests \
+    -target "$(uname -m)-apple-macos13.0" \
+    -sdk "$(xcrun --show-sdk-path)" \
+    -import-objc-header app/Bixel/Support/Bixel-Bridging-Header.h \
+    -I generated -L "${BIXEL_TEST_LIBRARY_DIR:-generated}" -lbixel \
+    -framework Security -framework CoreFoundation -framework SystemConfiguration \
+    -module-cache-path "$TEST_DIR/cache-artifact" \
+    "${SOURCES[@]}" tests/ArtifactPersistenceTests.swift -o "$TEST_DIR/artifact-tests"
+"$TEST_DIR/artifact-tests"
 xcrun swiftc -module-name BixelAssistantTests \
     -target "$(uname -m)-apple-macos13.0" \
     -sdk "$(xcrun --show-sdk-path)" \

@@ -33,6 +33,12 @@ struct WorkspaceDocument: Codable, Identifiable {
     var summary: String {
         kind.usesCells ? "\(width) × \(height) cells · \(cellWidth) × \(cellHeight) px each" : "\(pixelWidth) × \(pixelHeight) px"
     }
+    var supportsAnimationAssist: Bool {
+        switch kind {
+        case .map, .tileset: return false
+        default: return true
+        }
+    }
     var validationError: String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give this document a name." }
         if width < 1 || height < 1 || cellWidth < 1 || cellHeight < 1 || pixelWidth < 1 || pixelHeight < 1 || pixelWidth > 4096 || pixelHeight > 4096 {
@@ -61,4 +67,11 @@ struct ProjectAssetFile: Decodable, Identifiable {
     var id: String { path }
     var isImage: Bool { ["png", "jpg", "jpeg", "webp"].contains(URL(fileURLWithPath: path).pathExtension.lowercased()) }
     var isSource: Bool { name.contains("_source") }
+    var isAssistantInput: Bool { path.hasPrefix(".studio/cache/ai/") && path.contains("/inputs/") }
+    var isCached: Bool { path.hasPrefix(".studio/cache/") }
+    var isGenerated: Bool { isCached && !isAssistantInput }
+    var locationLabel: String {
+        if isAssistantInput { return "Assistant input" }
+        return isGenerated ? "Generated" : "Project asset"
+    }
 }

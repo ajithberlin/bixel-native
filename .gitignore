@@ -3,6 +3,10 @@
 
 # Environment / secrets
 .env
+.env.deploy
+private_keys/
+*.p8
+*.mobileprovision
 
 # Xcode / XcodeGen
 *.xcodeproj
@@ -19,3 +23,6 @@ app/Bixel/Info.plist
 
 __PYCACHE__/
 build/
+*.xcarchive
+*.pkg
+*.dmg

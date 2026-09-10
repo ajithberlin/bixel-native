@@ -106,7 +106,10 @@ app/
 skills/                    # skill manifests (JSON)
 scripts/
   build-rust.sh            # cargo build + cbindgen + stage artifacts
+  package-dmg.sh           # ad-hoc DMG for direct distribution
+  publish-appstore.sh      # archive → signed .pkg → validate → upload to App Store
 generated/                 # (gitignored) libbixel.a + bixel.h
+docs/app-store/            # App Store publishing guide + listing fields
 ```
 
 ## Prerequisites
@@ -175,6 +178,17 @@ scripts/package-dmg.sh --version v1.0.0 --build
 The DMG is written to `build/dist/Bixel-v1.0.0.dmg` with an accompanying `.sha256` checksum.
 You can also trigger builds and GitHub Releases automatically using the `.github/workflows/release.yml`
 workflow (via GitHub Actions `workflow_dispatch` or by pushing a `v*` tag).
+
+### Mac App Store
+
+```bash
+cp .env.deploy.example .env.deploy   # fill in team ID, profile, API key
+scripts/publish-appstore.sh          # archive → .pkg → validate → upload
+```
+
+See [`docs/app-store/PUBLISHING.md`](docs/app-store/PUBLISHING.md) for setup and
+[`docs/app-store/APP_STORE_LISTING.md`](docs/app-store/APP_STORE_LISTING.md) for
+the App Store Connect listing fields.
 
 The Xcode build runs `scripts/build-rust.sh` as a pre-build phase, which builds
 the Rust core (`cargo build --release -p bixel-ffi`), generates `generated/bixel.h`

@@ -291,6 +291,7 @@ final class ProjectStore: ObservableObject {
         }
         assistant.configure(projectRoot: base, state: state)
         assistant.onPersist = { [weak self] in self?.saveAssistant() }
+        assistant.onArtifactPersisted = { [weak self] in self?.refreshAssets() }
         assistant.workspaceContext = { [weak self] in self?.contextDescription ?? "" }
         try persistCatalog()
         _ = try ProjectStorage.request(base: root, ["op": "write", "path": "active.txt", "text": project.id])
@@ -531,11 +532,20 @@ final class ProjectStore: ObservableObject {
     }
 
     func assetData(_ asset: ProjectAssetFile) throws -> Data {
-        guard let base = projectRoot, asset.bytes <= 32_000_000 else { throw StorageError.message("Choose an asset smaller than 32 MB.") }
-        guard let value = try ProjectStorage.request(base: base, ["op": "read_bytes", "path": asset.path]) else {
-            throw StorageError.message("This asset is missing.")
-        }
-        return Data(try decode([UInt8].self, value))
+        guard let base = projectRoot else { throw StorageError.message("This asset is missing.") }
+        return try readProjectAssetData(base: base, path: asset.path, bytes: asset.bytes)
+    }
+
+    /// Decode an asset without making the synchronous FFI read block the main
+    /// actor. The project root, path, and size are copied before the task is
+    /// detached so no actor-isolated store state crosses the boundary.
+    func assetDataAsync(_ asset: ProjectAssetFile) async throws -> Data {
+        guard let base = projectRoot else { throw StorageError.message("This asset is missing.") }
+        let path = asset.path
+        let bytes = asset.bytes
+        return try await Task.detached(priority: .utility) {
+            try readProjectAssetData(base: base, path: path, bytes: bytes)
+        }.value
     }
 
     func acceptAsset(_ asset: ProjectAssetFile) {
@@ -603,4 +613,13 @@ final class ProjectStore: ObservableObject {
     private func decode<T: Decodable>(_ type: T.Type, _ value: Any) throws -> T {
         try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: value))
     }
+}
+
+private func readProjectAssetData(base: URL, path: String, bytes: Int) throws -> Data {
+    guard bytes <= 32_000_000 else { throw StorageError.message("Choose an asset smaller than 32 MB.") }
+    guard let value = try ProjectStorage.request(base: base, ["op": "read_bytes", "path": path]) else {
+        throw StorageError.message("This asset is missing.")
+    }
+    let json = try JSONSerialization.data(withJSONObject: value)
+    return Data(try JSONDecoder().decode([UInt8].self, from: json))
 }
