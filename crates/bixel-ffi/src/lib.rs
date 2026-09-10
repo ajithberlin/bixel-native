@@ -898,9 +898,10 @@ pub extern "C" fn bixel_ai_cancel_codex_oauth() {
     bixel_ai::connection::cancel_codex_oauth();
 }
 
-/// JSON array of selectable model ids for a provider (`openrouter` or
-/// `chatgpt_codex`), or `{"error": ...}`. OpenRouter requires a stored key.
-/// Free with [`bixel_string_free`].
+/// JSON object of selectable model ids for a provider (`openrouter` or
+/// `chatgpt_codex`): `{"models": ["id", ...], "default": "id"}` — `default`
+/// is the provider's own default model when it declares one. OpenRouter
+/// requires a stored key. Free with [`bixel_string_free`].
 #[no_mangle]
 pub extern "C" fn bixel_ai_list_models(provider: *const c_char) -> *mut c_char {
     let provider = match arg_str(provider).as_str() {
@@ -908,8 +909,8 @@ pub extern "C" fn bixel_ai_list_models(provider: *const c_char) -> *mut c_char {
         _ => bixel_ai::ProviderChoice::OpenRouter,
     };
     match bixel_ai::connection::list_models(provider) {
-        Ok(models) => out_cstr(
-            serde_json::to_string(&models).unwrap_or_else(|_| "[]".into()),
+        Ok((models, default)) => out_cstr(
+            serde_json::json!({ "models": models, "default": default }).to_string(),
         ),
         Err(e) => out_cstr(
             serde_json::json!({ "error": e.to_string() }).to_string(),

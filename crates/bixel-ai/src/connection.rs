@@ -592,6 +592,6 @@ mod tests {
         let r = ModelReadiness::compute(&c, Some(true), Ok(()));
         assert!(r.text.ready && r.vision.ready);
         assert!(!r.image.ready);
-        assert!(r.image.reason.contains("OpenRouter API key"));
+        assert!(r.image.reason.contains("OpenRouter provider"));
     }
 }

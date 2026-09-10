@@ -94,13 +94,23 @@ enum AIService {
         bixel_ai_cancel_codex_oauth()
     }
 
+    /// A provider's selectable models and its own default model (when known).
+    struct AIModelCatalog {
+        var models: [String] = []
+        var defaultModel: String?
+    }
+
     /// Selectable model ids for a provider (`openrouter` / `chatgpt_codex`).
-    static func listModels(provider: String) -> [String] {
-        guard let ptr = bixel_ai_list_models(provider) else { return [] }
+    static func listModels(provider: String) -> AIModelCatalog {
+        guard let ptr = bixel_ai_list_models(provider) else { return AIModelCatalog() }
         defer { bixel_string_free(ptr) }
         guard let data = String(cString: ptr).data(using: .utf8),
-              let models = try? JSONDecoder().decode([String].self, from: data) else { return [] }
-        return models
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["error"] == nil else { return AIModelCatalog() }
+        return AIModelCatalog(
+            models: json["models"] as? [String] ?? [],
+            defaultModel: json["default"] as? String
+        )
     }
 
     static func listSkills() -> [SkillInfo] {

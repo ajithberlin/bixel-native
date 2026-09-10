@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// AI provider connection settings: provider picker (OpenRouter API key or
-/// ChatGPT sign-in), the three model roles as searchable dropdowns, and
-/// per-role readiness.
+/// AI provider connection settings, scoped per provider the way goose sees
+/// it: OpenRouter = API key + three model roles; ChatGPT (Codex) = sign-in +
+/// Codex models (image skills stay offline — goose has no image-generation
+/// API, so the image role needs the OpenRouter provider).
 struct AISettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var status = AIService.connectionStatus()
     @State private var provider = "openrouter"
     @State private var apiKey = ""
-    @State private var imageAPIKey = ""
     @State private var textModel = ""
     @State private var visionModel = ""
     @State private var imageModel = ""
@@ -33,6 +33,9 @@ struct AISettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .onChange(of: provider) { newProvider in
+                applyProviderDefaults(newProvider)
+            }
 
             if provider == "chatgpt_codex" {
                 VStack(alignment: .leading, spacing: 6) {
@@ -42,22 +45,16 @@ struct AISettingsView: View {
                         if signingIn { cancelSignIn() } else { signIn() }
                     }
                     .disabled(busy && !signingIn)
-                    Text("The image role always needs an OpenRouter key — goose has no image-generation API.")
-                        .font(.system(size: 10)).foregroundColor(StudioTheme.textDisabled).fixedSize(horizontal: false, vertical: true)
                 }
-            }
-
-            if provider == "openrouter" {
-                field("OpenRouter API key", text: $apiKey, secure: true)
+                ModelPicker(title: "Model (chat + vision)", selection: $textModel, provider: provider)
             } else {
-                field("OpenRouter API key (image role)", text: $imageAPIKey, secure: true)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Models").font(.system(size: 11, weight: .medium)).foregroundColor(StudioTheme.textSecondary)
-                ModelPicker(title: "Text (chat)", selection: $textModel, provider: provider)
-                ModelPicker(title: "Vision (image input)", selection: $visionModel, provider: provider)
-                ModelPicker(title: "Image (generation)", selection: $imageModel, provider: provider)
+                field("OpenRouter API key", text: $apiKey, secure: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Models").font(.system(size: 11, weight: .medium)).foregroundColor(StudioTheme.textSecondary)
+                    ModelPicker(title: "Text (chat)", selection: $textModel, provider: provider)
+                    ModelPicker(title: "Vision (image input)", selection: $visionModel, provider: provider)
+                    ModelPicker(title: "Image (generation)", selection: $imageModel, provider: provider)
+                }
             }
 
             readinessList
@@ -71,7 +68,7 @@ struct AISettingsView: View {
                 Button(busy ? "Connecting…" : (status.connected ? "Reconnect" : "Connect")) {
                     connect()
                 }
-                .disabled(busy || textModel.isEmpty || visionModel.isEmpty || imageModel.isEmpty
+                .disabled(busy || textModel.isEmpty || imageModel.isEmpty
                           || (provider == "openrouter" && apiKey.isEmpty && !status.connected))
                 if status.connected {
                     Button("Disconnect") {
@@ -82,6 +79,11 @@ struct AISettingsView: View {
                 }
             }
 
+            if provider == "chatgpt_codex" {
+                Text("Image-generation skills stay offline with ChatGPT — goose has no image API. Use the OpenRouter provider for those.")
+                    .font(.system(size: 10)).foregroundColor(StudioTheme.textDisabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Keys are stored in the system secret store and never leave the app.")
                 .font(.system(size: 10)).foregroundColor(StudioTheme.textDisabled)
                 .fixedSize(horizontal: false, vertical: true)
@@ -136,6 +138,23 @@ struct AISettingsView: View {
         }
     }
 
+    /// Model defaults follow the provider, the way goose sees it: Codex
+    /// models for ChatGPT (its own default first), the built-in catalog for
+    /// OpenRouter.
+    private func applyProviderDefaults(_ provider: String) {
+        if provider == "chatgpt_codex" {
+            let catalog = AIService.listModels(provider: provider)
+            if !catalog.models.contains(textModel) {
+                textModel = catalog.defaultModel ?? catalog.models.first ?? textModel
+            }
+        } else {
+            let defaults = AIService.connectionStatus().models
+            if textModel.isEmpty || !textModel.contains("/") { textModel = defaults["text"] ?? textModel }
+            if visionModel.isEmpty { visionModel = defaults["vision"] ?? visionModel }
+            if imageModel.isEmpty { imageModel = defaults["image"] ?? imageModel }
+        }
+    }
+
     private func signIn() {
         signingIn = true
         message = nil
@@ -156,12 +175,14 @@ struct AISettingsView: View {
     private func connect() {
         let provider = provider
         let key = provider == "openrouter" ? apiKey : ""
-        let imageKey = provider == "chatgpt_codex" ? imageAPIKey : ""
-        let text = textModel, vision = visionModel, image = imageModel
+        let text = textModel
+        // Codex has one model; it serves both text and vision.
+        let vision = provider == "chatgpt_codex" ? textModel : visionModel
+        let image = imageModel
         busy = true
         message = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = AIService.connect(provider: provider, apiKey: key, imageAPIKey: imageKey,
+            let result = AIService.connect(provider: provider, apiKey: key, imageAPIKey: "",
                                            textModel: text, visionModel: vision, imageModel: image)
             DispatchQueue.main.async {
                 busy = false
@@ -186,8 +207,9 @@ struct AISettingsView: View {
     }
 }
 
-/// A dropdown with a search field, listing the provider's models. Falls back
-/// to the current selection when the list cannot be loaded (e.g. no key yet).
+/// A dropdown with a search field, listing the selected provider's models
+/// (fetched per provider, so switching providers reloads). Falls back to the
+/// current selection when the list cannot be loaded yet.
 private struct ModelPicker: View {
     let title: String
     @Binding var selection: String
@@ -213,6 +235,7 @@ private struct ModelPicker: View {
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
             .contentShape(Rectangle())
             .onTapGesture { open.toggle() }
+            .onChange(of: provider) { _ in options = nil }
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 6) {
                     TextField("Search models", text: $search)
@@ -222,7 +245,7 @@ private struct ModelPicker: View {
                     let filtered = (options ?? []).filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 2) {
-                            if selection.isEmpty == false && !filtered.contains(selection) {
+                            if !selection.isEmpty && !filtered.contains(selection) {
                                 row(selection)
                             }
                             ForEach(filtered, id: \.self) { model in
@@ -267,8 +290,8 @@ private struct ModelPicker: View {
     private func load() {
         guard options == nil else { return }
         DispatchQueue.global(qos: .userInitiated).async {
-            let models = AIService.listModels(provider: provider)
-            DispatchQueue.main.async { options = models.isEmpty ? nil : models }
+            let catalog = AIService.listModels(provider: provider)
+            DispatchQueue.main.async { options = catalog.models.isEmpty ? nil : catalog.models }
         }
     }
 }
