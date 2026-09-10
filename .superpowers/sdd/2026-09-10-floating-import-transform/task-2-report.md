@@ -90,3 +90,39 @@ Implementation commit: `040fa54f7f0a77b49a829165bbac84800f9c0358`
   macOS version and unused-local warnings noted above.
 - Task 2 intentionally adds model behavior only; rendering and UI gesture
   routing remain for later tasks.
+
+## Review fix: floating-transform behavior coverage
+
+The Task 2 review identified that lifecycle coverage did not directly exercise
+the separate floating gesture paths. Added real-model assertions in
+`tests/EditorInteractionTests.swift` for:
+
+- body, transform-handle, and rotation-handle hit testing;
+- move press-to-center offset preservation;
+- document-space nudge;
+- shortest angular delta across the `-pi` / `pi` boundary and cancelled
+  rotation restoration;
+- rotated edge resize with its opposite edge anchored;
+- uniform corner resize with its opposite corner anchored; and
+- edge-only resize, including when the uniform setting is requested.
+
+No production change was needed: these focused behavior checks pass against
+the existing Task 2 implementation.
+
+Verification command:
+
+```bash
+bash scripts/test-interactions.sh
+```
+
+Passing output and exit status:
+
+```text
+Editor interaction tests passed
+exit code: 0
+```
+
+The command still emits the pre-existing unused-local and generated static
+library deployment-version warnings described above.
+
+Fix commit: `52f931e2d8dd5407ca59849aba94cfe1f28ade67`
