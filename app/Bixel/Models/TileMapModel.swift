@@ -258,13 +258,14 @@ final class TileMapModel: ObservableObject {
         tileName = ts.name
     }
 
-    /// Arm a multi-tile brush from a drag-selected region of a tileset image.
-    func armRegion(tilesetIndex: Int, cols: Int, rows: Int) {
+    /// Arm a multi-tile brush from a drag-selected region of a tileset image,
+    /// anchored at the top-left cell the drag started on.
+    func armRegion(tilesetIndex: Int, startCol: Int, startRow: Int, cols: Int, rows: Int) {
         let ts = tileset(tilesetIndex)
         var gids: [UInt32] = []
         for row in 0..<rows {
             for col in 0..<cols {
-                let local = UInt32(row * ts.columns + col)
+                let local = UInt32((startRow + row) * ts.columns + (startCol + col))
                 gids.append(TileMap.encodeGID(local, firstGID: ts.firstGid))
             }
         }

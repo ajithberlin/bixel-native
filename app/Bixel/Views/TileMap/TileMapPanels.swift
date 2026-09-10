@@ -140,7 +140,7 @@ struct TilesetPanel: View {
             }
             dividerAndHint
         }
-        .frame(width: 244)
+        .frame(width: 288)
         .procreatePanel(radius: 16)
         .onChange(of: tilesetList.count) { _ in
             if activeTileset >= tilesetList.count { activeTileset = max(0, tilesetList.count - 1) }
@@ -262,45 +262,51 @@ struct TilesetPanel: View {
 
     private func tilesetContent(ts: MapTilesetInfo, cg: CGImage) -> some View {
         VStack(spacing: 8) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 8) {
-                    TileSheetView(
-                        cgImage: cg,
-                        tileset: ts,
-                        onPickSingle: { local in
-                            model.armTile(tilesetIndex: ts.index, localTile: local)
-                        },
-                        onPickRegion: { cols, rows in
-                            model.armRegion(tilesetIndex: ts.index, cols: cols, rows: rows)
-                        },
-                        assignSlot: autotileEditing ? autotileSlotToAssign : nil,
-                        onAssign: { local in
-                            if let mask = autotileSlotToAssign {
-                                model.setTilesetAutotile(tileset: ts.index, mask: mask, local: Int32(local))
-                                model.autotileEnabled = true
-                                autotileEditing = false
-                            }
-                        }
-                    )
-                    .frame(maxWidth: .infinity)
-                    .background(CheckerboardView(cell: 5))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
-                    .help("Click a tile to choose a 1×1 brush — drag across tiles for a bigger brush")
-
-                    brushStrip(ts: ts)
-
-                    Text("\(ts.imageWidth) × \(ts.imageHeight) px · \(ts.tileWidth)×\(ts.tileHeight)px tiles")
-                        .font(.system(size: 9, weight: .regular))
-                        .foregroundColor(.secondary)
+            TileSheetView(
+                cgImage: cg,
+                tileset: ts,
+                armed: armedRect(ts),
+                onPickSingle: { local in
+                    model.armTile(tilesetIndex: ts.index, localTile: local)
+                },
+                onPickRegion: { col, row, cols, rows in
+                    model.armRegion(tilesetIndex: ts.index, startCol: col, startRow: row, cols: cols, rows: rows)
+                },
+                assignSlot: autotileEditing ? autotileSlotToAssign : nil,
+                onAssign: { local in
+                    if let mask = autotileSlotToAssign {
+                        model.setTilesetAutotile(tileset: ts.index, mask: mask, local: Int32(local))
+                        model.autotileEnabled = true
+                        autotileEditing = false
+                    }
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 2)
-            }
-            .frame(maxHeight: 300)
+            )
+            .padding(.horizontal, 10)
+
+            brushStrip(ts: ts)
 
             autotileSection(ts: ts)
+
+            Text("\(ts.imageWidth) × \(ts.imageHeight) px · \(ts.tileWidth)×\(ts.tileHeight)px tiles · \(ts.columns) cols")
+                .font(.system(size: 9, weight: .regular))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
         }
+    }
+
+    /// The armed region of this tileset, for the tile-sheet selection highlight.
+    private func armedRect(_ ts: MapTilesetInfo) -> TileSheetSelection? {
+        guard model.brush.tilesetIndex == ts.index,
+              !model.brush.pattern.isEmpty,
+              let first = model.brush.pattern.tiles.first,
+              ts.columns > 0 else { return nil }
+        let local = Int(first & 0x1fff_ffff) - Int(ts.firstGid)
+        guard local >= 0 else { return nil }
+        return TileSheetSelection(col: local % ts.columns,
+                                  row: local / ts.columns,
+                                  cols: model.brush.pattern.width,
+                                  rows: model.brush.pattern.height)
     }
 
     /// Shows the currently armed brush and how to use it.
@@ -308,22 +314,12 @@ struct TilesetPanel: View {
         let brush = model.brush
         return HStack(spacing: 8) {
             if !brush.pattern.isEmpty {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(StudioTheme.accentSoft)
-                    .frame(width: 22, height: 22)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4).strokeBorder(StudioTheme.accent, lineWidth: 1)
-                    )
-                    .overlay {
-                        Image(systemName: "paintbrush.pointed")
-                            .font(.system(size: 10))
-                            .foregroundColor(StudioTheme.accent)
-                    }
+                brushThumbnail(ts: ts)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("\(brush.pattern.width)×\(brush.pattern.height) brush armed")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(.white)
-                    Text("Click the canvas to paint")
+                    Text(brush.tilesetIndex == ts.index ? "Click the canvas to paint" : "From another tileset")
                         .font(.system(size: 8, weight: .regular))
                         .foregroundColor(.secondary)
                 }
@@ -348,6 +344,29 @@ struct TilesetPanel: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.06))
         )
+    }
+
+    /// The armed tile's actual pixels, or a paintbrush glyph when unavailable.
+    @ViewBuilder
+    private func brushThumbnail(ts: MapTilesetInfo) -> some View {
+        let brush = model.brush
+        Group {
+            if brush.tilesetIndex == ts.index,
+               let first = brush.pattern.tiles.first,
+               let thumb = tileThumb(ts: ts, local: (first & 0x1fff_ffff) &- ts.firstGid) {
+                Image(nsImage: NSImage(cgImage: thumb, size: .zero))
+                    .interpolation(.none)
+                    .resizable()
+            } else {
+                Image(systemName: "paintbrush.pointed")
+                    .font(.system(size: 10))
+                    .foregroundColor(StudioTheme.accent)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .background(CheckerboardView(cell: 4))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(StudioTheme.accent, lineWidth: 1))
     }
 
     private var emptyState: some View {
@@ -467,7 +486,7 @@ struct TilesetPanel: View {
 
     /// Small nearest-neighbour thumbnail of one tile from the tileset image.
     private func tileThumb(ts: MapTilesetInfo, local: UInt32) -> CGImage? {
-        guard let cg = model.tilesetDisplayImage(ts.index) else { return nil }
+        guard let cg = model.tilesetDisplayImage(ts.index), ts.columns > 0 else { return nil }
         let stride = ts.tileWidth + ts.spacing
         let col = Int(local) % ts.columns
         let row = Int(local) / ts.columns
@@ -629,98 +648,226 @@ private struct AddTilesetSource {
 
 // MARK: - Tileset sheet view (click / drag-select)
 
-private struct SheetCell {
+private struct SheetCell: Hashable {
     var x: Int
     var y: Int
 }
 
+/// A rectangular block of tileset cells (top-left anchored).
+private struct TileSheetSelection: Hashable {
+    var col: Int
+    var row: Int
+    var cols: Int
+    var rows: Int
+}
+
+private enum TileSheetZoom: String, CaseIterable, Identifiable {
+    case fit, x1, x2, x4
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .fit: return "Fit"
+        case .x1: return "1×"
+        case .x2: return "2×"
+        case .x4: return "4×"
+        }
+    }
+}
+
+/// Interactive tileset slicer: shows the whole sheet with a cell grid, lets the
+/// user click a tile or drag a block, and highlights the currently armed brush.
+/// Zooming beyond the viewport scrolls so large sheets stay selectable.
 private struct TileSheetView: View {
     let cgImage: CGImage
     let tileset: MapTilesetInfo
+    var armed: TileSheetSelection? = nil
     let onPickSingle: (UInt32) -> Void
-    let onPickRegion: (Int, Int) -> Void
+    let onPickRegion: (Int, Int, Int, Int) -> Void
     var assignSlot: Int? = nil
     var onAssign: (UInt32) -> Void
 
+    @State private var zoom: TileSheetZoom = .fit
     @State private var dragStart: SheetCell?
+    @State private var dragCurrent: SheetCell?
+    @State private var hover: SheetCell?
+
+    private let viewportWidth: CGFloat = 260
+    private let viewportHeight: CGFloat = 200
+
+    private var imageSize: CGSize {
+        CGSize(width: max(1, CGFloat(cgImage.width)), height: max(1, CGFloat(cgImage.height)))
+    }
+
+    private var displayScale: CGFloat {
+        switch zoom {
+        case .fit:
+            let fit = min(viewportWidth / imageSize.width, viewportHeight / imageSize.height)
+            return max(0.05, min(fit, 8))
+        case .x1: return 1
+        case .x2: return 2
+        case .x4: return 4
+        }
+    }
+
+    private var contentSize: CGSize {
+        CGSize(width: imageSize.width * displayScale, height: imageSize.height * displayScale)
+    }
 
     var body: some View {
-        GeometryReader { geo in
-            let scale = min(geo.size.width / CGFloat(cgImage.width),
-                            geo.size.height / CGFloat(cgImage.height))
-            let w = CGFloat(cgImage.width) * scale
-            let h = CGFloat(cgImage.height) * scale
-            let x0 = (geo.size.width - w) / 2
-            let y0 = (geo.size.height - h) / 2
-            ZStack {
-                Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: w, height: h)
-                    .position(x: x0 + w / 2, y: y0 + h / 2)
+        VStack(alignment: .leading, spacing: 6) {
+            toolbar
+            viewport
+            hint
+        }
+    }
 
-                // Cell grid overlay
+    private var toolbar: some View {
+        HStack(spacing: 6) {
+            Text(assignSlot.map { "Assign mask \($0)" } ?? "Tile palette")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(assignSlot != nil ? StudioTheme.accent : Color.white.opacity(0.85))
+            Spacer()
+            Picker("", selection: $zoom) {
+                ForEach(TileSheetZoom.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .controlSize(.mini)
+            .labelsHidden()
+            .frame(width: 138)
+        }
+    }
+
+    private var viewport: some View {
+        ScrollView([.horizontal, .vertical], showsIndicators: true) {
+            sheetContent
+                .frame(width: contentSize.width, height: contentSize.height)
+        }
+        .frame(width: viewportWidth, height: viewportHeight)
+        .background(CheckerboardView(cell: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
+    }
+
+    private var sheetContent: some View {
+        Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
+            .interpolation(.none)
+            .resizable()
+            .frame(width: contentSize.width, height: contentSize.height)
+            .overlay {
                 Canvas { ctx, size in
-                    var path = Path()
-                    let strideX = CGFloat(tileset.tileWidth + tileset.spacing) * scale
-                    let strideY = CGFloat(tileset.tileHeight + tileset.spacing) * scale
-                    let marginX = CGFloat(tileset.margin) * scale
-                    let marginY = CGFloat(tileset.margin) * scale
-                    var cx = marginX
-                    while cx <= w {
-                        path.move(to: CGPoint(x: x0 + cx, y: y0))
-                        path.addLine(to: CGPoint(x: x0 + cx, y: y0 + h))
-                        cx += strideX
-                    }
-                    var cy = marginY
-                    while cy <= h {
-                        path.move(to: CGPoint(x: x0, y: y0 + cy))
-                        path.addLine(to: CGPoint(x: x0 + w, y: y0 + cy))
-                        cy += strideY
-                    }
-                    ctx.stroke(path, with: .color(.white.opacity(0.25)), lineWidth: 1)
+                    drawGridAndSelection(ctx: &ctx, size: size)
                 }
                 .allowsHitTesting(false)
             }
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if dragStart == nil {
-                            dragStart = cell(at: value.location, x0: x0, y0: y0, w: w, h: h, scale: scale)
-                        }
-                    }
-                    .onEnded { value in
-                        defer { dragStart = nil }
-                        guard let start = dragStart,
-                              let end = cell(at: value.location, x0: x0, y0: y0, w: w, h: h, scale: scale) else { return }
-                        let x0c = min(start.x, end.x), y0c = min(start.y, end.y)
-                        let x1c = max(start.x, end.x), y1c = max(start.y, end.y)
-                        let cols = x1c - x0c + 1
-                        let rows = y1c - y0c + 1
-                        let anchor = start
-                        if let _ = assignSlot {
-                            let local = UInt32(anchor.y * tileset.columns + anchor.x)
-                            onAssign(local)
-                        } else if cols == 1 && rows == 1 {
-                            onPickSingle(UInt32(anchor.y * tileset.columns + anchor.x))
-                        } else {
-                            onPickRegion(cols, rows)
-                        }
-                    }
+            .gesture(selectionGesture)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location): hover = cell(at: location)
+                case .ended: hover = nil
+                }
+            }
+    }
+
+    private var hint: some View {
+        Text(assignSlot != nil
+             ? "Click the tile that represents this autotile mask."
+             : "Click a tile to paint it · drag to grab a block")
+            .font(.system(size: 9))
+            .foregroundColor(.secondary)
+    }
+
+    // MARK: Grid + selection rendering
+
+    private func drawGridAndSelection(ctx: inout GraphicsContext, size: CGSize) {
+        let scale = displayScale
+        let strideX = CGFloat(tileset.tileWidth + tileset.spacing) * scale
+        let strideY = CGFloat(tileset.tileHeight + tileset.spacing) * scale
+        guard strideX > 0, strideY > 0 else { return }
+        let marginX = CGFloat(tileset.margin) * scale
+        let marginY = CGFloat(tileset.margin) * scale
+        let cellW = CGFloat(tileset.tileWidth) * scale
+        let cellH = CGFloat(tileset.tileHeight) * scale
+
+        var grid = Path()
+        var x = marginX
+        while x <= size.width + 0.5 {
+            grid.move(to: CGPoint(x: x, y: 0))
+            grid.addLine(to: CGPoint(x: x, y: size.height))
+            x += strideX
+        }
+        var y = marginY
+        while y <= size.height + 0.5 {
+            grid.move(to: CGPoint(x: 0, y: y))
+            grid.addLine(to: CGPoint(x: size.width, y: y))
+            y += strideY
+        }
+        ctx.stroke(grid, with: .color(.white.opacity(0.22)), lineWidth: 1)
+
+        func rect(_ selection: TileSheetSelection) -> CGRect {
+            CGRect(
+                x: marginX + CGFloat(selection.col) * strideX,
+                y: marginY + CGFloat(selection.row) * strideY,
+                width: CGFloat(selection.cols) * cellW + CGFloat(max(0, selection.cols - 1)) * (strideX - cellW),
+                height: CGFloat(selection.rows) * cellH + CGFloat(max(0, selection.rows - 1)) * (strideY - cellH)
             )
+        }
+
+        if let armed {
+            let r = rect(armed)
+            ctx.fill(Path(r), with: .color(StudioTheme.accent.opacity(0.30)))
+            ctx.stroke(Path(r), with: .color(StudioTheme.accent), lineWidth: 2)
+        }
+
+        if let dragStart, let dragCurrent {
+            let live = TileSheetSelection(col: min(dragStart.x, dragCurrent.x),
+                                          row: min(dragStart.y, dragCurrent.y),
+                                          cols: abs(dragCurrent.x - dragStart.x) + 1,
+                                          rows: abs(dragCurrent.y - dragStart.y) + 1)
+            ctx.stroke(Path(rect(live)), with: .color(.white.opacity(0.9)), lineWidth: 1.5)
+        } else if let hover, assignSlot == nil {
+            ctx.stroke(Path(rect(TileSheetSelection(col: hover.x, row: hover.y, cols: 1, rows: 1))),
+                       with: .color(.white.opacity(0.45)), lineWidth: 1)
         }
     }
 
-    private func cell(at point: CGPoint, x0: CGFloat, y0: CGFloat, w: CGFloat, h: CGFloat, scale: CGFloat) -> SheetCell? {
-        let px = point.x - x0
-        let py = point.y - y0
-        guard px >= 0, py >= 0, px <= w, py <= h else { return nil }
+    // MARK: Interaction
+
+    private var selectionGesture: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                let current = cell(at: value.location)
+                if dragStart == nil { dragStart = current }
+                dragCurrent = current
+            }
+            .onEnded { value in
+                let start = dragStart ?? cell(at: value.location)
+                let end = cell(at: value.location) ?? start
+                defer { dragStart = nil; dragCurrent = nil }
+                guard let start, let end else { return }
+                let col0 = min(start.x, end.x), row0 = min(start.y, end.y)
+                let cols = abs(end.x - start.x) + 1
+                let rows = abs(end.y - start.y) + 1
+                if assignSlot != nil {
+                    onAssign(UInt32(start.y * tileset.columns + start.x))
+                } else if cols == 1 && rows == 1 {
+                    onPickSingle(UInt32(start.y * tileset.columns + start.x))
+                } else {
+                    onPickRegion(col0, row0, cols, rows)
+                }
+            }
+    }
+
+    private func cell(at point: CGPoint) -> SheetCell? {
+        let scale = displayScale
         let strideX = CGFloat(tileset.tileWidth + tileset.spacing) * scale
         let strideY = CGFloat(tileset.tileHeight + tileset.spacing) * scale
-        let col = Int((px - CGFloat(tileset.margin) * scale) / strideX)
-        let row = Int((py - CGFloat(tileset.margin) * scale) / strideY)
-        guard col >= 0, row >= 0, col < tileset.columns, row * tileset.columns + col < tileset.tileCount else { return nil }
+        guard strideX > 0, strideY > 0, tileset.columns > 0 else { return nil }
+        let col = Int(floor((point.x - CGFloat(tileset.margin) * scale) / strideX))
+        let row = Int(floor((point.y - CGFloat(tileset.margin) * scale) / strideY))
+        guard col >= 0, row >= 0, col < tileset.columns else { return nil }
+        let local = row * tileset.columns + col
+        guard local < tileset.tileCount else { return nil }
         return SheetCell(x: col, y: row)
     }
 }
