@@ -620,7 +620,18 @@ impl AsepriteDoc {
         let canvas_w = self.width as i64; let canvas_h = self.height as i64;
         let cos = angle.cos();
         let sin = angle.sin();
-        for ty in 0..dh { for tx in 0..dw {
+        // Only visit destination pixels that land on the canvas. Bounding the
+        // loop by the canvas area keeps the work proportional to the document
+        // regardless of how large the requested destination rectangle is, so a
+        // huge `dw`/`dh` cannot spin or allocate unboundedly. The sampling math
+        // below is unchanged for every visible pixel.
+        let left = (dx as i64).max(0);
+        let top = (dy as i64).max(0);
+        let right = (dx as i64 + dw as i64).min(canvas_w);
+        let bottom = (dy as i64 + dh as i64).min(canvas_h);
+        for py in top..bottom { for px in left..right {
+            let tx = px - dx as i64;
+            let ty = py - dy as i64;
             let (u, v) = (tx as f64 / dw as f64, ty as f64 / dh as f64);
             let centered_u = u - 0.5;
             let centered_v = v - 0.5;
@@ -630,11 +641,8 @@ impl AsepriteDoc {
             let ox = ((su * sw as f64).floor() as usize).min(sw - 1);
             let oy = ((sv * sh as f64).floor() as usize).min(sh - 1);
             let src_i = ((sy + oy) * self.width + sx + ox) * 4;
-            let px = dx as i64 + tx as i64; let py = dy as i64 + ty as i64;
-            if px >= 0 && py >= 0 && px < canvas_w && py < canvas_h {
-                let dst_i = (py as usize * self.width + px as usize) * 4;
-                result[dst_i..dst_i + 4].copy_from_slice(&source[src_i..src_i + 4]);
-            }
+            let dst_i = (py as usize * self.width + px as usize) * 4;
+            result[dst_i..dst_i + 4].copy_from_slice(&source[src_i..src_i + 4]);
         }}
         let cel = self.cel_mut(layer, frame).ok_or("Invalid layer")?;
         cel.data = result;

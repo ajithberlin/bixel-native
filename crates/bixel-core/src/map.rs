@@ -1178,7 +1178,9 @@ impl TileMap {
         let tile_width = get("tilewidth").and_then(Value::as_u64).unwrap_or(16) as usize;
         let tile_height = get("tileheight").and_then(Value::as_u64).unwrap_or(tile_width as u64) as usize;
         if width == 0 || height == 0 || width > MAX_MAP_DIM || height > MAX_MAP_DIM {
-            return Err("Map dimensions are invalid or exceed 4096 cells.".into());
+            return Err(format!(
+                "Map dimensions are invalid ({width} x {height}); expected 1..={MAX_MAP_DIM} cells per side."
+            ));
         }
 
         let mut tilesets: Vec<Tileset> = Vec::new();
@@ -1245,7 +1247,10 @@ impl TileMap {
                     let lw = raw.get("width").and_then(Value::as_u64).unwrap_or(width as u64) as usize;
                     let lh = raw.get("height").and_then(Value::as_u64).unwrap_or(height as u64) as usize;
                     if lw != width || lh != height {
-                        return Err("Layer dimensions do not match the map (infinite maps unsupported).".into());
+                        return Err(format!(
+                            "Layer \"{name}\" is {lw} x {lh} cells but the map is {width} x {height}. \
+                             Infinite/chunked maps must be flattened before loading."
+                        ));
                     }
                     let mut layer = TileLayer::new(lw, lh);
                     let data = raw.get("data");
@@ -1255,7 +1260,10 @@ impl TileMap {
                         }
                     } else if let Some(enc) = data.and_then(Value::as_str) {
                         if !enc.contains(',') && !enc.contains('\n') {
-                            return Err("Encoded (base64/compressed) tile data is not supported yet.".into());
+                            return Err(format!(
+                                "Layer \"{name}\" uses encoded (base64/compressed) tile data, which is not supported. \
+                                 Re-export the map as CSV or uncompressed JSON."
+                            ));
                         }
                         for (i, part) in enc
                             .split([',', '\n'])
@@ -1335,7 +1343,11 @@ impl TileMap {
                     ]);
                     layers.push(MapLayer::Objects(data));
                 }
-                other => return Err(format!("Unsupported layer type {other:?}.")),
+                other => {
+                    return Err(format!(
+                        "Layer \"{name}\" has unsupported type {other:?}. Only tile and object layers are supported."
+                    ))
+                }
             }
         }
 
@@ -1356,7 +1368,7 @@ impl TileMap {
             "nextobjectid", "properties", "tilesets", "layers",
         ]);
 
-        let mut map = TileMap {
+        let map = TileMap {
             width,
             height,
             tile_width,

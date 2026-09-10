@@ -67,6 +67,18 @@ unsafe fn doc_ref<'a>(ptr: *const BixelDoc) -> &'a RealDoc {
     unsafe { &*(ptr as *const RealDoc) }
 }
 
+/// Lock a document handle, recovering from a poisoned mutex. A panic that
+/// unwinds across the C ABI is undefined behaviour, so a prior panic (which
+/// poisons the lock) must never make later calls panic again.
+#[doc(hidden)]
+#[inline]
+fn lock_doc(ptr: *mut BixelDoc) -> std::sync::MutexGuard<'static, AsepriteDoc> {
+    match unsafe { doc(ptr) }.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 #[doc(hidden)]
 #[inline]
 unsafe fn tilelayer<'a>(ptr: *mut BixelTileLayer) -> &'a mut RealTileLayer {
@@ -370,7 +382,7 @@ pub unsafe extern "C" fn bixel_doc_transform_rect(
     dx: i32, dy: i32, dw: u32, dh: u32, rotation: u32,
 ) -> bool {
     if ptr.is_null() { return false; }
-    let mut document = unsafe { doc(ptr) }.lock().unwrap();
+    let mut document = lock_doc(ptr);
     if document.transform_rect(layer as usize, frame as usize, sx as usize, sy as usize,
                                sw as usize, sh as usize, dx, dy, dw as usize, dh as usize, rotation).is_err() {
         return false;
@@ -388,7 +400,7 @@ pub unsafe extern "C" fn bixel_doc_transform_rect_angle(
     dx: i32, dy: i32, dw: u32, dh: u32, angle: f64,
 ) -> bool {
     if ptr.is_null() || !angle.is_finite() { return false; }
-    let mut document = unsafe { doc(ptr) }.lock().unwrap();
+    let mut document = lock_doc(ptr);
     if document.transform_rect_angle(layer as usize, frame as usize, sx as usize, sy as usize,
                                      sw as usize, sh as usize, dx, dy, dw as usize, dh as usize,
                                      angle).is_err() {
@@ -1318,6 +1330,17 @@ pub unsafe extern "C" fn bixel_map_from_json(json: *const c_char) -> *mut BixelM
     match TileMap::from_tiled_json(&arg_str(json)) {
         Ok(map) => Box::into_raw(Box::new(Arc::new(Mutex::new(map)))) as *mut BixelMap,
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Parse a Tiled JSON string and return the precise error message (or null when
+/// the map is valid). Lets the host explain *why* an imported map was rejected
+/// instead of showing a generic failure.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_validate_json(json: *const c_char) -> *mut c_char {
+    match TileMap::from_tiled_json(&arg_str(json)) {
+        Ok(_) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
     }
 }
 

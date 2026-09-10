@@ -453,6 +453,26 @@ struct EditorInteractionTests {
         precondition(abs(canvasResizeModel.floatingImport!.scaleX - 1.5) <= tolerance,
                      "Floating resize mouse-up must retain the transformed geometry for subsequent edits")
 
+        // A click outside the floating source is the normal canvas placement
+        // boundary. It must commit the pending import instead of being
+        // swallowed by the floating gesture branch.
+        let outsideClickModel = floatingGestureModel()
+        let outsideClickViewport = CanvasViewport()
+        outsideClickViewport.zoom = 10
+        let outsideClickCanvas = PixelCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let outsideClickCoordinator = CanvasView.Coordinator(model: outsideClickModel, viewport: outsideClickViewport)
+        outsideClickCanvas.coordinator = outsideClickCoordinator
+        outsideClickCanvas.updateArtboardGeometry()
+        outsideClickCanvas.mouseDown(with: canvasMouseEvent(.leftMouseDown, point: CGPoint(x: 130, y: 130)))
+        precondition(outsideClickModel.floatingImport == nil && outsideClickModel.frameCount == 2,
+                     "Clicking outside a floating source must place it so the editor is usable again")
+
+        let toolSwitchModel = floatingGestureModel()
+        toolSwitchModel.selectTool(.pencil)
+        precondition(toolSwitchModel.floatingImport == nil && toolSwitchModel.frameCount == 2 &&
+                     toolSwitchModel.tool == .pencil,
+                     "Switching tools must place a pending import before resuming normal editing")
+
         precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: true) == .paint)
         precondition(CanvasCursorPolicy.kind(tool: .eyedropper, insideArtboard: true) == .eyedropper)
         precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: false) == .arrow)

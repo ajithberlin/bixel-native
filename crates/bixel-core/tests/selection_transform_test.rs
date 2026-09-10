@@ -41,3 +41,44 @@ fn transform_supports_arbitrary_rotation_angles() {
     }
     assert!(remaining > 0);
 }
+
+#[test]
+fn transform_clips_destination_that_leaves_the_canvas() {
+    let mut doc = AsepriteDoc::new(8, 8, &[]);
+    for y in 1..3 {
+        for x in 1..3 {
+            doc.set_pixel(0, 0, x, y, Rgba { r: 200, g: 10, b: 20, a: 255 });
+        }
+    }
+    // Destination origin is negative: only the visible corner is written.
+    doc.transform_rect_angle(0, 0, 1, 1, 2, 2, -1, -1, 2, 2, 0.0).unwrap();
+    assert_eq!(doc.get_pixel(0, 0, 0, 0).r, 200);
+    assert_eq!(doc.get_pixel(0, 0, 1, 1).a, 0);
+    assert_eq!(doc.get_pixel(0, 0, 2, 2).a, 0);
+}
+
+#[test]
+fn transform_bounds_work_for_huge_destinations() {
+    let mut doc = AsepriteDoc::new(8, 8, &[]);
+    doc.set_pixel(0, 0, 0, 0, Rgba { r: 7, g: 8, b: 9, a: 255 });
+    // An enormous destination rectangle must not spin or allocate; only the
+    // canvas-visible pixels are visited.
+    doc.transform_rect_angle(0, 0, 0, 0, 1, 1, 0, 0, u32::MAX as usize, u32::MAX as usize, 0.0)
+        .unwrap();
+    assert_eq!(doc.get_pixel(0, 0, 0, 0).r, 7);
+}
+
+#[test]
+fn transform_rejects_invalid_arguments_without_mutating() {
+    let mut doc = AsepriteDoc::new(4, 4, &[]);
+    doc.set_pixel(0, 0, 0, 0, Rgba { r: 1, g: 1, b: 1, a: 255 });
+    // Quarter-turn path rejects rotations above three.
+    assert!(doc.transform_rect(0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 4).is_err());
+    // Zero-sized and out-of-bounds sources are rejected.
+    assert!(doc.transform_rect_angle(0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0.0).is_err());
+    assert!(doc.transform_rect_angle(0, 0, 3, 3, 2, 2, 0, 0, 2, 2, 0.0).is_err());
+    // Non-finite angles are rejected.
+    assert!(doc.transform_rect_angle(0, 0, 0, 0, 1, 1, 1, 1, 1, 1, f64::NAN).is_err());
+    // The rejected calls must not have cleared the original pixel.
+    assert_eq!(doc.get_pixel(0, 0, 0, 0).r, 1);
+}

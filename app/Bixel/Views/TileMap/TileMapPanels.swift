@@ -117,12 +117,10 @@ struct MapLeftDock: View {
 struct TilesetPanel: View {
     @ObservedObject var store: ProjectStore
     @ObservedObject var model: TileMapModel
-    @State private var showAddSheet = false
-    @State private var pendingAdd: AddTilesetSource?
+    @State private var addSheet: TilesetAddSheet?
     @State private var autotileEditing = false
     @State private var autotileSlotToAssign: Int?
     @State private var activeTileset = 0
-    @State private var showAssetChooser = false
 
     private var tilesetList: [MapTilesetInfo] { model.tilesetList }
 
@@ -147,26 +145,36 @@ struct TilesetPanel: View {
         .onChange(of: tilesetList.count) { _ in
             if activeTileset >= tilesetList.count { activeTileset = max(0, tilesetList.count - 1) }
         }
-        .sheet(isPresented: $showAddSheet) {
-            if let pending = pendingAdd {
+        .sheet(item: $addSheet) { sheet in
+            switch sheet {
+            case .chooser:
+                ProjectTilesetPicker(
+                    store: store,
+                    onPick: { name, data in
+                        guard let source = prepareSource(name: name, data: data) else { return }
+                        addSheet = nil
+                        DispatchQueue.main.async { addSheet = .configure(source) }
+                    },
+                    onChooseFile: {
+                        addSheet = nil
+                        DispatchQueue.main.async { pickImage() }
+                    },
+                    onCancel: { addSheet = nil }
+                )
+                .frame(width: 380, height: 460)
+            case .configure(let source):
                 AddTilesetSheet(
-                    source: pending,
+                    source: source,
                     defaultTileWidth: model.map.cellWidth,
                     defaultTileHeight: model.map.cellHeight,
-                    onCancel: { showAddSheet = false },
+                    onCancel: { addSheet = nil },
                     onConfirm: { tw, th, margin, spacing in
-                        commitTileset(pending, tw: tw, th: th, margin: margin, spacing: spacing)
-                        showAddSheet = false
+                        commitTileset(source, tw: tw, th: th, margin: margin, spacing: spacing)
+                        addSheet = nil
                     }
                 )
                 .frame(width: 440, height: 460)
             }
-        }
-        .sheet(isPresented: $showAssetChooser) {
-            ProjectTilesetPicker(store: store) { name, data in
-                beginAdd(name: name, data: data)
-            }
-            .frame(width: 360, height: 420)
         }
     }
 
@@ -207,7 +215,7 @@ struct TilesetPanel: View {
                     Label("Image file…", systemImage: "folder")
                 }
                 Button {
-                    showAssetChooser = true
+                    addSheet = .chooser
                 } label: {
                     Label("From project assets…", systemImage: "square.stack")
                 }
@@ -353,7 +361,7 @@ struct TilesetPanel: View {
                 .multilineTextAlignment(.center)
             Menu {
                 Button { pickImage() } label: { Label("Image file…", systemImage: "folder") }
-                Button { showAssetChooser = true } label: { Label("From project assets…", systemImage: "square.stack") }
+                Button { addSheet = .chooser } label: { Label("From project assets…", systemImage: "square.stack") }
             } label: {
                 Label("Add tileset", systemImage: "plus")
                     .font(.system(size: 12, weight: .semibold))
@@ -473,27 +481,32 @@ struct TilesetPanel: View {
 
     private func pickImage() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg]
+        panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            guard let data = try? Data(contentsOf: url) else { return }
-            beginAdd(name: url.deletingPathExtension().lastPathComponent, data: data)
+            guard let data = try? Data(contentsOf: url) else {
+                store.error = "Could not read that image file."
+                return
+            }
+            if let source = prepareSource(name: url.deletingPathExtension().lastPathComponent, data: data) {
+                addSheet = .configure(source)
+            }
         }
     }
 
-    private func beginAdd(name: String, data: Data) {
+    /// Decode an image into an `AddTilesetSource`, surfacing decode failures.
+    private func prepareSource(name: String, data: Data) -> AddTilesetSource? {
         guard let image = AIService.pngToRGBA(data) else {
             store.error = "Could not decode that tileset image."
-            return
+            return nil
         }
         guard let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
             store.error = "Unsupported tileset image."
-            return
+            return nil
         }
-        pendingAdd = AddTilesetSource(name: name, data: data, cgImage: cg,
-                                      rgba: image.rgba, width: image.width, height: image.height)
-        showAddSheet = true
+        return AddTilesetSource(name: name, data: data, cgImage: cg,
+                                rgba: image.rgba, width: image.width, height: image.height)
     }
 
     private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int) {
@@ -515,29 +528,48 @@ struct TilesetPanel: View {
     }
 }
 
-/// Lets the user pick one of the project's image assets as a tileset source.
+/// Lets the user pick one of the project's image assets as a tileset source,
+/// or fall back to choosing an image file from disk.
 private struct ProjectTilesetPicker: View {
     @ObservedObject var store: ProjectStore
     let onPick: (String, Data) -> Void
-    @Environment(\.dismiss) private var dismiss
+    let onChooseFile: () -> Void
+    let onCancel: () -> Void
     @State private var search = ""
+
+    private var imageAssets: [ProjectAssetFile] {
+        store.assets.filter { $0.isImage && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Choose a tileset image").font(.headline)
+                Text("Add tileset").font(.headline)
                 Spacer()
-                Button { dismiss() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                Button { onCancel() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
             }
+
+            Button { onChooseFile() } label: {
+                Label("Choose image file…", systemImage: "folder")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            Text("Or use an image already in this project:")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
             TextField("Search project assets", text: $search)
                 .textFieldStyle(.roundedBorder)
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    ForEach(store.assets.filter { $0.isImage && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }, id: \.path) { asset in
+                    ForEach(imageAssets, id: \.path) { asset in
                         Button {
                             if let data = try? store.assetData(asset) {
                                 onPick(asset.name, data)
-                                dismiss()
+                            } else {
+                                store.error = "Could not read \(asset.name)."
                             }
                         } label: {
                             HStack(spacing: 8) {
@@ -555,8 +587,10 @@ private struct ProjectTilesetPicker: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    if store.assets.filter({ $0.isImage }).isEmpty {
-                        Text("No images in this project yet. Generate some with the AI assistant, or drag files into the library.")
+                    if imageAssets.isEmpty {
+                        Text(store.assets.isEmpty
+                             ? "No images in this project yet. Use “Choose image file…” above, or generate art with the AI assistant."
+                             : "No images match your search.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -567,6 +601,20 @@ private struct ProjectTilesetPicker: View {
         }
         .padding(16)
         .background(StudioTheme.background)
+        .onAppear { store.refreshAssets() }
+    }
+}
+
+/// The two-step add-tileset flow: choose a source, then configure slicing.
+private enum TilesetAddSheet: Identifiable {
+    case chooser
+    case configure(AddTilesetSource)
+
+    var id: String {
+        switch self {
+        case .chooser: return "chooser"
+        case .configure(let source): return "configure-\(source.name)-\(source.width)x\(source.height)"
+        }
     }
 }
 

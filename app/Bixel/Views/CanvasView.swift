@@ -853,6 +853,12 @@ final class PixelCanvas: NSView {
                     transformGesture = true
                     resizeGesture = false
                     rotationGesture = false
+                } else {
+                    // Clicking away from the floating source is the natural
+                    // placement gesture. Transform mouse-up remains
+                    // non-destructive, but an outside press explicitly ends
+                    // the pending import so the rest of the editor is usable.
+                    coordinator.model.commitFloatingImport()
                 }
                 return
             }

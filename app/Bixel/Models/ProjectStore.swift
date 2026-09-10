@@ -262,9 +262,7 @@ final class ProjectStore: ObservableObject {
                     throw StorageError.message("The active document is missing.")
                 }
                 if item.mode == .map {
-                    guard let model = try? TileMapModel(json: json) else {
-                        throw StorageError.message("The active map was created by an older version. Create a new map in this project.")
-                    }
+                    let model = try TileMapModel(json: json)
                     loadMapTilesetImages(model, base: base)
                     mapDocument = model
                 } else {
@@ -330,9 +328,7 @@ final class ProjectStore: ObservableObject {
             try flush()
             guard let json = try ProjectStorage.read(base: base, path: item.path) else { throw StorageError.message("Document is missing.") }
             if item.mode == .map {
-                guard let model = try? TileMapModel(json: json) else {
-                    throw StorageError.message("This map was created by an older version. Open its project and create a new map.")
-                }
+                let model = try TileMapModel(json: json)
                 loadMapTilesetImages(model, base: base)
                 var next = catalog; next.activeDocumentID = item.id
                 try writeCatalog(next, base: base)

@@ -563,7 +563,11 @@ final class TileMap: @unchecked Sendable {
 
     init(json: String) throws {
         guard let restored = bixel_map_from_json(json) else {
-            throw StorageError.message("The saved map is invalid or uses an unsupported Tiled version.")
+            let detail = bixel_map_validate_json(json).map { ptr -> String in
+                defer { bixel_string_free(ptr) }
+                return String(cString: ptr)
+            }
+            throw StorageError.message(detail?.isEmpty == false ? detail! : "The saved map is invalid or uses an unsupported Tiled version.")
         }
         handle = restored
     }

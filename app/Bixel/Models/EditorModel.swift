@@ -397,6 +397,7 @@ final class EditorModel: ObservableObject {
 
     func clearSelection() {
         selectionStart = nil; selectionRect = nil; transformRect = nil; transformAngle = 0
+        transformStart = nil; transformOrigin = nil
         rotationCenter = nil; rotationStartAngle = nil; rotationBaseRect = nil
         endResize()
     }
@@ -407,7 +408,22 @@ final class EditorModel: ObservableObject {
     /// active layer's artwork into an auto-selection, exactly like Procreate,
     /// so the transform box + handles appear immediately without a click.
     func selectTool(_ newTool: Tool) {
-        guard newTool != tool else { return }
+        if floatingImport != nil && newTool != .transform {
+            // Leaving the transform workflow is an intentional placement
+            // boundary. Keep ordinary transform mouse-up non-destructive, but
+            // do not let a pending import capture every subsequent tool.
+            commitFloatingImport()
+            guard floatingImport == nil else { return }
+        }
+        if newTool == tool {
+            // Re-pressing Transform with an empty box (e.g. after Escape) should
+            // re-acquire the layer's artwork rather than silently doing nothing.
+            if newTool == .transform, selectionRect == nil, let content = activeLayerContentBounds() {
+                selectionRect = content
+                transformRect = content
+            }
+            return
+        }
         let selectionFamily: Set<Tool> = [.selection, .transform]
         if selectionFamily.contains(tool) && !selectionFamily.contains(newTool) {
             clearSelection()
@@ -506,12 +522,11 @@ final class EditorModel: ObservableObject {
         return nil
     }
 
-    func beginResize(handle: TransformHandle, x: Int, y: Int, uniform: Bool) {
+    func beginResize(handle: TransformHandle, x _: Int, y _: Int, uniform: Bool) {
         guard let rect = transformRect ?? selectionRect else { return }
         resizeHandle = handle
         resizeBase = rect
         resizeUniform = uniform && handle.isCorner
-        _ = x; _ = y
     }
 
     func updateResize(x: Int, y: Int) {
@@ -624,15 +639,14 @@ final class EditorModel: ObservableObject {
 
     func endRotation(commit: Bool) {
         guard rotationCenter != nil else { return }
-        let shouldCommit = commit
-        if !shouldCommit {
+        if !commit {
             transformRect = rotationBaseRect
             transformAngle = rotationBaseAngle
         }
         rotationCenter = nil
         rotationStartAngle = nil
         rotationBaseRect = nil
-        if shouldCommit { commitTransform() }
+        if commit { commitTransform() }
     }
 
     private func rotatedBounds(of rect: CGRect, angle: CGFloat) -> CGRect {
@@ -657,7 +671,15 @@ final class EditorModel: ObservableObject {
         do {
             try document.transformRectAngle(layer: activeLayer, frame: frame, source: source, destination: destination,
                                             angle: Double(transformAngle))
-            selectionRect = destination
+            // Only the part of the destination that overlaps the canvas was
+            // actually written. Keep the marquee on-canvas so the next
+            // transform has a valid (non-negative) source rectangle; the engine
+            // rejects source origins outside the canvas.
+            let canvas = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+            let visible = destination.intersection(canvas)
+            let resolved = visible.isNull || visible.isEmpty ? nil : visible
+            selectionRect = resolved
+            transformRect = resolved
             transformAngle = 0
             transformStart = nil; transformOrigin = nil
             endResize()
@@ -677,8 +699,9 @@ final class EditorModel: ObservableObject {
 
     func fitSelectionToCanvas() {
         guard let source = selectionRect else { return }
-        if source.width == CGFloat(width) && source.height == CGFloat(height) { return }
-        transformRect = CGRect(x: 0, y: 0, width: width, height: height)
+        let full = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+        if source.equalTo(full) && abs(transformAngle) < 0.0001 { return }
+        transformRect = full
         transformAngle = 0
         commitTransform()
     }
@@ -687,8 +710,8 @@ final class EditorModel: ObservableObject {
 
     func nudgeTransform(dx: Int, dy: Int) {
         guard let rect = transformRect else { return }
-        let step = snapping ? 1 : 1
-        transformRect = rect.offsetBy(dx: CGFloat(dx * step), dy: CGFloat(dy * step))
+        // Document pixels are already the snapping grid for a 1px nudge.
+        transformRect = rect.offsetBy(dx: CGFloat(dx), dy: CGFloat(dy))
     }
 
     func addLayer() {
@@ -1328,12 +1351,11 @@ final class EditorModel: ObservableObject {
         floatingImport = image
     }
 
-    func beginFloatingResize(handle: TransformHandle, x: CGFloat, y: CGFloat, uniform: Bool) {
+    func beginFloatingResize(handle: TransformHandle, x _: CGFloat, y _: CGFloat, uniform: Bool) {
         guard let image = floatingImport else { return }
         floatingResizeHandle = handle
         floatingResizeBase = image
         floatingResizeUniform = handle.isCorner && (uniformTransform || uniform)
-        _ = x; _ = y
     }
 
     func updateFloatingResize(x: CGFloat, y: CGFloat) {

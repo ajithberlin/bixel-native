@@ -312,7 +312,9 @@ enum AIService {
               rgba.count >= srcWidth * srcHeight * 4,
               center.x.isFinite, center.y.isFinite,
               scaleX.isFinite, scaleY.isFinite, angle.isFinite else {
-            return destination
+            // Signal failure with an empty buffer so callers can surface an
+            // error instead of silently committing a fully transparent frame.
+            return []
         }
 
         let safeScaleX = max(0.0001, scaleX)
