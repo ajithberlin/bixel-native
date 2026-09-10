@@ -23,6 +23,9 @@ struct ContentView: View {
     @State private var showColor = false
     @State private var showTimeline = false
     @State private var assistantExpanded = false
+    @State private var showPaywall = false
+    @State private var showCustomerCenter = false
+    @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
 
     private var model: EditorModel { projects.editor }
@@ -53,7 +56,9 @@ struct ContentView: View {
                             }
                             projects.assistant.send(model: projects.editor)
                         }
-                    }
+                    },
+                    onPresentPaywall: { showPaywall = true },
+                    onPresentCustomerCenter: { showCustomerCenter = true }
                 )
                 .transition(.opacity)
             } else {
@@ -70,6 +75,14 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .studioZoomIn)) { _ in viewport.zoomIn() }
                 .onReceive(NotificationCenter.default.publisher(for: .studioZoomOut)) { _ in viewport.zoomOut() }
                 .onReceive(NotificationCenter.default.publisher(for: .studioZoomFit)) { _ in performZoomFit() }
+
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onReceive(NotificationCenter.default.publisher(for: .studioUnlockLifetime)) { _ in showPaywall = true }
+                .onReceive(NotificationCenter.default.publisher(for: .studioCustomerCenter)) { _ in showCustomerCenter = true }
+                .onReceive(NotificationCenter.default.publisher(for: .studioRestorePurchases)) { _ in
+                    Task { await subscriptionManager.restorePurchases() }
+                }
 
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -96,6 +109,8 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.22), value: currentScreen)
         .sheet(isPresented: $showProjects) { ProjectPicker(store: projects) }
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
+        .sheet(isPresented: $showPaywall) { PaywallContainerView() }
+        .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
         .onAppear {
             currentScreen = .home
             showLayers = true
@@ -276,6 +291,10 @@ struct ContentView: View {
                     .padding(.bottom, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+
+            AdBannerView(onPresentPaywall: { showPaywall = true })
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
         }
     }
 
@@ -375,6 +394,9 @@ struct ContentView: View {
             Spacer()
             MapWorkspaceFeedback(model: mapModel)
                 .padding(.bottom, 8)
+            AdBannerView(onPresentPaywall: { showPaywall = true })
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
             HStack(alignment: .bottom) {
                 Spacer()
                 MiniMapOverlay(model: mapModel, viewport: viewport)
@@ -436,4 +458,7 @@ extension Notification.Name {
     static let studioExportTiledJSON = Notification.Name("studio.exportTiledJSON")
     static let studioExportCSV = Notification.Name("studio.exportCSV")
     static let studioExportMapPNG = Notification.Name("studio.exportMapPNG")
+    static let studioUnlockLifetime = Notification.Name("studio.unlockLifetime")
+    static let studioCustomerCenter = Notification.Name("studio.customerCenter")
+    static let studioRestorePurchases = Notification.Name("studio.restorePurchases")
 }

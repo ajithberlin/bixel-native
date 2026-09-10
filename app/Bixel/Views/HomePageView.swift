@@ -50,6 +50,10 @@ struct HomePageView: View {
     @ObservedObject var store: ProjectStore
     let onOpenProject: (StudioProject) -> Void
     let onOpenWithAIPrompt: (String) -> Void
+    var onPresentPaywall: (() -> Void)? = nil
+    var onPresentCustomerCenter: (() -> Void)? = nil
+
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
 
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
@@ -91,6 +95,14 @@ struct HomePageView: View {
 
                         quoteCard
                             .frame(width: 300)
+                    }
+
+                    // 5. Ad Banner (displayed only for free-tier users)
+                    if !subscriptionManager.isAdFree {
+                        AdBannerView {
+                            onPresentPaywall?()
+                        }
+                        .padding(.top, 4)
                     }
                 }
                 .padding(.horizontal, 36)
@@ -180,6 +192,61 @@ struct HomePageView: View {
                 Spacer()
             }
             .padding(.leading, 24)
+
+            // Trailing: Store / Lifetime Ad-Free status
+            HStack(spacing: 10) {
+                Spacer()
+
+                if subscriptionManager.isAdFree {
+                    Button {
+                        onPresentCustomerCenter?()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(StudioTheme.bixelGreen)
+                            Text("Lifetime Ad-Free")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(StudioTheme.bixelGreenSoft)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(StudioTheme.bixelGreen.opacity(0.35), lineWidth: 1)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Manage account and purchases")
+                } else {
+                    Button {
+                        onPresentPaywall?()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "crown.fill")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.black)
+                            Text("Unlock Lifetime")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(.black)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(StudioTheme.bixelGreen)
+                        )
+                        .shadow(color: StudioTheme.bixelGreen.opacity(0.3), radius: 6, y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .help("One-time lifetime purchase: Remove all ads forever")
+                }
+            }
+            .padding(.trailing, 24)
         }
     }
 

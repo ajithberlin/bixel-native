@@ -23,10 +23,20 @@ settings:
     ENABLE_HARDENED_RUNTIME: true
     DEAD_CODE_STRIPPING: false
 
+packages:
+  RevenueCat:
+    url: https://github.com/RevenueCat/purchases-ios-spm.git
+    from: "5.16.0"
+
 targets:
   Bixel:
     type: application
     platform: macOS
+    dependencies:
+      - package: RevenueCat
+        product: RevenueCat
+      - package: RevenueCat
+        product: RevenueCatUI
     sources:
       - path: app/Bixel
         excludes:
@@ -58,6 +68,7 @@ targets:
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true
+        GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
         NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication
     preBuildScripts:

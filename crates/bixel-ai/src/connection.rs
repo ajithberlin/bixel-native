@@ -202,10 +202,13 @@ impl ModelReadiness {
         let image = if cfg.models.image.trim().is_empty() {
             RoleReadiness::blocked("", "image model is not configured")
         } else if cfg.image_api_key().is_none() {
-            RoleReadiness::blocked(
-                &cfg.models.image,
-                "image generation requires an OpenRouter API key",
-            )
+            let reason = match cfg.provider {
+                ProviderChoice::OpenRouter => "image generation requires an OpenRouter API key",
+                ProviderChoice::ChatgptCodex => {
+                    "image generation requires the OpenRouter provider"
+                }
+            };
+            RoleReadiness::blocked(&cfg.models.image, reason)
         } else {
             RoleReadiness::ready(&cfg.models.image)
         };
@@ -470,9 +473,10 @@ pub fn cancel_codex_oauth() {
 static OAUTH_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
 
 /// Model ids selectable in the UI: the provider's known models (Codex) or the
-/// OpenRouter catalog (requires a stored OpenRouter key). No network for
-/// Codex; one `/models` call for OpenRouter.
-pub fn list_models(provider: ProviderChoice) -> Result<Vec<String>, AiError> {
+/// OpenRouter catalog (requires a stored OpenRouter key), plus the provider's
+/// default model when it declares one. No network for Codex; one `/models`
+/// call for OpenRouter.
+pub fn list_models(provider: ProviderChoice) -> Result<(Vec<String>, Option<String>), AiError> {
     ensure_goose_env()?;
     match provider {
         ProviderChoice::ChatgptCodex => {
@@ -481,6 +485,7 @@ pub fn list_models(provider: ProviderChoice) -> Result<Vec<String>, AiError> {
             let entry = runtime
                 .block_on(providers::get_from_registry(CHATGPT_CODEX_PROVIDER))
                 .map_err(|e| AiError::Provider(e.to_string()))?;
+            let default = entry.metadata().default_model.clone();
             let mut names: Vec<String> = entry
                 .metadata()
                 .known_models
@@ -488,7 +493,7 @@ pub fn list_models(provider: ProviderChoice) -> Result<Vec<String>, AiError> {
                 .map(|m| m.name.clone())
                 .collect();
             names.sort();
-            Ok(names)
+            Ok((names, Some(default).filter(|d| !d.is_empty())))
         }
         ProviderChoice::OpenRouter => {
             let key: String = Config::global()
@@ -515,7 +520,7 @@ pub fn list_models(provider: ProviderChoice) -> Result<Vec<String>, AiError> {
                 })
                 .unwrap_or_default();
             ids.sort();
-            Ok(ids)
+            Ok((ids, None))
         }
     }
 }

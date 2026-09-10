@@ -7,12 +7,22 @@ import SwiftUI
 
 @main
 struct BixelApp: App {
+    init() {
+        SubscriptionManager.shared.configure()
+    }
+
     var body: some Scene {
         Window("Bixel Studio", id: "studio") {
             ContentView()
         }
         .windowStyle(.automatic)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Unlock Lifetime Ad-Free…") { post(.studioUnlockLifetime) }
+                Button("Manage Purchases…") { post(.studioCustomerCenter) }
+                Button("Restore Purchases") { post(.studioRestorePurchases) }
+                Divider()
+            }
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") { post(.studioUndo) }
                     .keyboardShortcut("z", modifiers: .command)

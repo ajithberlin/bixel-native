@@ -536,6 +536,22 @@ struct ActionsPopover: View {
                 Label("Project Gallery", systemImage: "square.grid.3x3")
             }
             .buttonStyle(.plain)
+
+            Divider().overlay(StudioTheme.hairline)
+
+            Button {
+                post(.studioUnlockLifetime)
+            } label: {
+                Label("Unlock Lifetime Ad-Free…", systemImage: "crown")
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                post(.studioCustomerCenter)
+            } label: {
+                Label("Manage Purchases…", systemImage: "person.crop.circle")
+            }
+            .buttonStyle(.plain)
         }
     }
 
