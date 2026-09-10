@@ -129,6 +129,7 @@ struct ProjectAssetsPanel: View {
             }
             .menuStyle(.borderlessButton)
             .disabled(store.assistant.busy)
+            .help("Switch the active document")
         }
     }
 
@@ -142,6 +143,7 @@ struct ProjectAssetsPanel: View {
                 Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain)
                     .foregroundColor(StudioTheme.textDisabled)
+                    .help("Clear search")
             }
         }
         .padding(.horizontal, 9)
@@ -279,6 +281,7 @@ private struct AssetPreview: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(store.assistant.busy)
+                .help("Place this image on the map as a reference under the tiles")
                 Text("Shows as a reference under the tiles — not saved into the map.")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
@@ -286,8 +289,10 @@ private struct AssetPreview: View {
                 HStack(spacing: 6) {
                     Button("Add layer") { store.editor.placeAsset(data, name: asset.name) }
                         .disabled(store.activeDocument == nil)
+                        .help("Place this image on the canvas as a new layer")
                     Button("Open image") { store.openImageAsset(asset) }
                         .disabled(store.assistant.busy)
+                        .help("Open this image as a new document")
                 }
                 .font(.system(size: 11))
                 .controlSize(.small)
@@ -328,6 +333,7 @@ struct NewWorkspaceDocument: View {
             Picker("Project type", selection: $mode) {
                 ForEach(WorkspaceMode.allCases) { Text($0.title).tag($0) }
             }
+            .help("Normal canvas or tile map document")
             HStack {
                 dimension(mode.usesCells ? "Columns" : "Width (px)", value: $width)
                 dimension(mode.usesCells ? "Rows" : "Height (px)", value: $height)
@@ -340,11 +346,13 @@ struct NewWorkspaceDocument: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .help("Cancel creating the document")
                 Button("Create document") {
                     let before = store.catalog.documents.count
                     store.createDocument(item)
                     if store.catalog.documents.count > before { dismiss() }
                 }.buttonStyle(.borderedProminent).disabled(item.validationError != nil || store.assistant.busy).keyboardShortcut(.defaultAction)
+                    .help("Create this document")
             }
         }.padding(26).frame(width: 480)
         .onChange(of: mode) { value in

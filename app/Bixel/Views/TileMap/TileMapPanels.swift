@@ -158,6 +158,7 @@ private struct ReferenceImageControls: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            .help("Choose a reference image from disk")
 
             if model.referenceImage != nil {
                 HStack {
@@ -180,6 +181,7 @@ private struct ReferenceImageControls: View {
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.small)
+                .help("Remove the reference image")
             }
         }
         .padding(14)
@@ -341,6 +343,7 @@ struct TilesetPanel: View {
                             )
                     }
                     .buttonStyle(.plain)
+                    .help(ts.name.isEmpty ? "Tileset \(pos + 1)" : ts.name)
                 }
             }
             .padding(.horizontal, 12)
@@ -424,6 +427,7 @@ struct TilesetPanel: View {
                         .foregroundColor(.white.opacity(0.5))
                 }
                 .buttonStyle(.plain)
+                .help("Clear the armed brush")
             }
         }
         .padding(.horizontal, 10)
@@ -475,6 +479,7 @@ struct TilesetPanel: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
+            .help("Add a tileset image")
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 22)
@@ -507,6 +512,7 @@ struct TilesetPanel: View {
                 .controlSize(.mini)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundColor(.white.opacity(0.85))
+                .help("Automatically pick edge and corner tiles while painting")
 
                 Spacer()
 
@@ -517,6 +523,7 @@ struct TilesetPanel: View {
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(autotileEditing ? StudioTheme.accent : .secondary)
+                .help(autotileEditing ? "Finish assigning autotile slots" : "Assign tiles to the 16 autotile edge masks")
             }
             .padding(.horizontal, 12)
 
@@ -655,7 +662,9 @@ private struct ProjectTilesetPicker: View {
             HStack {
                 Text("Add tileset").font(.headline)
                 Spacer()
-                Button { onCancel() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                Button { onCancel() } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.plain)
+                    .help("Close")
             }
 
             Button { onChooseFile() } label: {
@@ -664,6 +673,7 @@ private struct ProjectTilesetPicker: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .help("Choose an image file from disk to use as a tileset")
 
             Text("Or use an image already in this project:")
                 .font(.caption)
@@ -695,6 +705,7 @@ private struct ProjectTilesetPicker: View {
                             .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 8))
                         }
                         .buttonStyle(.plain)
+                        .help("Use \(asset.name) as a tileset")
                     }
                     if imageAssets.isEmpty {
                         Text(store.assets.isEmpty
@@ -824,6 +835,7 @@ private struct TileSheetView: View {
             .controlSize(.mini)
             .labelsHidden()
             .frame(width: 138)
+            .help("Zoom the tile palette")
         }
     }
 
@@ -1022,10 +1034,12 @@ private struct AddTilesetSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                    .help("Cancel adding the tileset")
                 Button("Add tileset") { onConfirm(tileWidth, tileHeight, margin, spacing) }
                     .buttonStyle(.borderedProminent)
                     .disabled(slicing.tiles == 0)
                     .keyboardShortcut(.defaultAction)
+                    .help("Add this tileset to the map")
             }
         }
         .padding(22)
@@ -1152,6 +1166,7 @@ struct MapLayersPanel: View {
                 isOnBlue: layer.index == model.activeLayer,
                 action: { model.toggleLayerVisibility(layer.index) }
             )
+            .help(layer.visible ? "Hide layer" : "Show layer")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -1264,6 +1279,7 @@ struct MapLayersPanel: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
+                                .help("Select this object")
 
                                 Button {
                                     propsObject = PropsTarget(layer: layerIndex, objectID: obj.id)
@@ -1285,6 +1301,7 @@ struct MapLayersPanel: View {
                                         .frame(width: 18, height: 18)
                                 }
                                 .buttonStyle(.plain)
+                                .help("Delete this object")
                             }
                             .padding(.horizontal, 12)
                         }
@@ -1345,6 +1362,7 @@ struct MapLayersPanel: View {
                 .background(Capsule().fill(Color.white.opacity(0.1)))
         }
         .buttonStyle(.plain)
+        .help("Add \(title) object")
     }
 }
 
@@ -1380,6 +1398,7 @@ private struct SelectedObjectEditor: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundColor(StudioTheme.accent)
+                .help("Apply the object name, type and geometry")
             }
 
             HStack(spacing: 6) {
@@ -1463,12 +1482,14 @@ struct MapWorkspaceFeedback: View {
                     }
                     Button("Clear brush") { model.clearBrush(); model.hasPasteGhost = false }
                         .font(.caption)
+                        .help("Clear the armed brush")
                     if model.hasPasteGhost {
                         Button("Cancel") {
                             model.hasPasteGhost = false
                             model.clearBrush()
                         }
                         .font(.caption)
+                        .help("Cancel the floating paste")
                     }
                 }
                 .font(.caption)
@@ -1622,7 +1643,9 @@ struct MapPropertiesEditor: View {
                 Text(target.title).font(.headline)
                 Spacer()
                 Button("Revert") { reload() }.font(.caption)
+                    .help("Reload the saved properties")
                 Button("Save") { save() }.buttonStyle(.borderedProminent).controlSize(.small)
+                    .help("Save these properties to the map")
             }
             if props.isEmpty {
                 Text("No custom properties yet.")
@@ -1643,6 +1666,7 @@ struct MapPropertiesEditor: View {
                     .font(.caption)
             }
             .buttonStyle(.plain)
+            .help("Add a custom property")
         }
         .padding(16)
         .onAppear { reload() }
@@ -1681,6 +1705,7 @@ struct MapPropertiesEditor: View {
                     .foregroundColor(.white.opacity(0.6))
             }
             .buttonStyle(.plain)
+            .help("Remove property")
         }
     }
 
@@ -1692,6 +1717,7 @@ struct MapPropertiesEditor: View {
             Toggle("", isOn: boolBinding(binding))
                 .labelsHidden()
                 .frame(width: 50)
+                .help("Property value")
         default:
             TextField("Value", text: valueTextBinding(binding, type: type))
                 .textFieldStyle(.roundedBorder)

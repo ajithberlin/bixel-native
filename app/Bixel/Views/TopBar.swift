@@ -430,6 +430,7 @@ struct ActionsPopover: View {
                 ForEach(ActionTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
+            .help("Actions: canvas, share and project commands")
 
             Divider().overlay(StudioTheme.hairline)
 
@@ -501,6 +502,7 @@ struct ActionsPopover: View {
                     Label("Resize Map…", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
                 .buttonStyle(.plain)
+                .help("Resize the map dimensions")
             } else {
                 HStack {
                     Label("Canvas Size", systemImage: "aspectratio")
@@ -516,6 +518,7 @@ struct ActionsPopover: View {
             HStack(spacing: 8) {
                 Button { viewport.zoomOut() } label: { Label("Zoom -", systemImage: "minus.magnifyingglass") }
                     .controlSize(.small)
+                    .help("Zoom out")
                 Button {
                     if let mapModel {
                         viewport.zoomToFitCurrent(canvasWidth: mapModel.map.pixelWidth, height: mapModel.map.pixelHeight)
@@ -527,8 +530,10 @@ struct ActionsPopover: View {
                         .font(.system(size: 11, design: .monospaced))
                 }
                 .controlSize(.small)
+                .help("Zoom to fit")
                 Button { viewport.zoomIn() } label: { Label("Zoom +", systemImage: "plus.magnifyingglass") }
                     .controlSize(.small)
+                    .help("Zoom in")
             }
         }
     }
@@ -548,6 +553,7 @@ struct ActionsPopover: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
+                .help("Export the map as a Tiled JSON file")
 
                 Button {
                     mapModel.exportCSV()
@@ -556,6 +562,7 @@ struct ActionsPopover: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
+                .help("Export each tile layer as a CSV file")
 
                 Button {
                     mapModel.exportPNG(scale: 4)
@@ -564,6 +571,7 @@ struct ActionsPopover: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
+                .help("Export a 4× PNG of the composited map")
 
                 if let onImportTiledMap {
                     Divider().overlay(StudioTheme.hairline)
@@ -574,6 +582,7 @@ struct ActionsPopover: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 4)
+                    .help("Import a Tiled JSON map into this project")
                 }
             }
         } else {
@@ -596,6 +605,7 @@ struct ActionsPopover: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.vertical, 4)
+                    .help("Export a \(scale)× PNG")
                 }
 
                 Divider().overlay(StudioTheme.hairline)
@@ -607,6 +617,7 @@ struct ActionsPopover: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.vertical, 4)
+                .help("Export all frames as an animated sprite sheet")
             }
         }
     }
@@ -620,6 +631,7 @@ struct ActionsPopover: View {
                     Label("New Document…", systemImage: "plus.square")
                 }
                 .buttonStyle(.plain)
+                .help("Create a new document")
             }
 
             Button {
@@ -628,6 +640,7 @@ struct ActionsPopover: View {
                 Label("Project Gallery", systemImage: "square.grid.3x3")
             }
             .buttonStyle(.plain)
+            .help("Open the project gallery")
 
             Divider().overlay(StudioTheme.hairline)
 
@@ -637,6 +650,7 @@ struct ActionsPopover: View {
                 Label("Unlock Lifetime Ad-Free…", systemImage: "crown")
             }
             .buttonStyle(.plain)
+            .help("Unlock lifetime ad-free")
 
             Button {
                 post(.studioCustomerCenter)
@@ -644,6 +658,7 @@ struct ActionsPopover: View {
                 Label("Manage Purchases…", systemImage: "person.crop.circle")
             }
             .buttonStyle(.plain)
+            .help("Manage your purchases")
         }
     }
 
