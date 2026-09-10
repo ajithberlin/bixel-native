@@ -45,15 +45,16 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bixel.studio
         PRODUCT_NAME: Bixel
+        # The staged Rust archive is currently built for Apple Silicon. Keep
+        # App Store archives from requesting an x86_64 slice that cannot link.
+        ARCHS: arm64
         SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
-        # Force-load the generated Rust archive so Release/archive links consume
-        # the C ABI exports even when Swift's references are optimized across
-        # the whole-module link. rustls-platform-verifier needs
-        # Security/CoreFoundation; reqwest's system-proxy support needs
+        # -lbixel links the Rust engine (embedded goose agent). rustls-platform-verifier
+        # needs Security/CoreFoundation; reqwest's system-proxy support needs
         # SystemConfiguration.
-        OTHER_LDFLAGS: '-force_load "$(SRCROOT)/generated/libbixel.a" -framework Security -framework CoreFoundation -framework SystemConfiguration'
+        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation -framework SystemConfiguration"
         ENABLE_BITCODE: NO
         # The Rust build phase needs to read/write target/, generated/ and the
         # cargo/rustup homes, which the user-script sandbox blocks.
@@ -71,7 +72,7 @@ targets:
       properties:
         CFBundleName: Bixel
         CFBundleDisplayName: Bixel Studio
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "1.0.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true

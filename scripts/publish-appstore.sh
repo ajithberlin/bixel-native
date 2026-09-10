@@ -171,11 +171,14 @@ validate_config() {
 # ---------------------------------------------------------------------------
 ALTOL_AUTH=()
 ALTOL_TYPE=()
-if xcrun altool --help 2>&1 | grep -q -- '--api-key'; then
-  ALTOL_NEW=1
-else
+# Xcode 16+ uses the long API-key flags. On Xcode 26, invoking `altool --help`
+# can block indefinitely, so do not probe the tool before a dry run or upload.
+# Set BIXEL_ALTOOL_LEGACY=1 only when using an older Xcode with legacy flags.
+if [[ "${BIXEL_ALTOOL_LEGACY:-0}" == "1" ]]; then
   ALTOL_NEW=0
   ALTOL_TYPE=(-t macos)
+else
+  ALTOL_NEW=1
 fi
 
 build_auth_args() {
