@@ -22,3 +22,22 @@ fn transform_scales_with_nearest_neighbor() {
     assert_eq!(doc.get_pixel(0, 0, 3, 3).r, 1);
     assert_eq!(doc.get_pixel(0, 0, 6, 4).r, 4);
 }
+
+#[test]
+fn transform_supports_arbitrary_rotation_angles() {
+    let mut doc = AsepriteDoc::new(16, 16, &[]);
+    for y in 4..6 {
+        for x in 4..7 {
+            doc.set_pixel(0, 0, x, y, Rgba { r: 255, g: 255, b: 255, a: 255 });
+        }
+    }
+    doc.transform_rect_angle(0, 0, 4, 4, 3, 2, 8, 8, 5, 4, std::f64::consts::FRAC_PI_4).unwrap();
+    assert_eq!(doc.get_pixel(0, 0, 4, 4).a, 0);
+    let mut remaining = 0;
+    for y in 0..16 {
+        for x in 0..16 {
+            if doc.get_pixel(0, 0, x, y).a > 0 { remaining += 1; }
+        }
+    }
+    assert!(remaining > 0);
+}

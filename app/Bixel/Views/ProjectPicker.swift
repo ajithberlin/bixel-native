@@ -1,7 +1,7 @@
 // ProjectPicker.swift
 //
 // Procreate-style gallery: existing projects as cards, and a "New canvas"
-// flow with size templates (sprites, tiles, game screens) plus a custom size.
+// flow with normal-canvas size presets plus a dedicated map workspace.
 
 import SwiftUI
 
@@ -17,13 +17,13 @@ struct CanvasTemplate: Identifiable {
     var isCustom: Bool { width == 0 }
 
     static let presets: [CanvasTemplate] = [
-        .init(id: "sprite16", name: "Sprite", detail: "16 × 16", width: 16, height: 16, icon: "square.fill"),
-        .init(id: "sprite32", name: "Sprite", detail: "32 × 32", width: 32, height: 32, icon: "square.fill"),
+        .init(id: "square16", name: "Square", detail: "16 × 16", width: 16, height: 16, icon: "square.fill"),
+        .init(id: "square32", name: "Square", detail: "32 × 32", width: 32, height: 32, icon: "square.fill"),
         .init(id: "char64", name: "Character", detail: "64 × 64", width: 64, height: 64, icon: "person.fill"),
         .init(id: "scene128", name: "Scene", detail: "128 × 128", width: 128, height: 128, icon: "photo"),
         .init(id: "scene256", name: "Scene HD", detail: "256 × 256", width: 256, height: 256, icon: "photo.fill"),
-        .init(id: "tile8", name: "Tile", detail: "8 × 8", width: 8, height: 8, icon: "squareshape.fill"),
-        .init(id: "tile16", name: "Tileset", detail: "16 × 16", width: 16, height: 16, icon: "squareshape.split.2x2"),
+        .init(id: "compact8", name: "Compact", detail: "8 × 8", width: 8, height: 8, icon: "squareshape.fill"),
+        .init(id: "compact16", name: "Compact", detail: "16 × 16", width: 16, height: 16, icon: "squareshape.split.2x2"),
         .init(id: "gb", name: "Game Boy", detail: "160 × 144", width: 160, height: 144, icon: "gamecontroller"),
         .init(id: "wide320", name: "Game Screen", detail: "320 × 180", width: 320, height: 180, icon: "rectangle.fill"),
         .init(id: "wide640", name: "HD Screen", detail: "640 × 360", width: 640, height: 360, icon: "display"),
@@ -47,9 +47,11 @@ struct ProjectPicker: View {
     @State private var template: CanvasTemplate = CanvasTemplate.presets[1]
     @State private var customWidth = 48
     @State private var customHeight = 48
+    @State private var mode: WorkspaceMode = .normal
 
     private var canvasSize: (width: Int, height: Int) {
-        template.isCustom ? (customWidth, customHeight) : (template.width, template.height)
+        if mode == .map { return (40, 25) }
+        return template.isCustom ? (customWidth, customHeight) : (template.width, template.height)
     }
 
     var body: some View {
@@ -88,8 +90,13 @@ struct ProjectPicker: View {
     private var newCanvas: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New project").font(.headline)
-            Text("A workspace for sprites, animations, tilesets, maps, and references. Choose sizes when you add documents.")
+            Text("Normal projects hold any pixel artwork, sequences, references, and tilesets. Map projects are dedicated to stamping and design.")
                 .font(.caption).foregroundColor(StudioTheme.textSecondary)
+            Picker("Project type", selection: $mode) {
+                Text("Normal").tag(WorkspaceMode.normal)
+                Text("Map").tag(WorkspaceMode.map)
+            }
+            .pickerStyle(.segmented)
             HStack {
                 TextField("Project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
                 Button("Create project", action: create).buttonStyle(.borderedProminent).disabled(!canCreate)
@@ -156,7 +163,7 @@ struct ProjectPicker: View {
     private func create() {
         guard canCreate else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let created = store.createProject(name: trimmedName, kind: .sprite, width: canvasSize.width, height: canvasSize.height) {
+        if let created = store.createProject(name: trimmedName, mode: mode, width: canvasSize.width, height: canvasSize.height) {
             dismiss()
             onSelectProject?(created)
         } else {

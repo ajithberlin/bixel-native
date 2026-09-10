@@ -11,27 +11,6 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable {
     var supportsAnimationAssist: Bool { self == .normal }
 }
 
-/// Transitional source-compatibility shim for callers migrated in Task 2.
-/// It is not persisted and must not be used for workspace routing.
-@available(*, deprecated, message: "Use WorkspaceMode for workspace routing")
-enum AssetKind: String, Codable, CaseIterable, Identifiable {
-    case sprite, animation, spritesheet, tileset, map, image
-
-    var id: String { rawValue }
-    var title: String { rawValue == "spritesheet" ? "Sprite sheet" : rawValue.capitalized }
-    var usesCells: Bool { self == .map || self == .tileset || self == .spritesheet }
-    var symbol: String {
-        switch self {
-        case .sprite: return "person.crop.square"
-        case .animation: return "film"
-        case .spritesheet: return "square.grid.3x3"
-        case .tileset: return "square.grid.2x2"
-        case .map: return "map"
-        case .image: return "photo"
-        }
-    }
-}
-
 struct WorkspaceDocument: Codable, Identifiable {
     var id = UUID().uuidString
     var name: String
@@ -61,21 +40,6 @@ struct WorkspaceDocument: Codable, Identifiable {
         self.cellWidth = cellWidth
         self.cellHeight = cellHeight
         self.sourcePath = sourcePath
-    }
-
-    @available(*, deprecated, message: "Use mode: instead of kind:")
-    init(id: String = UUID().uuidString, name: String, kind: AssetKind,
-         width: Int, height: Int, cellWidth: Int = 16, cellHeight: Int = 16,
-         sourcePath: String? = nil) {
-        self.init(id: id, name: name, mode: kind == .map ? .map : .normal,
-                  width: width, height: height, cellWidth: cellWidth,
-                  cellHeight: cellHeight, sourcePath: sourcePath)
-    }
-
-    @available(*, deprecated, message: "Use mode instead of kind")
-    var kind: AssetKind {
-        get { mode == .map ? .map : .sprite }
-        set { mode = newValue == .map ? .map : .normal }
     }
 
     private enum CodingKeys: String, CodingKey {

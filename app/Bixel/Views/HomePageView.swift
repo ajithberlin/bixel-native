@@ -10,42 +10,6 @@
 import SwiftUI
 import AppKit
 
-enum AIMode: String, CaseIterable, Identifiable {
-    case sprite = "Sprite (32²)"
-    case animation = "Animation (64²)"
-    case tileset = "Tileset (128²)"
-    case icons = "RPG Icons (32²)"
-
-    var id: String { rawValue }
-
-    var icon: String {
-        switch self {
-        case .sprite: return "person.crop.square"
-        case .animation: return "film"
-        case .tileset: return "squareshape.split.2x2"
-        case .icons: return "shield.fill"
-        }
-    }
-
-    var defaultKind: AssetKind {
-        switch self {
-        case .sprite: return .sprite
-        case .animation: return .animation
-        case .tileset: return .tileset
-        case .icons: return .sprite
-        }
-    }
-
-    var defaultSize: Int {
-        switch self {
-        case .sprite: return 32
-        case .animation: return 64
-        case .tileset: return 128
-        case .icons: return 32
-        }
-    }
-}
-
 struct HomePageView: View {
     @ObservedObject var store: ProjectStore
     let onOpenProject: (StudioProject) -> Void
@@ -58,7 +22,6 @@ struct HomePageView: View {
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
     @State private var aiPrompt = ""
-    @State private var selectedAIMode: AIMode = .sprite
     @State private var selectedSize: Int = 32
     @State private var selectedStyle: String = "16-Bit Retro"
     @State private var renamingProject: StudioProject? = nil
@@ -272,7 +235,7 @@ struct HomePageView: View {
                         .foregroundColor(.white)
                         .lineSpacing(2)
 
-                    Text("Turn your ideas into sprites, animations, tilesets and more.")
+                    Text("Turn your ideas into pixel artwork, frame sequences, tilesets and more.")
                         .font(.system(size: 13, weight: .regular))
                         .foregroundColor(Color.white.opacity(0.85))
                 }
@@ -317,21 +280,15 @@ struct HomePageView: View {
                     }
                     .buttonStyle(.plain)
 
-                    // Secondary Quick Actions: Sprite, Animation, Tileset, Import
-                    heroQuickButton(title: "New Sprite", subtitle: "Single frame", icon: "pencil") {
-                        if let project = store.createProject(name: "New Sprite", kind: .sprite, width: 32, height: 32) {
+                    // Secondary Quick Actions: the two workspace modes plus import.
+                    heroQuickButton(title: "New Normal", subtitle: "Any pixel artwork", icon: "pencil") {
+                        if let project = store.createProject(name: "New Project", mode: .normal, width: 32, height: 32) {
                             onOpenProject(project)
                         }
                     }
 
-                    heroQuickButton(title: "New Animation", subtitle: "Multiple frames", icon: "square.stack.3d.down.right.fill") {
-                        if let project = store.createProject(name: "New Animation", kind: .animation, width: 64, height: 64) {
-                            onOpenProject(project)
-                        }
-                    }
-
-                    heroQuickButton(title: "New Tileset", subtitle: "Tile map", icon: "squareshape.split.2x2") {
-                        if let project = store.createProject(name: "New Tileset", kind: .tileset, width: 128, height: 128) {
+                    heroQuickButton(title: "New Map", subtitle: "Stamp and design", icon: "map") {
+                        if let project = store.createProject(name: "New Map", mode: .map, width: 40, height: 25) {
                             onOpenProject(project)
                         }
                     }
@@ -401,31 +358,6 @@ struct HomePageView: View {
                                 .strokeBorder(StudioTheme.bixelGreen.opacity(0.4), lineWidth: 1)
                         )
                 )
-
-                // Asset Mode Pills
-                HStack(spacing: 6) {
-                    ForEach(AIMode.allCases) { mode in
-                        Button {
-                            selectedAIMode = mode
-                            selectedSize = mode.defaultSize
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: mode.icon)
-                                    .font(.system(size: 10))
-                                Text(mode.rawValue)
-                                    .font(.system(size: 11, weight: selectedAIMode == mode ? .semibold : .regular))
-                            }
-                            .foregroundColor(selectedAIMode == mode ? .white : StudioTheme.textSecondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(selectedAIMode == mode ? Color.white.opacity(0.12) : Color.clear)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
 
                 Spacer()
 
@@ -734,7 +666,7 @@ struct HomePageView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             let name = url.deletingPathExtension().lastPathComponent
-            if let project = store.createProject(name: name, kind: .image, width: 64, height: 64) {
+            if let project = store.createProject(name: name, mode: .normal, width: 64, height: 64) {
                 onOpenProject(project)
             }
         }
@@ -745,7 +677,7 @@ struct HomePageView: View {
 
 struct RecentProjectCard: View {
     let project: StudioProject
-    let metadata: (kind: AssetKind, sizeText: String, timeText: String)
+    let metadata: (mode: WorkspaceMode, sizeText: String, timeText: String)
     let onOpen: () -> Void
     let onRename: () -> Void
     let onDuplicate: () -> Void
@@ -757,7 +689,7 @@ struct RecentProjectCard: View {
         Button(action: onOpen) {
             HStack(spacing: 12) {
                 // Pixel Art Preview Thumbnail
-                PixelPreviewThumb(name: project.name, kind: metadata.kind, size: 76)
+                PixelPreviewThumb(name: project.name, size: 76)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -791,8 +723,8 @@ struct RecentProjectCard: View {
                         .menuIndicator(.hidden)
                     }
 
-                    // Tag Badge (Sprite, Animation, Tileset, Map)
-                    tagBadge(kind: metadata.kind)
+                    // Tag Badge (Normal or Map)
+                    tagBadge(mode: metadata.mode)
 
                     // Details: Dimensions & Edited time
                     Text("\(metadata.sizeText) • \(metadata.timeText)")
@@ -817,8 +749,8 @@ struct RecentProjectCard: View {
         .onHover { isHovered = $0 }
     }
 
-    private func tagBadge(kind: AssetKind) -> some View {
-        let (bg, fg, title) = tagInfo(for: kind)
+    private func tagBadge(mode: WorkspaceMode) -> some View {
+        let (bg, fg, title) = tagInfo(for: mode)
         return Text(title)
             .font(.system(size: 9, weight: .bold))
             .foregroundColor(fg)
@@ -827,18 +759,12 @@ struct RecentProjectCard: View {
             .background(Capsule().fill(bg))
     }
 
-    private func tagInfo(for kind: AssetKind) -> (Color, Color, String) {
-        switch kind {
-        case .sprite, .image:
-            return (StudioTheme.tagSpriteBg, StudioTheme.tagSpriteText, "Sprite")
-        case .animation:
-            return (StudioTheme.tagAnimationBg, StudioTheme.tagAnimationText, "Animation")
-        case .tileset:
-            return (StudioTheme.tagTilesetBg, StudioTheme.tagTilesetText, "Tileset")
+    private func tagInfo(for mode: WorkspaceMode) -> (Color, Color, String) {
+        switch mode {
+        case .normal:
+            return (StudioTheme.tagSpriteBg, StudioTheme.tagSpriteText, "Normal")
         case .map:
             return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Map")
-        case .spritesheet:
-            return (StudioTheme.tagTilesetBg, StudioTheme.tagTilesetText, "Sheet")
         }
     }
 }
@@ -905,11 +831,10 @@ struct TemplateInspirationCard: View {
 
 struct PixelPreviewThumb: View {
     let name: String
-    var kind: AssetKind? = nil
     let size: CGFloat
 
     var body: some View {
-        if let cgImage = SamplePixelArt.makePreviewImage(for: name, kind: kind) {
+        if let cgImage = SamplePixelArt.makePreviewImage(for: name) {
             Image(decorative: cgImage, scale: 1.0)
                 .resizable()
                 .interpolation(.none)
@@ -1085,7 +1010,7 @@ struct NewProjectQuickDialog: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var kind: AssetKind = .sprite
+    @State private var mode: WorkspaceMode = .normal
     @State private var width = 32
     @State private var height = 32
     @State private var cellSize = 16
@@ -1103,20 +1028,17 @@ struct NewProjectQuickDialog: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Asset Type").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                Picker("", selection: $kind) {
-                    Text("Sprite").tag(AssetKind.sprite)
-                    Text("Animation").tag(AssetKind.animation)
-                    Text("Tileset").tag(AssetKind.tileset)
-                    Text("Map").tag(AssetKind.map)
-                    Text("Image").tag(AssetKind.image)
+                Text("Project Type").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                Picker("", selection: $mode) {
+                    Text("Normal").tag(WorkspaceMode.normal)
+                    Text("Map").tag(WorkspaceMode.map)
                 }
                 .pickerStyle(.segmented)
             }
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(kind == .map ? "Columns" : "Width (px)")
+                    Text(mode == .map ? "Columns" : "Width (px)")
                         .font(.caption).foregroundColor(StudioTheme.textSecondary)
                     TextField("", value: $width, format: .number)
                         .textFieldStyle(.roundedBorder)
@@ -1124,14 +1046,14 @@ struct NewProjectQuickDialog: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(kind == .map ? "Rows" : "Height (px)")
+                    Text(mode == .map ? "Rows" : "Height (px)")
                         .font(.caption).foregroundColor(StudioTheme.textSecondary)
                     TextField("", value: $height, format: .number)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 80)
                 }
 
-                if kind == .map {
+                if mode == .map {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Tile (px)").font(.caption).foregroundColor(StudioTheme.textSecondary)
                         TextField("", value: $cellSize, format: .number)
@@ -1143,7 +1065,7 @@ struct NewProjectQuickDialog: View {
                 Spacer()
 
                 // Quick presets
-                if kind != .map {
+                if mode != .map {
                     VStack(alignment: .trailing, spacing: 4) {
                         Text("Presets").font(.caption).foregroundColor(StudioTheme.textSecondary)
                         HStack(spacing: 6) {
@@ -1167,13 +1089,13 @@ struct NewProjectQuickDialog: View {
                 Button("Create Project") {
                     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                     let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
-                    if kind == .map {
-                        if let project = store.createProject(name: projName, kind: .map,
+                    if mode == .map {
+                        if let project = store.createProject(name: projName, mode: .map,
                                                              width: max(1, width), height: max(1, height),
                                                              cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
                             onCreated(project)
                         }
-                    } else if let project = store.createProject(name: projName, kind: kind, width: width, height: height) {
+                    } else if let project = store.createProject(name: projName, mode: .normal, width: width, height: height) {
                         onCreated(project)
                     }
                 }
@@ -1186,7 +1108,7 @@ struct NewProjectQuickDialog: View {
         .padding(24)
         .frame(width: 440)
         .background(StudioTheme.homeDark)
-        .onChange(of: kind) { value in
+        .onChange(of: mode) { value in
             if value == .map {
                 width = 40
                 height = 25

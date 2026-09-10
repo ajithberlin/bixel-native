@@ -115,7 +115,7 @@ struct ProjectAssetsPanel: View {
                         ForEach(store.catalog.documents.filter { matches($0.name) }) { item in
                             Button { store.openDocument(item) } label: {
                                 HStack(spacing: 9) {
-                                    Image(systemName: item.kind.symbol)
+                                    Image(systemName: item.mode.symbol)
                                         .font(.system(size: 12, weight: .semibold))
                                         .foregroundColor(item.id == store.catalog.activeDocumentID ? StudioTheme.accent : StudioTheme.textSecondary)
                                         .frame(width: 20)
@@ -123,7 +123,7 @@ struct ProjectAssetsPanel: View {
                                         Text(item.name)
                                             .font(.system(size: 11, weight: .medium))
                                             .lineLimit(1)
-                                        Text("\(item.kind.title) · \(item.summary)")
+                                        Text("\(item.mode.title) · \(item.summary)")
                                             .font(.system(size: 9))
                                             .foregroundColor(StudioTheme.textDisabled)
                                             .lineLimit(1)
@@ -145,7 +145,7 @@ struct ProjectAssetsPanel: View {
                             .disabled(store.assistant.busy)
                         }
                         if store.catalog.documents.isEmpty {
-                            Text("Create a sprite, animation, tileset, map, or image.")
+                            Text("Create a normal document or a map document.")
                                 .font(.caption)
                                 .foregroundColor(StudioTheme.textSecondary)
                                 .padding(.vertical, 4)
@@ -335,7 +335,7 @@ private struct AssetPreview: View {
                         store.assistant.attachments.append(AssistantAttachment(name: asset.name, data: data, text: nil))
                     }.disabled(data.count > 5_000_000 || store.assistant.busy || store.assistant.attachments.count >= 4)
                 }.font(.caption2)
-                if let document = store.activeDocument, document.kind == .sprite || document.kind == .animation {
+                if let document = store.activeDocument, document.mode == .normal {
                     Button("Slice into \(store.editor.width) × \(store.editor.height) animation frames") {
                         store.editor.importSheet(data, name: asset.name)
                     }.font(.caption).disabled(cg.width % store.editor.width != 0 || cg.height % store.editor.height != 0)
@@ -367,29 +367,29 @@ struct NewWorkspaceDocument: View {
     @ObservedObject var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
-    @State private var kind: AssetKind = .sprite
+    @State private var mode: WorkspaceMode = .normal
     @State private var width = 32
     @State private var height = 32
     @State private var cellWidth = 16
     @State private var cellHeight = 16
-    private var item: WorkspaceDocument { WorkspaceDocument(name: name, kind: kind, width: width, height: height, cellWidth: cellWidth, cellHeight: cellHeight) }
+    private var item: WorkspaceDocument { WorkspaceDocument(name: name, mode: mode, width: width, height: height, cellWidth: cellWidth, cellHeight: cellHeight) }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New document").font(.title2.bold())
             Text("Choose dimensions for this asset. Other documents in your project can use different sizes.").foregroundColor(.secondary)
             TextField("Document name", text: $name).textFieldStyle(.roundedBorder)
-            Picker("Asset type", selection: $kind) {
-                ForEach(AssetKind.allCases) { Text($0.title).tag($0) }
+            Picker("Project type", selection: $mode) {
+                ForEach(WorkspaceMode.allCases) { Text($0.title).tag($0) }
             }
             HStack {
-                dimension(kind.usesCells ? "Columns" : "Width (px)", value: $width)
-                dimension(kind.usesCells ? "Rows" : "Height (px)", value: $height)
+                dimension(mode.usesCells ? "Columns" : "Width (px)", value: $width)
+                dimension(mode.usesCells ? "Rows" : "Height (px)", value: $height)
             }
-            if kind.usesCells {
+            if mode.usesCells {
                 HStack { dimension("Cell width (px)", value: $cellWidth); dimension("Cell height (px)", value: $cellHeight) }
             }
             Text("\(item.pixelWidth) × \(item.pixelHeight) pixels total").font(.caption).foregroundColor(.secondary)
-            if kind == .map { Text("Paint tiles on layers. The canvas snaps placed assets to the cell grid.").font(.caption) }
+            if mode == .map { Text("Paint tiles on layers with cell-aware stamping and snapping.").font(.caption) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -400,9 +400,9 @@ struct NewWorkspaceDocument: View {
                 }.buttonStyle(.borderedProminent).disabled(item.validationError != nil || store.assistant.busy).keyboardShortcut(.defaultAction)
             }
         }.padding(26).frame(width: 480)
-        .onChange(of: kind) { value in
-            width = value == .map ? 40 : value.usesCells ? 4 : 32
-            height = value == .map ? 25 : value.usesCells ? 4 : 32
+        .onChange(of: mode) { value in
+            width = value == .map ? 40 : 32
+            height = value == .map ? 25 : 32
         }
     }
     private func dimension(_ title: String, value: Binding<Int>) -> some View {

@@ -29,7 +29,7 @@ final class ProjectStore: ObservableObject {
     private var pendingSave: DispatchWorkItem?
     var activeDocument: WorkspaceDocument? { catalog.documents.first { $0.id == catalog.activeDocumentID } }
     var projectRoot: URL? { current.map { root.appendingPathComponent($0.id) } }
-    var isMapActive: Bool { activeDocument?.kind == .map }
+    var isMapActive: Bool { activeDocument?.mode == .map }
 
     init(root: URL? = nil) {
         self.root = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -48,11 +48,11 @@ final class ProjectStore: ObservableObject {
     }
 
     func create(name: String) {
-        _ = createProject(name: name, kind: .sprite, width: 32, height: 32)
+        _ = createProject(name: name, mode: .normal, width: 32, height: 32)
     }
 
     @discardableResult
-    func createProject(name: String, kind: AssetKind = .sprite, width: Int = 32, height: Int = 32,
+    func createProject(name: String, mode: WorkspaceMode = .normal, width: Int = 32, height: Int = 32,
                        pixels: [UInt8]? = nil, cellWidth: Int = 16, cellHeight: Int = 16) -> StudioProject? {
         guard !assistant.busy else { return nil }
         do {
@@ -61,10 +61,10 @@ final class ProjectStore: ObservableObject {
             let project = try decode(StudioProject.self, value)
             let base = root.appendingPathComponent(project.id)
 
-            if kind == .map {
+            if mode == .map {
                 // A Map project opens straight into the Tilemap Designer: width
                 // and height are treated as cells at the given cell size.
-                let doc = WorkspaceDocument(name: name, kind: .map,
+                let doc = WorkspaceDocument(name: name, mode: .map,
                                             width: max(1, width), height: max(1, height),
                                             cellWidth: cellWidth, cellHeight: cellHeight)
                 let mapModel = TileMapModel(width: doc.width, height: doc.height,
@@ -79,7 +79,7 @@ final class ProjectStore: ObservableObject {
                 return project
             }
 
-            let doc = WorkspaceDocument(name: name, kind: kind, width: width, height: height)
+            let doc = WorkspaceDocument(name: name, mode: .normal, width: width, height: height)
             let editorModel = EditorModel(width: doc.pixelWidth, height: doc.pixelHeight)
             if let pixels, pixels.count == doc.pixelWidth * doc.pixelHeight * 4 {
                 editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
@@ -104,7 +104,7 @@ final class ProjectStore: ObservableObject {
     func createFromTemplate(templateId: String) -> StudioProject? {
         guard let item = SamplePixelArt.templates.first(where: { $0.id == templateId }) else { return nil }
         let pixels = SamplePixelArt.generateSampleData(for: item.name, width: item.width, height: item.height)
-        return createProject(name: item.name, kind: item.kind, width: item.width, height: item.height, pixels: pixels)
+        return createProject(name: item.name, mode: .normal, width: item.width, height: item.height, pixels: pixels)
     }
 
     func closeProject() {
@@ -175,18 +175,18 @@ final class ProjectStore: ObservableObject {
         }
     }
 
-    func metadata(for project: StudioProject) -> (kind: AssetKind, sizeText: String, timeText: String) {
+    func metadata(for project: StudioProject) -> (mode: WorkspaceMode, sizeText: String, timeText: String) {
         let base = root.appendingPathComponent(project.id)
         if let json = try? ProjectStorage.read(base: base, path: "workspace.json"),
            let data = json.data(using: .utf8),
            let catalog = try? JSONDecoder().decode(WorkspaceCatalog.self, from: data),
            let active = catalog.documents.first(where: { $0.id == catalog.activeDocumentID }) ?? catalog.documents.first {
-            let sizeText = active.kind == .map
+            let sizeText = active.mode == .map
                 ? "\(active.width) × \(active.height) cells"
                 : "\(active.pixelWidth) × \(active.pixelHeight)"
-            return (active.kind, sizeText, relativeTime(since: project.created))
+            return (active.mode, sizeText, relativeTime(since: project.created))
         }
-        return (.sprite, "32 × 32", relativeTime(since: project.created))
+        return (.normal, "32 × 32", relativeTime(since: project.created))
     }
 
     private func relativeTime(since timestamp: Double) -> String {
@@ -199,29 +199,29 @@ final class ProjectStore: ObservableObject {
 
     private func bootstrapSamplesIfEmpty() {
         guard projects.isEmpty else { return }
-        let samples: [(name: String, kind: AssetKind, w: Int, h: Int)] = [
-            ("Slime Sprite", .sprite, 32, 32),
-            ("Character Walk", .animation, 64, 64),
-            ("Forest Tiles", .tileset, 128, 128),
-            ("Tokyo Street", .tileset, 128, 128),
-            ("UI Icons", .sprite, 32, 32),
-            ("NPC Portraits", .sprite, 64, 64)
+        let samples: [(name: String, w: Int, h: Int)] = [
+            ("Slime Sprite", 32, 32),
+            ("Character Walk", 64, 64),
+            ("Forest Tiles", 128, 128),
+            ("Tokyo Street", 128, 128),
+            ("UI Icons", 32, 32),
+            ("NPC Portraits", 64, 64)
         ]
         for s in samples {
             let pixels = SamplePixelArt.generateSampleData(for: s.name, width: s.w, height: s.h)
-            _ = createProjectQuietly(name: s.name, kind: s.kind, width: s.w, height: s.h, pixels: pixels)
+            _ = createProjectQuietly(name: s.name, width: s.w, height: s.h, pixels: pixels)
         }
         refresh()
     }
 
-    private func createProjectQuietly(name: String, kind: AssetKind, width: Int, height: Int, pixels: [UInt8]?) -> StudioProject? {
+    private func createProjectQuietly(name: String, width: Int, height: Int, pixels: [UInt8]?) -> StudioProject? {
         do {
             let id = UUID().uuidString
             let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": name])!
             let project = try decode(StudioProject.self, value)
             let base = root.appendingPathComponent(project.id)
 
-            let doc = WorkspaceDocument(name: name, kind: kind, width: width, height: height)
+            let doc = WorkspaceDocument(name: name, mode: .normal, width: width, height: height)
             let editorModel = EditorModel(width: doc.pixelWidth, height: doc.pixelHeight)
             if let pixels, pixels.count == doc.pixelWidth * doc.pixelHeight * 4 {
                 editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
@@ -252,7 +252,7 @@ final class ProjectStore: ObservableObject {
         var mapDocument: TileMapModel?
         if let json = try ProjectStorage.read(base: base, path: "workspace.json") {
             nextCatalog = try JSONDecoder().decode(WorkspaceCatalog.self, from: Data(json.utf8))
-            guard nextCatalog.schema == 1, nextCatalog.documents.allSatisfy({ $0.validationError == nil }),
+            guard (nextCatalog.schema == 1 || nextCatalog.schema == 2), nextCatalog.documents.allSatisfy({ $0.validationError == nil }),
                   Set(nextCatalog.documents.map(\.id)).count == nextCatalog.documents.count else {
                 throw StorageError.message("The workspace catalog is invalid or uses an unsupported version.")
             }
@@ -261,7 +261,7 @@ final class ProjectStore: ObservableObject {
                       let json = try ProjectStorage.read(base: base, path: item.path) else {
                     throw StorageError.message("The active document is missing.")
                 }
-                if item.kind == .map {
+                if item.mode == .map {
                     guard let model = try? TileMapModel(json: json) else {
                         throw StorageError.message("The active map was created by an older version. Create a new map in this project.")
                     }
@@ -274,7 +274,7 @@ final class ProjectStore: ObservableObject {
         } else if let json = try ProjectStorage.read(base: base, path: "document.json") {
             // Copy the legacy canvas into the catalog; retain the original file.
             let legacy = try Document(json: json)
-            let item = WorkspaceDocument(name: "Original canvas", kind: legacy.frameCount > 1 ? .animation : .sprite,
+            let item = WorkspaceDocument(name: "Original canvas", mode: .normal,
                                          width: legacy.width, height: legacy.height)
             try legacy.save(base: base, path: item.path)
             nextCatalog.documents = [item]; nextCatalog.activeDocumentID = item.id
@@ -303,7 +303,7 @@ final class ProjectStore: ObservableObject {
         do {
             if let error = item.validationError { throw StorageError.message(error) }
             try flush()
-            if item.kind == .map {
+            if item.mode == .map {
                 let model = TileMapModel(width: item.width, height: item.height,
                                          tileWidth: item.cellWidth, tileHeight: item.cellHeight)
                 try model.map.save(base: base, path: item.path)
@@ -329,7 +329,7 @@ final class ProjectStore: ObservableObject {
         do {
             try flush()
             guard let json = try ProjectStorage.read(base: base, path: item.path) else { throw StorageError.message("Document is missing.") }
-            if item.kind == .map {
+            if item.mode == .map {
                 guard let model = try? TileMapModel(json: json) else {
                     throw StorageError.message("This map was created by an older version. Open its project and create a new map.")
                 }
@@ -355,9 +355,6 @@ final class ProjectStore: ObservableObject {
         mapEditor = model
         model.onDocumentChanged = { [weak self] in self?.saveDocument() }
         model.registerTilesets()
-        editor.assetKind = activeDocument?.kind ?? .image
-        editor.cellWidth = activeDocument?.cellWidth ?? 16
-        editor.cellHeight = activeDocument?.cellHeight ?? 16
         editor.onDocumentChanged = nil
         if mapEditor == nil {
             editor.onDocumentChanged = { [weak self] in self?.saveDocument() }
@@ -417,7 +414,7 @@ final class ProjectStore: ObservableObject {
             let model = try TileMapModel(json: json)
             try flush()
             let name = url.deletingPathExtension().lastPathComponent
-            let item = WorkspaceDocument(name: name, kind: .map,
+            let item = WorkspaceDocument(name: name, mode: .map,
                                          width: model.map.columns, height: model.map.rows,
                                          cellWidth: model.map.cellWidth, cellHeight: model.map.cellHeight)
             try model.map.save(base: base, path: item.path)
@@ -438,9 +435,6 @@ final class ProjectStore: ObservableObject {
         mapEditor?.onDocumentChanged = nil
         mapEditor = nil
         editor = model
-        model.assetKind = activeDocument?.kind ?? .image
-        model.cellWidth = activeDocument?.cellWidth ?? 16
-        model.cellHeight = activeDocument?.cellHeight ?? 16
         model.onDocumentChanged = { [weak self] in self?.saveDocument() }
     }
 
@@ -454,19 +448,12 @@ final class ProjectStore: ObservableObject {
     private func synchronizeDimensions() {
         guard let index = catalog.documents.firstIndex(where: { $0.id == catalog.activeDocumentID }) else { return }
         var item = catalog.documents[index]
-        if item.kind == .map {
+        if item.mode == .map {
             if let model = mapEditor {
                 item.width = model.map.columns
                 item.height = model.map.rows
                 item.cellWidth = model.map.cellWidth
                 item.cellHeight = model.map.cellHeight
-            }
-        } else if item.kind.usesCells {
-            if editor.width % item.cellWidth == 0 && editor.height % item.cellHeight == 0 {
-                item.width = editor.width / item.cellWidth; item.height = editor.height / item.cellHeight
-            } else {
-                item.kind = .image; item.width = editor.width; item.height = editor.height
-                editor.assetKind = .image
             }
         } else { item.width = editor.width; item.height = editor.height }
         catalog.documents[index] = item
@@ -479,7 +466,7 @@ final class ProjectStore: ObservableObject {
         let generation = saveGeneration
         saving = true; pendingSave?.cancel()
         let snapshot = catalog
-        let isMap = item.kind == .map
+        let isMap = item.mode == .map
         let mapDoc = mapEditor?.map
         let spriteDoc = editor.document
         let work = DispatchWorkItem {
@@ -565,7 +552,7 @@ final class ProjectStore: ObservableObject {
                 throw StorageError.message("Choose an image up to 4096 × 4096 pixels.")
             }
             try flush()
-            let item = WorkspaceDocument(name: asset.name, kind: .image, width: image.width, height: image.height, sourcePath: asset.path)
+            let item = WorkspaceDocument(name: asset.name, mode: .normal, width: image.width, height: image.height, sourcePath: asset.path)
             let model = EditorModel(width: image.width, height: image.height)
             model.document.loadImageData(image.rgba, width: image.width, height: image.height, layer: 0, frame: 0)
             try model.document.save(base: base, path: item.path)
@@ -576,8 +563,8 @@ final class ProjectStore: ObservableObject {
     }
 
     var contextDescription: String {
-        let document = activeDocument.map { "Active document: \($0.name), kind=\($0.kind.rawValue), \($0.summary)." } ?? "No document open. Ask what asset the user wants to create."
-        let list = catalog.documents.prefix(40).map { "\($0.name): \($0.kind.rawValue), \($0.summary)" }.joined(separator: "\n")
+        let document = activeDocument.map { "Active document: \($0.name), mode=\($0.mode.rawValue), \($0.summary)." } ?? "No document open. Ask what asset the user wants to create."
+        let list = catalog.documents.prefix(40).map { "\($0.name): \($0.mode.rawValue), \($0.summary)" }.joined(separator: "\n")
         let files = assets.prefix(40).map(\.path).joined(separator: "\n")
         return "Project: \(current?.name ?? "Untitled"). Shared style: \(catalog.style.isEmpty ? "Not set" : catalog.style)\n\(document)\nProject documents:\n\(list)\nProject asset paths (relative to project root, not conversation workspace):\n\(files)"
     }
@@ -586,7 +573,7 @@ final class ProjectStore: ObservableObject {
         guard let base = projectRoot else { return }
         pendingSave?.cancel(); synchronizeDimensions()
         let state = assistant.savedState, snapshot = catalog, item = activeDocument
-        let isMap = item?.kind == .map
+        let isMap = item?.mode == .map
         let mapDoc = mapEditor?.map
         let document = editor.document
         try saves.sync {

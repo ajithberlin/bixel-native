@@ -185,6 +185,28 @@ final class Document: @unchecked Sendable {
         }
     }
 
+    func transformRectAngle(layer: Int, frame: Int, source: CGRect, destination: CGRect,
+                            angle: Double) throws {
+        guard source.origin.x >= 0, source.origin.y >= 0,
+              source.width >= 1, source.height >= 1,
+              destination.width >= 1, destination.height >= 1,
+              let sx = UInt32(exactly: Int(source.origin.x.rounded())),
+              let sy = UInt32(exactly: Int(source.origin.y.rounded())),
+              let sw = UInt32(exactly: Int(source.width.rounded())),
+              let sh = UInt32(exactly: Int(source.height.rounded())),
+              let dx = Int32(exactly: Int(destination.origin.x.rounded())),
+              let dy = Int32(exactly: Int(destination.origin.y.rounded())),
+              let dw = UInt32(exactly: Int(destination.width.rounded())),
+              let dh = UInt32(exactly: Int(destination.height.rounded())),
+              let l = UInt32(exactly: layer), let f = UInt32(exactly: frame),
+              angle.isFinite else {
+            throw StorageError.message("Invalid selection transform dimensions.")
+        }
+        guard bixel_doc_transform_rect_angle(handle, l, f, sx, sy, sw, sh, dx, dy, dw, dh, angle) else {
+            throw StorageError.message("The selection could not be transformed.")
+        }
+    }
+
     /// Import sheet cells into a new layer from frame zero without resizing.
     @discardableResult
     func importSheetData(_ data: [UInt8], width: Int, height: Int,

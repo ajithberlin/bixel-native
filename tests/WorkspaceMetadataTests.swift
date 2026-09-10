@@ -48,6 +48,14 @@ import Foundation
         precondition(!accepted.isGenerated && accepted.locationLabel == "Project asset")
         precondition(source.isSource)
 
+        // Keep project creation keyed to the two user-facing workspace modes.
+        let modeProjectCreator: (ProjectStore) -> (String, WorkspaceMode, Int, Int) -> StudioProject? = { store in
+            { name, mode, width, height in
+                store.createProject(name: name, mode: mode, width: width, height: height)
+            }
+        }
+        _ = modeProjectCreator
+
         // TopBar order contract: brush tools -> layers -> color palette -> AI copilot.
         print("Workspace metadata tests passed")
     }

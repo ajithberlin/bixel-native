@@ -51,17 +51,28 @@ struct EyedropperSession: Equatable {
     }
 }
 
-/// The four draggable corners of a free-transform box.
-enum TransformCorner: CaseIterable {
-    case topLeft, topRight, bottomRight, bottomLeft
+/// The eight draggable handles of a free-transform box.
+enum TransformHandle: CaseIterable, Equatable {
+    case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
 
     /// Corner position in document coordinates (y grows downward).
     func point(in rect: CGRect) -> CGPoint {
         switch self {
         case .topLeft: return CGPoint(x: rect.minX, y: rect.minY)
+        case .top: return CGPoint(x: rect.midX, y: rect.minY)
         case .topRight: return CGPoint(x: rect.maxX, y: rect.minY)
+        case .right: return CGPoint(x: rect.maxX, y: rect.midY)
         case .bottomRight: return CGPoint(x: rect.maxX, y: rect.maxY)
+        case .bottom: return CGPoint(x: rect.midX, y: rect.maxY)
         case .bottomLeft: return CGPoint(x: rect.minX, y: rect.maxY)
+        case .left: return CGPoint(x: rect.minX, y: rect.midY)
+        }
+    }
+
+    var isCorner: Bool {
+        switch self {
+        case .topLeft, .topRight, .bottomRight, .bottomLeft: return true
+        case .top, .right, .bottom, .left: return false
         }
     }
 }
@@ -93,9 +104,6 @@ struct LayerInfo: Identifiable {
 final class EditorModel: ObservableObject {
     let document: Document
     let timeline: Timeline
-    var assetKind: AssetKind = .sprite
-    var cellWidth = 16
-    var cellHeight = 16
     @Published var operationError: String?
 
     // Tool + brush state
@@ -120,16 +128,22 @@ final class EditorModel: ObservableObject {
     @Published var layers: [LayerInfo] = []
     @Published var selectionRect: CGRect?
     @Published var transformRect: CGRect?
-    @Published var transformRotation = 0
+    /// Transient clockwise rotation preview in radians. The Rust transform
+    /// applies the complete angle with nearest-neighbour sampling.
+    @Published var transformAngle: CGFloat = 0
     @Published var snapping = true
     /// Aspect-ratio lock for free-transform resizing (the "Uniform" toggle).
     @Published var uniformTransform = false
     private var selectionStart: CGPoint?
     private var transformStart: CGPoint?
     private var transformOrigin: CGRect?
-    private var resizeCorner: TransformCorner?
+    private var resizeHandle: TransformHandle?
     private var resizeBase: CGRect?
     private var resizeUniform = false
+    private var rotationCenter: CGPoint?
+    private var rotationStartAngle: CGFloat?
+    private var rotationBaseAngle: CGFloat = 0
+    private var rotationBaseRect: CGRect?
 
     // Playback settings
     @Published var fps: Double = 12 {
@@ -259,7 +273,7 @@ final class EditorModel: ObservableObject {
         selectionStart = CGPoint(x: x, y: y)
         selectionRect = CGRect(x: x, y: y, width: 1, height: 1)
         transformRect = nil
-        transformRotation = 0
+        transformAngle = 0
         endResize()
     }
 
@@ -279,7 +293,8 @@ final class EditorModel: ObservableObject {
     }
 
     func clearSelection() {
-        selectionStart = nil; selectionRect = nil; transformRect = nil; transformRotation = 0
+        selectionStart = nil; selectionRect = nil; transformRect = nil; transformAngle = 0
+        rotationCenter = nil; rotationStartAngle = nil; rotationBaseRect = nil
         endResize()
     }
 
@@ -290,6 +305,10 @@ final class EditorModel: ObservableObject {
     /// so the transform box + handles appear immediately without a click.
     func selectTool(_ newTool: Tool) {
         guard newTool != tool else { return }
+        let selectionFamily: Set<Tool> = [.selection, .transform]
+        if selectionFamily.contains(tool) && !selectionFamily.contains(newTool) {
+            clearSelection()
+        }
         tool = newTool
         if newTool == .transform, selectionRect == nil {
             if let content = activeLayerContentBounds() {
@@ -297,7 +316,7 @@ final class EditorModel: ObservableObject {
                 transformRect = content
             }
         }
-        if newTool == .selection || newTool == .pencil || newTool == .eraser {
+        if newTool == .selection {
             endResize()
         }
     }
@@ -372,50 +391,66 @@ final class EditorModel: ObservableObject {
 
     // MARK: - Free transform resizing
 
-    /// Which corner (if any) is under the pointer. `tolerance` is in document
+    /// Which transform handle (if any) is under the pointer. `tolerance` is in document
     /// pixels so the grab matches the on-screen handle size at any zoom.
-    func hitTransformCorner(x: Int, y: Int, tolerance: CGFloat) -> TransformCorner? {
+    func hitTransformHandle(x: Int, y: Int, tolerance: CGFloat) -> TransformHandle? {
         guard let rect = transformRect ?? selectionRect else { return nil }
         let p = CGPoint(x: CGFloat(x), y: CGFloat(y))
-        for corner in TransformCorner.allCases {
-            let c = corner.point(in: rect)
-            if abs(p.x - c.x) <= tolerance && abs(p.y - c.y) <= tolerance { return corner }
+        for handle in TransformHandle.allCases {
+            let c = handle.point(in: rect)
+            if abs(p.x - c.x) <= tolerance && abs(p.y - c.y) <= tolerance { return handle }
         }
         return nil
     }
 
-    func beginResize(corner: TransformCorner, x: Int, y: Int, uniform: Bool) {
+    func beginResize(handle: TransformHandle, x: Int, y: Int, uniform: Bool) {
         guard let rect = transformRect ?? selectionRect else { return }
-        resizeCorner = corner
+        resizeHandle = handle
         resizeBase = rect
-        resizeUniform = uniform
+        resizeUniform = uniform && handle.isCorner
         _ = x; _ = y
     }
 
     func updateResize(x: Int, y: Int) {
-        guard let base = resizeBase, let corner = resizeCorner else { return }
+        guard let base = resizeBase, let handle = resizeHandle else { return }
         var cx = CGFloat(x), cy = CGFloat(y)
         // Keep the dragged corner on its own side of the fixed (opposite) edge.
-        switch corner {
+        switch handle {
         case .topLeft:
             cx = min(cx, base.maxX - 1); cy = min(cy, base.maxY - 1)
+        case .top:
+            cy = min(cy, base.maxY - 1)
         case .topRight:
             cx = max(cx, base.minX + 1); cy = min(cy, base.maxY - 1)
+        case .right:
+            cx = max(cx, base.minX + 1)
         case .bottomRight:
             cx = max(cx, base.minX + 1); cy = max(cy, base.minY + 1)
+        case .bottom:
+            cy = max(cy, base.minY + 1)
         case .bottomLeft:
             cx = min(cx, base.maxX - 1); cy = max(cy, base.minY + 1)
+        case .left:
+            cx = min(cx, base.maxX - 1)
         }
         var left = base.minX, right = base.maxX, top = base.minY, bottom = base.maxY
-        switch corner {
+        switch handle {
         case .topLeft:
             left = cx; top = cy
+        case .top:
+            top = cy
         case .topRight:
             right = cx; top = cy
+        case .right:
+            right = cx
         case .bottomRight:
             right = cx; bottom = cy
+        case .bottom:
+            bottom = cy
         case .bottomLeft:
             left = cx; bottom = cy
+        case .left:
+            left = cx
         }
         guard resizeUniform else {
             transformRect = CGRect(x: left, y: top, width: right - left, height: bottom - top)
@@ -427,30 +462,91 @@ final class EditorModel: ObservableObject {
         let scale = max((right - left) / baseW, (bottom - top) / baseH)
         let width = max(1, (baseW * scale).rounded())
         let height = max(1, (baseH * scale).rounded())
-        let movesLeft = corner == .topLeft || corner == .bottomLeft
-        let movesTop = corner == .topLeft || corner == .topRight
+        let movesLeft = handle == .topLeft || handle == .bottomLeft
+        let movesTop = handle == .topLeft || handle == .topRight
         let originX = movesLeft ? base.maxX - width : base.minX
         let originY = movesTop ? base.maxY - height : base.minY
         transformRect = CGRect(x: originX, y: originY, width: width, height: height)
     }
 
     func endResize() {
-        resizeCorner = nil
+        resizeHandle = nil
         resizeBase = nil
+    }
+
+    // MARK: - Rotation handle
+
+    /// Document-space position of the Procreate-style rotation handle above
+    /// the transform box. The extra stem keeps it reachable on tiny artwork.
+    var rotationHandlePoint: CGPoint? {
+        guard let rect = transformRect ?? selectionRect else { return nil }
+        let distance = max(18, min(36, rect.height * 0.3))
+        return CGPoint(x: rect.midX, y: rect.minY - distance)
+    }
+
+    func hitRotationHandle(x: CGFloat, y: CGFloat, tolerance: CGFloat) -> Bool {
+        guard let handle = rotationHandlePoint else { return false }
+        return hypot(x - handle.x, y - handle.y) <= tolerance
+    }
+
+    func beginRotation(x: CGFloat, y: CGFloat) {
+        guard let rect = transformRect ?? selectionRect,
+              rotationHandlePoint != nil else { return }
+        rotationCenter = CGPoint(x: rect.midX, y: rect.midY)
+        rotationStartAngle = atan2(y - rect.midY, x - rect.midX)
+        rotationBaseAngle = transformAngle
+        rotationBaseRect = rect
+    }
+
+    func updateRotation(x: CGFloat, y: CGFloat) {
+        guard let center = rotationCenter,
+              let start = rotationStartAngle,
+              let base = rotationBaseRect else { return }
+        let current = atan2(y - center.y, x - center.x)
+        var delta = current - start
+        while delta > .pi { delta -= 2 * .pi }
+        while delta < -.pi { delta += 2 * .pi }
+        transformAngle = rotationBaseAngle + delta
+        transformRect = rotatedBounds(of: base, angle: transformAngle)
+    }
+
+    func endRotation(commit: Bool) {
+        guard rotationCenter != nil else { return }
+        let shouldCommit = commit
+        if !shouldCommit {
+            transformRect = rotationBaseRect
+            transformAngle = rotationBaseAngle
+        }
+        rotationCenter = nil
+        rotationStartAngle = nil
+        rotationBaseRect = nil
+        if shouldCommit { commitTransform() }
+    }
+
+    private func rotatedBounds(of rect: CGRect, angle: CGFloat) -> CGRect {
+        let c = abs(cos(angle)), s = abs(sin(angle))
+        let w = rect.width * c + rect.height * s
+        let h = rect.width * s + rect.height * c
+        let roundedW = max(1, w.rounded())
+        let roundedH = max(1, h.rounded())
+        return CGRect(x: (rect.midX - roundedW / 2).rounded(),
+                      y: (rect.midY - roundedH / 2).rounded(),
+                      width: roundedW, height: roundedH)
     }
 
     func commitTransform() {
         guard let source = selectionRect, let destination = transformRect else { return }
-        let unchanged = transformRotation == 0
+        let unchanged = abs(transformAngle) < 0.0001
             && destination.origin.x == source.origin.x
             && destination.origin.y == source.origin.y
             && destination.width == source.width
             && destination.height == source.height
         guard !unchanged else { return }
         do {
-            try document.transformRect(layer: activeLayer, frame: frame, source: source, destination: destination, rotation: transformRotation)
+            try document.transformRectAngle(layer: activeLayer, frame: frame, source: source, destination: destination,
+                                            angle: Double(transformAngle))
             selectionRect = destination
-            transformRotation = 0
+            transformAngle = 0
             transformStart = nil; transformOrigin = nil
             endResize()
             commitChange()
@@ -462,10 +558,8 @@ final class EditorModel: ObservableObject {
     func rotateSelection() {
         guard let source = selectionRect else { return }
         let current = transformRect ?? source
-        transformRect = CGRect(x: current.midX - current.height / 2,
-                               y: current.midY - current.width / 2,
-                               width: current.height, height: current.width)
-        transformRotation = 1
+        transformAngle += .pi / 2
+        transformRect = rotatedBounds(of: current, angle: transformAngle)
         commitTransform()
     }
 
@@ -473,11 +567,11 @@ final class EditorModel: ObservableObject {
         guard let source = selectionRect else { return }
         if source.width == CGFloat(width) && source.height == CGFloat(height) { return }
         transformRect = CGRect(x: 0, y: 0, width: width, height: height)
-        transformRotation = 0
+        transformAngle = 0
         commitTransform()
     }
 
-    func resetTransform() { transformRect = selectionRect; transformRotation = 0; endResize() }
+    func resetTransform() { transformRect = selectionRect; transformAngle = 0; endResize() }
 
     func nudgeTransform(dx: Int, dy: Int) {
         guard let rect = transformRect else { return }
@@ -1067,11 +1161,9 @@ final class EditorModel: ObservableObject {
         guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the image."; return }
         let px = x ?? max(0, (width - image.width) / 2)
         let py = y ?? max(0, (height - image.height) / 2)
-        let snapX = assetKind == .map ? (px / max(1, cellWidth)) * cellWidth : px
-        let snapY = assetKind == .map ? (py / max(1, cellHeight)) * cellHeight : py
         do {
             activeLayer = try document.placeImageData(image.rgba, width: image.width, height: image.height,
-                                                       x: snapX, y: snapY, frame: frame, name: name)
+                                                       x: px, y: py, frame: frame, name: name)
             reloadLayers(); commitChange(allFrames: true)
         } catch { operationError = error.localizedDescription }
     }

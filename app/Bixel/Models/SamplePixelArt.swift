@@ -12,7 +12,6 @@ enum SamplePixelArt {
         let id: String
         let name: String
         let description: String
-        let kind: AssetKind
         let width: Int
         let height: Int
         let badge: String
@@ -23,38 +22,35 @@ enum SamplePixelArt {
             id: "pixel_village",
             name: "Pixel Village",
             description: "A cozy village tileset to kickstart your world.",
-            kind: .tileset,
             width: 128,
             height: 128,
-            badge: "Tileset"
+            badge: "Normal"
         ),
         TemplateItem(
             id: "char_base",
             name: "Character Base",
             description: "A versatile character template with animations.",
-            kind: .animation,
             width: 64,
             height: 64,
-            badge: "Animation"
+            badge: "Normal"
         ),
         TemplateItem(
             id: "rpg_icons",
             name: "RPG Icons",
             description: "Essential UI icons for your next adventure.",
-            kind: .sprite,
             width: 32,
             height: 32,
-            badge: "Sprite"
+            badge: "Normal"
         )
     ]
 
     // MARK: - Pixel Buffer Generation
 
-    static func generateSampleData(for name: String, kind: AssetKind? = nil, width: Int, height: Int) -> [UInt8] {
+    static func generateSampleData(for name: String, width: Int, height: Int) -> [UInt8] {
         var buf = [UInt8](repeating: 0, count: max(1, width * height * 4))
         let lower = name.lowercased()
 
-        if kind == .map || lower.contains("map") || lower.contains("dungeon") || lower.contains("world") {
+        if lower.contains("map") || lower.contains("dungeon") || lower.contains("world") {
             drawMapPreview(into: &buf, w: width, h: height)
         } else if lower.contains("slime") {
             drawSlime(into: &buf, w: width, h: height)
@@ -388,8 +384,8 @@ enum SamplePixelArt {
 
     // MARK: - CGImage Thumbnail Helper
 
-    static func makePreviewImage(for name: String, kind: AssetKind? = nil, width: Int = 48, height: Int = 48) -> CGImage? {
-        let pixels = generateSampleData(for: name, kind: kind, width: width, height: height)
+    static func makePreviewImage(for name: String, width: Int = 48, height: Int = 48) -> CGImage? {
+        let pixels = generateSampleData(for: name, width: width, height: height)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }

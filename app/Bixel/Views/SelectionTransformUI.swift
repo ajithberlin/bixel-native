@@ -18,9 +18,13 @@ struct SelectionTransformToolbar: View {
             Toggle("Snapping", isOn: $model.snapping).toggleStyle(.button)
             Button("Fit to Canvas") { model.fitSelectionToCanvas() }
             Button { model.resetTransform() } label: { Image(systemName: "arrow.counterclockwise") }.help("Reset transform")
-            Divider().frame(height: 22).padding(.horizontal, 8)
-            Button("Cancel") { model.clearSelection() }
-            Button("Apply") { model.commitTransform() }.buttonStyle(.borderedProminent)
+            if let rect = model.transformRect {
+                Divider().frame(height: 22).padding(.horizontal, 8)
+                Text("\(Int(rect.width.rounded())) × \(Int(rect.height.rounded()))")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .help("Current transform bounds")
+            }
         }
         .font(.system(size: 11, weight: .medium))
         .padding(.horizontal, 12).padding(.vertical, 8)

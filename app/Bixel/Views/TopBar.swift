@@ -19,6 +19,7 @@ struct TopBar: View {
     @Binding var showColor: Bool
     @Binding var showAI: Bool
     @Binding var showTimeline: Bool
+    @Binding var showAssets: Bool
     var onNewDocument: (() -> Void)? = nil
     /// Non-nil when the active document is a `.map` opened in the designer.
     var mapModel: TileMapModel? = nil
@@ -187,6 +188,8 @@ struct TopBar: View {
 
             layersToggle
             colorToggle(isSpriteColor: true)
+            animationAssistToggle
+            assetLibraryToggle
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
@@ -209,6 +212,7 @@ struct TopBar: View {
             Divider().frame(height: 20).overlay(StudioTheme.hairlineStrong)
 
             layersToggle
+            assetLibraryToggle
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
@@ -248,6 +252,44 @@ struct TopBar: View {
         }
         .buttonStyle(.plain)
         .help("Layers panel")
+    }
+
+    private var assetLibraryToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                showAssets.toggle()
+            }
+        } label: {
+            Image(systemName: "shippingbox")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(showAssets ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
+                .frame(width: 28, height: 28)
+                .background(
+                    showAssets ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Project assets")
+        .accessibilityLabel(showAssets ? "Hide project assets" : "Show project assets")
+    }
+
+    private var animationAssistToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                showTimeline.toggle()
+            }
+        } label: {
+            Image(systemName: "film.stack")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(showTimeline ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
+                .frame(width: 28, height: 28)
+                .background(
+                    showTimeline ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Animation Assist")
+        .accessibilityLabel(showTimeline ? "Hide Animation Assist" : "Show Animation Assist")
     }
 
     @ViewBuilder

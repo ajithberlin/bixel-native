@@ -99,6 +99,18 @@ struct CanvasView: NSViewRepresentable {
             viewport.viewToDoc(point, viewSize: view.bounds.size,
                                width: model.width, height: model.height, clamp: clamp)
         }
+
+        /// Continuous document coordinates used by the rotation handle, which
+        /// can sit just outside the artboard and therefore cannot use the
+        /// clamped integer pixel conversion.
+        fileprivate func documentPoint(_ point: CGPoint, in view: PixelCanvas) -> CGPoint {
+            let origin = viewport.artboardOrigin(viewSize: view.bounds.size,
+                                                  canvasWidth: model.width, height: model.height)
+            return CGPoint(
+                x: (point.x - origin.x) / viewport.zoom,
+                y: (origin.y + CGFloat(model.height) * viewport.zoom - point.y) / viewport.zoom
+            )
+        }
     }
 }
 
@@ -116,6 +128,7 @@ final class PixelCanvas: NSView {
     private let pixelGridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
     private let selectionHandlesLayer = CAShapeLayer()
+    private let rotationHandleLayer = CAShapeLayer()
     private let borderLayer = CALayer()
     /// Dark veil over the workspace; an even-odd hole lets the artboard shine.
     private let workspaceDimLayer = CAShapeLayer()
@@ -124,6 +137,7 @@ final class PixelCanvas: NSView {
     private var lastGridZoom: CGFloat = -1
     private var lastGridWidth = -1
     private var lastGridHeight = -1
+    private var lastGridStride = -1
 
     // Content redraw cache: lets updateCanvasContents() run cheaply from many
     // triggers (layout, viewport changes, editor publishes) while only paying
@@ -149,6 +163,7 @@ final class PixelCanvas: NSView {
     private var selectionGesture = false
     private var transformGesture = false
     private var resizeGesture = false
+    private var rotationGesture = false
     private var transformStartPoint: CGPoint = .zero
     private var didTransformDrag = false
 
@@ -236,12 +251,22 @@ final class PixelCanvas: NSView {
         selectionLayer.isHidden = true
         artboardLayer.addSublayer(selectionLayer)
 
-        // Transform corner handles (only while the transform tool is active).
+        // Transform handles (only while the transform tool is active).
         selectionHandlesLayer.fillColor = NSColor.white.cgColor
         selectionHandlesLayer.strokeColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.95).cgColor
         selectionHandlesLayer.lineWidth = 1.25
         selectionHandlesLayer.isHidden = true
         artboardLayer.addSublayer(selectionHandlesLayer)
+
+        // Gold rotation stem + pointer, matching the familiar Procreate
+        // transform affordance and kept separate from resize handles so its
+        // hit target remains unambiguous.
+        rotationHandleLayer.fillColor = NSColor(red: 1.0, green: 0.78, blue: 0.12, alpha: 1).cgColor
+        rotationHandleLayer.strokeColor = NSColor(red: 0.12, green: 0.10, blue: 0.05, alpha: 0.9).cgColor
+        rotationHandleLayer.lineWidth = 1.25
+        rotationHandleLayer.lineCap = .round
+        rotationHandleLayer.isHidden = true
+        artboardLayer.addSublayer(rotationHandleLayer)
 
         // Hairline artboard border
         borderLayer.borderColor = NSColor(white: 1.0, alpha: 0.20).cgColor
@@ -310,6 +335,7 @@ final class PixelCanvas: NSView {
         pixelGridLayer.frame = artboardBounds
         selectionLayer.frame = artboardBounds
         selectionHandlesLayer.frame = artboardBounds
+        rotationHandleLayer.frame = artboardBounds
 
         // Workspace dim veil: hole over the artboard, everything else fades.
         workspaceDimLayer.frame = CGRect(origin: .zero, size: bounds.size)
@@ -318,14 +344,18 @@ final class PixelCanvas: NSView {
         dimPath.addRect(artboardFrame)
         workspaceDimLayer.path = dimPath
 
-        // Pixel grid (only visible at zoom >= 6)
-        if viewport.showGrid && viewport.zoom >= 6 {
+        // Drawing guide uses an adaptive stride so it remains visible at
+        // overview zoom without overwhelming the canvas with thousands of
+        // one-pixel paths.
+        if viewport.showGrid {
             pixelGridLayer.isHidden = false
-            if lastGridZoom != viewport.zoom || lastGridWidth != model.width || lastGridHeight != model.height {
-                pixelGridLayer.path = makeGridPath(width: model.width, height: model.height, zoom: viewport.zoom)
+            let stride = CanvasGridMetrics.lineStride(width: model.width, height: model.height, zoom: viewport.zoom)
+            if lastGridZoom != viewport.zoom || lastGridWidth != model.width || lastGridHeight != model.height || lastGridStride != stride {
+                pixelGridLayer.path = makeGridPath(width: model.width, height: model.height, zoom: viewport.zoom, stride: stride)
                 lastGridZoom = viewport.zoom
                 lastGridWidth = model.width
                 lastGridHeight = model.height
+                lastGridStride = stride
             }
         } else {
             pixelGridLayer.isHidden = true
@@ -341,38 +371,58 @@ final class PixelCanvas: NSView {
             )
             selectionLayer.isHidden = false
             selectionLayer.path = CGPath(rect: scaledRect, transform: nil)
-            // Corner handles appear only with the transform tool.
+            // Handles appear only with the transform tool.
             if model.tool == .transform {
                 selectionHandlesLayer.isHidden = false
                 selectionHandlesLayer.path = transformHandlePath(for: scaledRect)
+                rotationHandleLayer.isHidden = false
+                rotationHandleLayer.path = rotationHandlePath(for: scaledRect, zoom: viewport.zoom)
             } else {
                 selectionHandlesLayer.isHidden = true
                 selectionHandlesLayer.path = nil
+                rotationHandleLayer.isHidden = true
+                rotationHandleLayer.path = nil
             }
         } else {
             selectionLayer.isHidden = true
             selectionLayer.path = nil
             selectionHandlesLayer.isHidden = true
             selectionHandlesLayer.path = nil
+            rotationHandleLayer.isHidden = true
+            rotationHandleLayer.path = nil
         }
 
         CATransaction.commit()
     }
 
-    /// Four small squares centred on the corners of the scaled selection rect,
-    /// sized in view points so they stay readable at any zoom.
+    /// Eight small squares centred on the corners and edge midpoints of the
+    /// scaled selection rect, sized in view points so they stay readable.
     private func transformHandlePath(for rect: CGRect) -> CGPath {
-        let size: CGFloat = 9
         let path = CGMutablePath()
-        let corners = [
-            CGPoint(x: rect.minX, y: rect.minY),
-            CGPoint(x: rect.maxX, y: rect.minY),
-            CGPoint(x: rect.minX, y: rect.maxY),
-            CGPoint(x: rect.maxX, y: rect.maxY)
+        let handles: [(CGPoint, CGFloat)] = [
+            (CGPoint(x: rect.minX, y: rect.minY), 9),
+            (CGPoint(x: rect.midX, y: rect.minY), 7),
+            (CGPoint(x: rect.maxX, y: rect.minY), 9),
+            (CGPoint(x: rect.maxX, y: rect.midY), 7),
+            (CGPoint(x: rect.maxX, y: rect.maxY), 9),
+            (CGPoint(x: rect.midX, y: rect.maxY), 7),
+            (CGPoint(x: rect.minX, y: rect.maxY), 9),
+            (CGPoint(x: rect.minX, y: rect.midY), 7)
         ]
-        for corner in corners {
+        for (point, size) in handles {
+            let corner = point
             path.addRect(CGRect(x: corner.x - size / 2, y: corner.y - size / 2, width: size, height: size))
         }
+        return path
+    }
+
+    private func rotationHandlePath(for rect: CGRect, zoom: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let stemDistance = max(18 * zoom, min(36 * zoom, rect.height * 0.3))
+        let stemEnd = CGPoint(x: rect.midX, y: rect.minY - stemDistance)
+        path.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        path.addLine(to: stemEnd)
+        path.addEllipse(in: CGRect(x: stemEnd.x - 6, y: stemEnd.y - 6, width: 12, height: 12))
         return path
     }
 
@@ -448,16 +498,16 @@ final class PixelCanvas: NSView {
         return signature
     }
 
-    private func makeGridPath(width: Int, height: Int, zoom: CGFloat) -> CGPath {
+    private func makeGridPath(width: Int, height: Int, zoom: CGFloat, stride: Int) -> CGPath {
         let path = CGMutablePath()
         let totalW = CGFloat(width) * zoom
         let totalH = CGFloat(height) * zoom
-        for x in 1..<width {
+        for x in Swift.stride(from: max(1, stride), to: width, by: max(1, stride)) {
             let xPos = CGFloat(x) * zoom
             path.move(to: CGPoint(x: xPos, y: 0))
             path.addLine(to: CGPoint(x: xPos, y: totalH))
         }
-        for y in 1..<height {
+        for y in Swift.stride(from: max(1, stride), to: height, by: max(1, stride)) {
             let yPos = CGFloat(y) * zoom
             path.move(to: CGPoint(x: 0, y: yPos))
             path.addLine(to: CGPoint(x: totalW, y: yPos))
@@ -547,16 +597,26 @@ final class PixelCanvas: NSView {
             if coordinator.model.tool == .transform, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
                 let viewport = coordinator.viewport
                 let tolerance = 8.0 / viewport.zoom
-                if let corner = coordinator.model.hitTransformCorner(x: pixel.x, y: pixel.y, tolerance: tolerance) {
+                let documentPoint = coordinator.documentPoint(point, in: self)
+                if coordinator.model.hitRotationHandle(x: documentPoint.x, y: documentPoint.y, tolerance: tolerance) {
+                    coordinator.model.beginRotation(x: documentPoint.x, y: documentPoint.y)
+                    rotationGesture = true
+                    transformGesture = false
+                    resizeGesture = false
+                    transformStartPoint = point
+                    didTransformDrag = false
+                } else if let handle = coordinator.model.hitTransformHandle(x: pixel.x, y: pixel.y, tolerance: tolerance) {
                     let uniform = coordinator.model.uniformTransform || event.modifierFlags.contains(.shift)
-                    coordinator.model.beginResize(corner: corner, x: pixel.x, y: pixel.y, uniform: uniform)
+                    coordinator.model.beginResize(handle: handle, x: pixel.x, y: pixel.y, uniform: uniform)
                     resizeGesture = true
                     transformGesture = false
+                    rotationGesture = false
                     transformStartPoint = point
                     didTransformDrag = false
                 } else if coordinator.model.grabTransform(x: pixel.x, y: pixel.y) {
                     transformGesture = true
                     resizeGesture = false
+                    rotationGesture = false
                     transformStartPoint = point
                     didTransformDrag = false
                 }
@@ -634,6 +694,18 @@ final class PixelCanvas: NSView {
             }
             return
         }
+        if rotationGesture {
+            if let coordinator {
+                let documentPoint = coordinator.documentPoint(point, in: self)
+                coordinator.model.updateRotation(x: documentPoint.x, y: documentPoint.y)
+                if !didTransformDrag {
+                    let dx = point.x - transformStartPoint.x
+                    let dy = point.y - transformStartPoint.y
+                    didTransformDrag = hypot(dx, dy) > 2
+                }
+            }
+            return
+        }
         if transformGesture {
             if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
                 coordinator.model.updateTransform(x: pixel.x, y: pixel.y)
@@ -698,6 +770,11 @@ final class PixelCanvas: NSView {
             if didTransformDrag {
                 coordinator?.model.commitTransform()
             }
+            return
+        }
+        if rotationGesture {
+            rotationGesture = false
+            coordinator?.model.endRotation(commit: didTransformDrag)
             return
         }
         if resizeGesture {

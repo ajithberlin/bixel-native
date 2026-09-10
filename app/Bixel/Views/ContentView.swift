@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var showLayers = true
     @State private var showColor = false
     @State private var showTimeline = false
+    @State private var showAssets = false
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
@@ -44,10 +45,10 @@ struct ContentView: View {
                     },
                     onOpenWithAIPrompt: { prompt in
                         let lower = prompt.lowercased()
-                        let kind: AssetKind = lower.contains("tile") ? .tileset : (lower.contains("anim") || lower.contains("walk")) ? .animation : .sprite
-                        let size = kind == .tileset ? 128 : (kind == .animation ? 64 : 32)
+                        let mode: WorkspaceMode = lower.contains("map") ? .map : .normal
+                        let size = mode == .map ? 40 : 32
                         let name = "AI: " + String(prompt.prefix(20)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let newProject = projects.createProject(name: name, kind: kind, width: size, height: size) {
+                        if let newProject = projects.createProject(name: name, mode: mode, width: size, height: mode == .map ? 25 : size) {
                             handleOpenProject(newProject) {
                                 projects.assistant.input = prompt
                                 showAI = true
@@ -85,7 +86,10 @@ struct ContentView: View {
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onChange(of: projects.current?.id) { _ in viewport.refit() }
-                .onChange(of: projects.catalog.activeDocumentID) { _ in viewport.refit() }
+                .onChange(of: projects.catalog.activeDocumentID) { _ in
+                    viewport.refit()
+                    syncAnimationAssistVisibility()
+                }
                 .onChange(of: scenePhase) { phase in
                     if phase != .active { flushProject() }
                 }
@@ -136,6 +140,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: showAI)
         .animation(.easeInOut(duration: 0.2), value: showLayers)
         .animation(.easeInOut(duration: 0.2), value: showColor)
+        .animation(.easeInOut(duration: 0.2), value: showAssets)
         .animation(.easeInOut(duration: 0.22), value: currentScreen)
         .sheet(isPresented: $showProjects) {
             ProjectPicker(store: projects, onSelectProject: { project in
@@ -148,6 +153,7 @@ struct ContentView: View {
         .onAppear {
             currentScreen = .home
             showLayers = true
+            showAssets = false
         }
     }
 
@@ -187,19 +193,32 @@ struct ContentView: View {
         }
     }
 
+    private func syncAnimationAssistVisibility() {
+        guard let document = projects.activeDocument, document.mode == .normal else {
+            showTimeline = false
+            return
+        }
+        // A normal document with multiple frames is an animation workspace,
+        // while one-frame artwork stays uncluttered until the user asks for it.
+        showTimeline = model.frameCount > 1
+    }
+
     // MARK: - Project Canvas View
 
     private var projectCanvasView: some View {
         HStack(spacing: 0) {
             // Left Window: project-wide documents and generated/source assets.
-            ProjectAssetsPanel(store: projects)
-                .id(projects.current?.id)
-                .frame(width: 292)
-                .overlay(alignment: .trailing) {
-                    Rectangle()
-                        .fill(StudioTheme.hairlineStrong)
-                        .frame(width: 1)
-                }
+            if showAssets {
+                ProjectAssetsPanel(store: projects)
+                    .id(projects.current?.id)
+                    .frame(width: 292)
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(StudioTheme.hairlineStrong)
+                            .frame(width: 1)
+                    }
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
 
             // Center Window: Main Editor Workspace (Canvas, top bar, layers/color popovers, timeline, dock)
             editorWorkspaceView
@@ -324,6 +343,7 @@ struct ContentView: View {
                     showColor: $showColor,
                     showAI: $showAI,
                     showTimeline: $showTimeline,
+                    showAssets: $showAssets,
                     onNewDocument: { showNewDocument = true }
                 )
 
@@ -471,6 +491,7 @@ struct ContentView: View {
                 showColor: $showColor,
                 showAI: $showAI,
                 showTimeline: $showTimeline,
+                showAssets: $showAssets,
                 onNewDocument: { showNewDocument = true },
                 mapModel: mapModel,
                 onImportTiledMap: {

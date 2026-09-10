@@ -589,10 +589,25 @@ impl AsepriteDoc {
         sx: usize, sy: usize, sw: usize, sh: usize,
         dx: i32, dy: i32, dw: usize, dh: usize, rotation: u32,
     ) -> Result<(), String> {
+        if rotation > 3 { return Err("Invalid selection transform".into()); }
+        self.transform_rect_angle(
+            layer, frame, sx, sy, sw, sh, dx, dy, dw, dh,
+            rotation as f64 * std::f64::consts::FRAC_PI_2,
+        )
+    }
+
+    /// Transform a rectangular selection in-place with nearest-neighbor
+    /// sampling and an arbitrary clockwise angle in radians. The destination
+    /// rectangle is expected to contain the rotated source bounds.
+    pub fn transform_rect_angle(
+        &mut self, layer: usize, frame: usize,
+        sx: usize, sy: usize, sw: usize, sh: usize,
+        dx: i32, dy: i32, dw: usize, dh: usize, angle: f64,
+    ) -> Result<(), String> {
         if frame >= self.frames.len() || sw == 0 || sh == 0 || dw == 0 || dh == 0
             || sx.checked_add(sw).map_or(true, |v| v > self.width)
             || sy.checked_add(sh).map_or(true, |v| v > self.height)
-            || rotation > 3 || self.layers.get(layer).map_or(true, |l| l.locked) {
+            || !angle.is_finite() || self.layers.get(layer).map_or(true, |l| l.locked) {
             return Err("Invalid selection transform".into());
         }
         self.snapshot();
@@ -603,9 +618,15 @@ impl AsepriteDoc {
             let i = (y * self.width + x) * 4; result[i..i + 4].fill(0);
         }}
         let canvas_w = self.width as i64; let canvas_h = self.height as i64;
+        let cos = angle.cos();
+        let sin = angle.sin();
         for ty in 0..dh { for tx in 0..dw {
             let (u, v) = (tx as f64 / dw as f64, ty as f64 / dh as f64);
-            let (su, sv) = match rotation { 1 => (v, 1.0 - u), 2 => (1.0 - u, 1.0 - v), 3 => (1.0 - v, u), _ => (u, v) };
+            let centered_u = u - 0.5;
+            let centered_v = v - 0.5;
+            let su = centered_u * cos + centered_v * sin + 0.5;
+            let sv = -centered_u * sin + centered_v * cos + 0.5;
+            if su < 0.0 || su >= 1.0 || sv < 0.0 || sv >= 1.0 { continue; }
             let ox = ((su * sw as f64).floor() as usize).min(sw - 1);
             let oy = ((sv * sh as f64).floor() as usize).min(sh - 1);
             let src_i = ((sy + oy) * self.width + sx + ox) * 4;
