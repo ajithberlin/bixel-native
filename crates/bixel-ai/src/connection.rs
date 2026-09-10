@@ -70,6 +70,33 @@ impl Default for ModelRoles {
     }
 }
 
+/// A capability exposed by a provider-scoped model option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCapability {
+    Chat,
+    Vision,
+    Image,
+}
+
+/// A model the provider can actually route through its Goose connection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+    pub capabilities: Vec<ModelCapability>,
+    #[serde(default)]
+    pub recommended: bool,
+}
+
+/// Provider-scoped model choices. The app uses one primary model selection and
+/// renders capabilities from this catalog instead of guessing from model ids.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelCatalog {
+    pub models: Vec<ModelOption>,
+    pub default: Option<String>,
+}
+
 /// A full provider connection: provider choice, credentials, and model roles.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -117,6 +144,16 @@ impl ConnectionConfig {
             },
             base_url: s.base_url,
             validate: true,
+        }
+    }
+
+    /// Codex exposes one Goose chat model with hosted vision and image
+    /// capabilities. Keep the persisted role fields truthful when an older
+    /// config still contains a Google/OpenRouter image model.
+    pub fn normalize_provider_roles(&mut self) {
+        if self.provider == ProviderChoice::ChatgptCodex {
+            self.models.vision = self.models.text.clone();
+            self.models.image = self.models.text.clone();
         }
     }
 
@@ -356,6 +393,7 @@ pub fn connect(
     runtime: &tokio::runtime::Runtime,
     mut cfg: ConnectionConfig,
 ) -> Result<Arc<ProviderHandle>, AiError> {
+    cfg.normalize_provider_roles();
     let root = ensure_goose_env()?;
 
     let config = Config::global();
@@ -499,11 +537,83 @@ pub fn cancel_codex_oauth() {
 
 static OAUTH_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
 
-/// Model ids selectable in the UI: the provider's known models (Codex) or the
-/// OpenRouter catalog (requires a stored OpenRouter key), plus the provider's
-/// default model when it declares one. No network for Codex; one `/models`
-/// call for OpenRouter.
-pub fn list_models(provider: ProviderChoice) -> Result<(Vec<String>, Option<String>), AiError> {
+fn catalog_for_provider(
+    provider: ProviderChoice,
+    mut ids: Vec<String>,
+    default: Option<String>,
+) -> ModelCatalog {
+    ids.sort();
+    let models = ids
+        .into_iter()
+        .map(|id| ModelOption {
+            label: id.clone(),
+            id,
+            capabilities: match provider {
+                // Codex's image_generation tool and image input both ride the
+                // selected Codex chat model; there is no separate Google image
+                // model in this provider path.
+                ProviderChoice::ChatgptCodex => vec![
+                    ModelCapability::Chat,
+                    ModelCapability::Vision,
+                    ModelCapability::Image,
+                ],
+                ProviderChoice::OpenRouter => vec![ModelCapability::Chat],
+            },
+            recommended: false,
+        })
+        .collect();
+    let mut catalog = ModelCatalog { models, default };
+    if let Some(default_id) = catalog.default.as_deref() {
+        if let Some(model) = catalog.models.iter_mut().find(|model| model.id == default_id) {
+            model.recommended = true;
+        }
+    }
+    catalog
+}
+
+fn openrouter_model_option(value: &serde_json::Value) -> Option<ModelOption> {
+    let id = value.get("id")?.as_str()?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    let label = value
+        .get("name")
+        .and_then(|name| name.as_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(id);
+    let architecture = value.get("architecture");
+    let has_modality = |field: &str, modality: &str| {
+        architecture
+            .and_then(|architecture| architecture.get(field))
+            .and_then(|modalities| modalities.as_array())
+            .map(|modalities| {
+                modalities
+                    .iter()
+                    .filter_map(|modality| modality.as_str())
+                    .any(|candidate| candidate.eq_ignore_ascii_case(modality))
+            })
+            .unwrap_or(false)
+    };
+    let mut capabilities = vec![ModelCapability::Chat];
+    if has_modality("input_modalities", "image") {
+        capabilities.push(ModelCapability::Vision);
+    }
+    if has_modality("output_modalities", "image") {
+        capabilities.push(ModelCapability::Image);
+    }
+    Some(ModelOption {
+        id: id.to_string(),
+        label: label.to_string(),
+        capabilities,
+        recommended: false,
+    })
+}
+
+/// Model choices selectable in the UI. Codex uses Goose's local provider
+/// registry and reports its hosted capabilities; OpenRouter uses its `/models`
+/// catalog and preserves input/output modality metadata.
+pub fn list_models(provider: ProviderChoice) -> Result<ModelCatalog, AiError> {
     ensure_goose_env()?;
     match provider {
         ProviderChoice::ChatgptCodex => {
@@ -513,14 +623,17 @@ pub fn list_models(provider: ProviderChoice) -> Result<(Vec<String>, Option<Stri
                 .block_on(providers::get_from_registry(CHATGPT_CODEX_PROVIDER))
                 .map_err(|e| AiError::Provider(e.to_string()))?;
             let default = entry.metadata().default_model.clone();
-            let mut names: Vec<String> = entry
+            let names: Vec<String> = entry
                 .metadata()
                 .known_models
                 .iter()
                 .map(|m| m.name.clone())
                 .collect();
-            names.sort();
-            Ok((names, Some(default).filter(|d| !d.is_empty())))
+            Ok(catalog_for_provider(
+                ProviderChoice::ChatgptCodex,
+                names,
+                Some(default).filter(|d| !d.is_empty()),
+            ))
         }
         ProviderChoice::OpenRouter => {
             let key: String = Config::global()
@@ -536,18 +649,18 @@ pub fn list_models(provider: ProviderChoice) -> Result<(Vec<String>, Option<Stri
                 .map_err(|e| AiError::Provider(e.to_string()))?;
             let v: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|e| AiError::Provider(format!("unexpected /models response: {e}")))?;
-            let mut ids: Vec<String> = v
+            let mut models: Vec<ModelOption> = v
                 .get("data")
                 .and_then(|d| d.as_array())
                 .map(|models| {
                     models
                         .iter()
-                        .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                        .filter_map(openrouter_model_option)
                         .collect()
                 })
                 .unwrap_or_default();
-            ids.sort();
-            Ok((ids, None))
+            models.sort_by(|a, b| a.id.cmp(&b.id));
+            Ok(ModelCatalog { models, default: None })
         }
     }
 }
@@ -628,5 +741,51 @@ mod tests {
         let r = ModelReadiness::compute(&c, Some(true), Ok(()), true);
         assert!(r.text.ready && r.vision.ready && r.image.ready);
         assert_eq!(r.image.model, c.models.text);
+    }
+
+    #[test]
+    fn codex_normalizes_all_hosted_roles_to_the_selected_model() {
+        let mut c = cfg(ProviderChoice::ChatgptCodex, None, None);
+        c.models.text = "gpt-5.5".into();
+        c.models.vision = "google/gemini-3-pro-image".into();
+        c.models.image = "google/gemini-3-pro-image".into();
+        c.normalize_provider_roles();
+        assert_eq!(c.models.vision, "gpt-5.5");
+        assert_eq!(c.models.image, "gpt-5.5");
+    }
+
+    #[test]
+    fn codex_catalog_marks_hosted_image_capability() {
+        let catalog = catalog_for_provider(
+            ProviderChoice::ChatgptCodex,
+            vec!["gpt-5.5".into(), "gpt-5.4".into()],
+            Some("gpt-5.5".into()),
+        );
+        let selected = catalog.models.iter().find(|m| m.id == "gpt-5.5").unwrap();
+        assert_eq!(catalog.default.as_deref(), Some("gpt-5.5"));
+        assert!(selected.capabilities.contains(&ModelCapability::Chat));
+        assert!(selected.capabilities.contains(&ModelCapability::Vision));
+        assert!(selected.capabilities.contains(&ModelCapability::Image));
+        assert!(selected.recommended);
+    }
+
+    #[test]
+    fn openrouter_model_option_maps_input_and_output_modalities() {
+        let option = openrouter_model_option(&serde_json::json!({
+            "id": "openai/gpt-4.1",
+            "name": "OpenAI: GPT-4.1",
+            "architecture": {
+                "input_modalities": ["text", "image"],
+                "output_modalities": ["text"]
+            }
+        }))
+        .unwrap();
+        assert_eq!(option.id, "openai/gpt-4.1");
+        assert_eq!(option.label, "OpenAI: GPT-4.1");
+        assert_eq!(
+            option.capabilities,
+            vec![ModelCapability::Chat, ModelCapability::Vision]
+        );
+        assert!(!option.capabilities.contains(&ModelCapability::Image));
     }
 }

@@ -29,6 +29,7 @@ enum AIService {
         var providerLabel = "OpenRouter"
         var key: String?
         var models: [String: String] = [:]
+        var imageSource: String?
         var baseURL = "https://openrouter.ai/api/v1"
         var readiness: [String: AIRoleReadiness] = [:]
     }
@@ -44,6 +45,7 @@ enum AIService {
         status.providerLabel = json["provider_label"] as? String ?? status.provider
         status.key = json["key"] as? String
         status.models = json["models"] as? [String: String] ?? [:]
+        status.imageSource = json["image_source"] as? String
         status.baseURL = json["base_url"] as? String ?? status.baseURL
         if let readiness = json["readiness"] as? [String: Any] {
             for (role, value) in readiness {
@@ -94,9 +96,25 @@ enum AIService {
         bixel_ai_cancel_codex_oauth()
     }
 
-    /// A provider's selectable models and its own default model (when known).
+    struct AIModelOption: Identifiable, Hashable {
+        let id: String
+        let label: String
+        let capabilities: Set<String>
+        let recommended: Bool
+
+        var capabilitySummary: String {
+            [capabilities.contains("chat") ? "Chat" : nil,
+             capabilities.contains("vision") ? "Vision" : nil,
+             capabilities.contains("image") ? "Image" : nil]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+        }
+    }
+
+    /// A provider-scoped model catalog. Capabilities come from Goose/provider
+    /// metadata, not from a stale global image-model default.
     struct AIModelCatalog {
-        var models: [String] = []
+        var models: [AIModelOption] = []
         var defaultModel: String?
     }
 
@@ -107,10 +125,19 @@ enum AIService {
         guard let data = String(cString: ptr).data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               json["error"] == nil else { return AIModelCatalog() }
-        return AIModelCatalog(
-            models: json["models"] as? [String] ?? [],
-            defaultModel: json["default"] as? String
-        )
+        let structured = (json["model_options"] as? [[String: Any]] ?? []).compactMap { value -> AIModelOption? in
+            guard let id = value["id"] as? String, !id.isEmpty else { return nil }
+            let label = value["label"] as? String ?? id
+            let capabilities = Set(value["capabilities"] as? [String] ?? [])
+            return AIModelOption(id: id, label: label, capabilities: capabilities,
+                                 recommended: value["recommended"] as? Bool ?? false)
+        }
+        let models = structured.isEmpty
+            ? (json["models"] as? [String] ?? []).map {
+                AIModelOption(id: $0, label: $0, capabilities: ["chat"], recommended: $0 == (json["default"] as? String))
+            }
+            : structured
+        return AIModelCatalog(models: models, defaultModel: json["default"] as? String)
     }
 
     static func listSkills() -> [SkillInfo] {
@@ -120,11 +147,15 @@ enum AIService {
         return (try? JSONDecoder().decode([SkillInfo].self, from: data)) ?? []
     }
 
-    /// Run any registered skill by id. `params` is the skill's JSON params
-    /// object; `png` is an optional input image. Returns decoded output (text,
-    /// base64 image and/or frames) or nil on failure.
-    static func runSkill(id: String, params: [String: Any] = [:], png: Data? = nil) -> SkillRunResult? {
-        let paramsJSON = (try? JSONSerialization.data(withJSONObject: params, options: []))
+    /// Run any registered skill by id. `prompt` is forwarded to model-backed
+    /// skills through the same JSON boundary as `params`; `png` is optional
+    /// reference input. Returns decoded output or nil on failure.
+    static func runSkill(id: String, params: [String: Any] = [:], prompt: String = "", png: Data? = nil) -> SkillRunResult? {
+        var skillParams = params
+        if !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            skillParams["prompt"] = prompt
+        }
+        let paramsJSON = (try? JSONSerialization.data(withJSONObject: skillParams, options: []))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
 
         let ptr: UnsafeMutablePointer<CChar>? = id.withCString { idPtr in

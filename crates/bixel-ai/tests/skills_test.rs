@@ -1,10 +1,36 @@
+use std::sync::{Arc, Mutex};
+
+use bixel_ai::error::AiError;
 use bixel_ai::image::RgbaImage;
+use bixel_ai::image_gen::ImageGenerator;
 use bixel_ai::skills::{ModelRole, SkillInput, SkillKind, SkillOutput, Skills};
+
+#[derive(Clone, Default)]
+struct RecordingGenerator {
+    prompt: Arc<Mutex<String>>,
+    reference_seen: Arc<Mutex<bool>>,
+}
+
+impl ImageGenerator for RecordingGenerator {
+    fn model(&self) -> &str {
+        "test-image-backend"
+    }
+
+    fn generate_image(
+        &self,
+        prompt: &str,
+        input: Option<&RgbaImage>,
+    ) -> Result<RgbaImage, AiError> {
+        *self.prompt.lock().unwrap() = prompt.to_string();
+        *self.reference_seen.lock().unwrap() = input.is_some();
+        Ok(RgbaImage::new(8, 8))
+    }
+}
 
 #[test]
 fn all_skills_have_metadata() {
     let specs = Skills::specs();
-    assert_eq!(specs.len(), 19);
+    assert_eq!(specs.len(), 20);
     for spec in &specs {
         assert!(!spec.id.is_empty());
         assert!(!spec.name.is_empty());
@@ -40,10 +66,26 @@ fn deterministic_skills_are_local() {
 
 #[test]
 fn model_skills_need_a_model() {
+    assert_eq!(Skills::spec(SkillKind::ImageGen).model, ModelRole::Image);
     assert_eq!(Skills::spec(SkillKind::GenerateArt).model, ModelRole::Image);
     assert_eq!(Skills::spec(SkillKind::Spritesheet).model, ModelRole::Image);
     assert_eq!(Skills::spec(SkillKind::NextFrame).model, ModelRole::Image);
     assert_eq!(Skills::spec(SkillKind::PixelImageGen).model, ModelRole::Image);
+}
+
+#[test]
+fn image_gen_skill_uses_the_configured_image_backend() {
+    let generator = RecordingGenerator::default();
+    let prompt = generator.prompt.clone();
+    let input = SkillInput {
+        prompt: "a red fox in a moonlit forest".into(),
+        params: serde_json::json!({"transparent": false}),
+        ..Default::default()
+    };
+    let output = Skills::run(Some(&generator), SkillKind::ImageGen, input).unwrap();
+    assert!(output.image.is_some());
+    assert!(prompt.lock().unwrap().contains("a red fox in a moonlit forest"));
+    assert!(!*generator.reference_seen.lock().unwrap());
 }
 
 #[test]
@@ -86,6 +128,7 @@ fn remove_background_skill_runs_locally() {
 #[test]
 fn skill_ids_are_stable() {
     assert_eq!(SkillKind::GenerateArt.to_string(), "generate_art");
+    assert_eq!(SkillKind::ImageGen.to_string(), "image_gen");
     assert_eq!(SkillKind::Spritesheet.to_string(), "spritesheet");
     assert_eq!(SkillKind::NextFrame.to_string(), "next_frame");
     assert_eq!(SkillKind::Compress.to_string(), "compress");

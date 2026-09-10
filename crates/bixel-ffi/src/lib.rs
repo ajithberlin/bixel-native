@@ -814,6 +814,15 @@ fn connection_status_json() -> serde_json::Value {
             "image": r.map(|r| serde_json::to_value(&r.image).unwrap()),
         })
     };
+    let image_model = readiness
+        .as_ref()
+        .map(|r| r.image.model.clone())
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| active.models.image.clone());
+    let image_source = connected.then(|| match active.provider {
+        bixel_ai::ProviderChoice::ChatgptCodex => "codex_hosted",
+        bixel_ai::ProviderChoice::OpenRouter => "openrouter_model",
+    });
     serde_json::json!({
         "connected": connected,
         "provider": active.provider.goose_name(),
@@ -822,8 +831,9 @@ fn connection_status_json() -> serde_json::Value {
         "models": {
             "text": active.models.text,
             "vision": active.models.vision,
-            "image": active.models.image,
+            "image": image_model,
         },
+        "image_source": image_source,
         "base_url": active.base_url,
         "readiness": readiness_json(readiness.as_ref()),
     })
@@ -898,9 +908,9 @@ pub extern "C" fn bixel_ai_cancel_codex_oauth() {
     bixel_ai::connection::cancel_codex_oauth();
 }
 
-/// JSON object of selectable model ids for a provider (`openrouter` or
-/// `chatgpt_codex`): `{"models": ["id", ...], "default": "id"}` — `default`
-/// is the provider's own default model when it declares one. OpenRouter
+/// JSON object of selectable provider-scoped model options for `openrouter` or
+/// `chatgpt_codex`: `{"models": ["id", ...], "default": "id",
+/// "model_options": [{"id", "label", "capabilities"}]}`. OpenRouter
 /// requires a stored key. Free with [`bixel_string_free`].
 #[no_mangle]
 pub extern "C" fn bixel_ai_list_models(provider: *const c_char) -> *mut c_char {
@@ -909,9 +919,19 @@ pub extern "C" fn bixel_ai_list_models(provider: *const c_char) -> *mut c_char {
         _ => bixel_ai::ProviderChoice::OpenRouter,
     };
     match bixel_ai::connection::list_models(provider) {
-        Ok((models, default)) => out_cstr(
-            serde_json::json!({ "models": models, "default": default }).to_string(),
-        ),
+        Ok(catalog) => {
+            let model_ids: Vec<&str> = catalog.models.iter().map(|model| model.id.as_str()).collect();
+            out_cstr(
+                serde_json::json!({
+                    // Keep the original Goose/FFI shape for existing clients.
+                    "models": model_ids,
+                    "default": catalog.default,
+                    // New clients use provider-scoped labels and capabilities.
+                    "model_options": catalog.models,
+                })
+                .to_string(),
+            )
+        }
         Err(e) => out_cstr(
             serde_json::json!({ "error": e.to_string() }).to_string(),
         ),
@@ -1145,6 +1165,23 @@ pub unsafe extern "C" fn bixel_ai_remove_bg_rgba(
 
 // -- generic skill runner (any registered skill, deterministic or model-backed)
 
+fn skill_input_from_ffi(
+    params: serde_json::Value,
+    image: Option<bixel_ai::image::RgbaImage>,
+) -> bixel_ai::skills::SkillInput {
+    let prompt = params
+        .get("prompt")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    bixel_ai::skills::SkillInput {
+        prompt,
+        image,
+        images: vec![],
+        params,
+    }
+}
+
 /// Run any registered skill by id, passing optional input PNG bytes and a JSON
 /// params object. Returns a JSON string (free with [`bixel_string_free`]) of the
 /// shape `{ "text": "...", "image": "<base64 png>", "frames": ["<base64>", ...] }`,
@@ -1173,12 +1210,7 @@ pub unsafe extern "C" fn bixel_ai_run_skill(
         None
     };
 
-    let input = bixel_ai::skills::SkillInput {
-        prompt: String::new(),
-        image,
-        images: vec![],
-        params,
-    };
+    let input = skill_input_from_ffi(params, image);
 
     // Deterministic skills need no engine; model-backed skills need the image
     // role to be ready (otherwise the run fails naming the missing role).
@@ -1855,6 +1887,16 @@ pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -
 mod tests {
     use super::*;
 
+    #[test]
+    fn skill_runner_keeps_prompt_in_skill_input() {
+        let input = skill_input_from_ffi(
+            serde_json::json!({"prompt": "a fox under moonlight", "transparent": false}),
+            None,
+        );
+        assert_eq!(input.prompt, "a fox under moonlight");
+        assert_eq!(input.params["transparent"], false);
+    }
+
     /// The status JSON must expose model roles and per-role readiness shapes
     /// and must never contain a full API key.
     #[test]
@@ -1869,6 +1911,7 @@ mod tests {
             assert!(value["readiness"][role].is_null(), "unexpected readiness while offline");
         }
         assert_eq!(value["connected"], false);
+        assert!(value["image_source"].is_null());
     }
 
     /// Masking must show only the last 4 characters of a key.

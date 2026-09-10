@@ -24,6 +24,7 @@ pub enum ModelRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillKind {
+    ImageGen,
     GenerateArt,
     Spritesheet,
     NextFrame,
@@ -50,6 +51,7 @@ impl SkillKind {
     pub fn all() -> Vec<SkillKind> {
         use SkillKind::*;
         vec![
+            ImageGen,
             GenerateArt,
             Spritesheet,
             NextFrame,
@@ -87,6 +89,7 @@ impl SkillKind {
 impl std::fmt::Display for SkillKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
+            SkillKind::ImageGen => "image_gen",
             SkillKind::GenerateArt => "generate_art",
             SkillKind::Spritesheet => "spritesheet",
             SkillKind::NextFrame => "next_frame",
@@ -164,6 +167,7 @@ impl Skills {
         input: SkillInput,
     ) -> Result<SkillOutput, AiError> {
         match kind {
+            SkillKind::ImageGen => image_gen(require_gen(gen)?, input),
             SkillKind::GenerateArt => generate_art(require_gen(gen)?, input),
             SkillKind::Spritesheet => spritesheet(require_gen(gen)?, input),
             SkillKind::NextFrame => next_frame(require_gen(gen)?, input),
@@ -191,7 +195,7 @@ fn require_gen(gen: Option<&dyn ImageGenerator>) -> Result<&dyn ImageGenerator, 
     gen.ok_or_else(|| {
         AiError::Config(
             "this skill needs the image model role, which is not ready — \
-             add an OpenRouter API key in the AI settings"
+             connect a provider with image generation enabled in the AI settings"
                 .into(),
         )
     })
@@ -200,6 +204,20 @@ fn require_gen(gen: Option<&dyn ImageGenerator>) -> Result<&dyn ImageGenerator, 
 fn spec(kind: SkillKind) -> SkillSpec {
     use SkillKind::*;
     match kind {
+        ImageGen => spec_gen(
+            kind,
+            "Image generation",
+            "Generate an image or edit a reference image through the configured provider image backend.",
+            "generation",
+            ModelRole::Image,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "style": { "type": "string", "description": "Optional visual style" },
+                    "transparent": { "type": "boolean", "default": false }
+                }
+            }),
+        ),
         GenerateArt => spec_gen(
             kind,
             "Generate art",
@@ -555,6 +573,32 @@ fn param_usize(input: &SkillInput, key: &str, default: usize) -> usize {
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
         .unwrap_or(default)
+}
+
+fn image_gen(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOutput, AiError> {
+    // General image generation is opaque by default. Pixel-specific skills
+    // retain their transparent-sprite default.
+    if !input.params.is_object() {
+        input.params = serde_json::json!({});
+    }
+    if input.params.get("transparent").is_none() {
+        input.params["transparent"] = serde_json::Value::Bool(false);
+    }
+    generation_target(&input, None)?;
+    let style = input.params.get("style").and_then(|v| v.as_str()).unwrap_or("");
+    let style_hint = if style.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" Visual style: {style}.")
+    };
+    let prompt = format!(
+        "Create one finished image. {}{} {}",
+        input.prompt.trim(),
+        style_hint,
+        generation_guidance(&input)
+    );
+    let image = gen.generate_image(&prompt, input.image.as_ref())?;
+    prepare_generated(image, &input, None)
 }
 
 fn generate_art(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {

@@ -5,7 +5,7 @@
 //! the OpenRouter provider, and exposes Bixel's pixel-art **skills** as a goose
 //! tool extension:
 //!
-//! * `generate_art` / `pixel_image_gen` — text-to-image generation.
+//! * `image_gen` / `generate_art` / `pixel_image_gen` — provider-backed image generation.
 //! * `spritesheet` — text-to-spritesheet generation + grid slicing.
 //! * `next_frame` — predict/create the next animation frame from the current one.
 //! * `compress` / `pixel_reduce_colors` / `pixel_file_compressor` — color
@@ -19,7 +19,8 @@
 //!   UI images into components.
 //! * `pixel_game_asset_prep` — chroma-green shadow placeholder → drop shadow.
 //!
-//! Model routing and credentials come from the environment (`.env`):
+//! Headless examples can use environment defaults (`.env`); the app owns
+//! provider selection and credentials through the connection UI:
 //!
 //! ```dotenv
 //! OPENROUTER_API_KEY=sk-or-...
@@ -29,8 +30,9 @@
 //! ```
 //!
 //! Deterministic skills run locally (no network); model-backed skills call the
-//! OpenRouter image endpoints. The goose agent handles the chat loop, tool
-//! execution and session state.
+//! connected provider image backend. Codex uses its hosted image-generation
+//! tool with the selected Goose chat model. The goose agent handles the chat
+//! loop, tool execution and session state.
 
 pub mod agent;
 pub mod codex_image;
@@ -47,7 +49,8 @@ pub mod vision;
 pub use agent::GooseAgent;
 pub use config::AiSettings;
 pub use connection::{
-    ConnectionConfig, ModelReadiness, ModelRoles, ProviderChoice, ProviderHandle, RoleReadiness,
+    ConnectionConfig, ModelCapability, ModelCatalog, ModelOption, ModelReadiness, ModelRoles,
+    ProviderChoice, ProviderHandle, RoleReadiness,
 };
 pub use error::AiError;
 pub use image::RgbaImage;

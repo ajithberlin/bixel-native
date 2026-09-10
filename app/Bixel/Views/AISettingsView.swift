@@ -1,17 +1,19 @@
 import SwiftUI
 
-/// AI provider connection settings, scoped per provider the way goose sees
-/// it: OpenRouter = API key + three model roles; ChatGPT (Codex) = sign-in +
-/// Codex models (image skills stay offline — goose has no image-generation
-/// API, so the image role needs the OpenRouter provider).
+/// Goose-aligned provider settings. A provider owns its model catalog; Codex
+/// exposes one primary model with hosted chat/vision/image capabilities, while
+/// OpenRouter may opt into separate vision/image routing under Advanced.
 struct AISettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var status = AIService.connectionStatus()
     @State private var provider = "openrouter"
     @State private var apiKey = ""
-    @State private var textModel = ""
+    @State private var primaryModel = ""
     @State private var visionModel = ""
     @State private var imageModel = ""
+    @State private var catalog = AIService.AIModelCatalog()
+    @State private var loadingCatalog = false
+    @State private var advancedRouting = false
     @State private var busy = false
     @State private var signingIn = false
     @State private var message: String?
@@ -19,139 +21,310 @@ struct AISettingsView: View {
     private static let roles = ["text", "vision", "image"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("AI Provider").font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.plain)
-                    .font(.system(size: 12)).foregroundColor(StudioTheme.textSecondary)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    providerChooser
+                    providerConfiguration
+                    modelConfiguration
+                    readinessList
+                    if let message {
+                        Text(message)
+                            .font(.system(size: 11))
+                            .foregroundColor(message == "Connected." ? StudioTheme.bixelGreen : .orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.bottom, 14)
             }
+            footer
+        }
+        .padding(20)
+        .frame(width: 460, height: 650)
+        .foregroundColor(StudioTheme.textPrimary)
+        .background(StudioTheme.background)
+        .onAppear(perform: refresh)
+        .onDisappear { if signingIn { AIService.cancelCodexOAuth() } }
+    }
 
-            Picker("Provider", selection: $provider) {
-                Text("OpenRouter").tag("openrouter")
-                Text("ChatGPT (Codex)").tag("chatgpt_codex")
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("AI Provider")
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                Text("Choose the provider Goose will use for chat and image skills.")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.textSecondary)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .onChange(of: provider) { newProvider in
-                applyProviderDefaults(newProvider)
-            }
+            Spacer()
+            Button("Done") { dismiss() }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(StudioTheme.textSecondary)
+        }
+        .padding(.bottom, 17)
+    }
 
-            if provider == "chatgpt_codex" {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Sign in with your ChatGPT account (opens the browser). Tokens are cached on this Mac.")
-                        .font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary).fixedSize(horizontal: false, vertical: true)
-                    Button(signingIn ? "Cancel sign-in" : "Sign in with ChatGPT") {
+    private var providerChooser: some View {
+        HStack(spacing: 9) {
+            providerCard(
+                id: "chatgpt_codex",
+                title: "ChatGPT (Codex)",
+                detail: "OAuth · hosted image tool",
+                icon: "sparkles"
+            )
+            providerCard(
+                id: "openrouter",
+                title: "OpenRouter",
+                detail: "API key · routed models",
+                icon: "point.3.connected.trianglepath.dotted"
+            )
+        }
+    }
+
+    private func providerCard(id: String, title: String, detail: String, icon: String) -> some View {
+        Button {
+            guard provider != id else { return }
+            provider = id
+            applyProviderDefaults(id)
+            loadCatalog()
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: icon).font(.system(size: 13, weight: .semibold))
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    if provider == id {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(StudioTheme.accent)
+                    }
+                }
+                Text(detail)
+                    .font(.system(size: 10))
+                    .foregroundColor(provider == id ? StudioTheme.textSecondary : StudioTheme.textDisabled)
+            }
+            .foregroundColor(provider == id ? StudioTheme.textPrimary : StudioTheme.textSecondary)
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(provider == id ? StudioTheme.accentSoft : StudioTheme.panel,
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(provider == id ? StudioTheme.accent.opacity(0.7) : StudioTheme.hairline, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var providerConfiguration: some View {
+        if provider == "chatgpt_codex" {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 9) {
+                    Image(systemName: status.connected && status.provider == provider ? "checkmark.seal.fill" : "person.crop.circle.badge.arrow.forward")
+                        .foregroundColor(status.connected && status.provider == provider ? StudioTheme.bixelGreen : StudioTheme.textSecondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(status.connected && status.provider == provider ? "ChatGPT account connected" : "Connect your ChatGPT account")
+                            .font(.system(size: 12, weight: .medium))
+                        Text("OAuth opens in your browser. Credentials stay in Goose's secure store.")
+                            .font(.system(size: 10))
+                            .foregroundColor(StudioTheme.textSecondary)
+                    }
+                    Spacer()
+                    Button(signingIn ? "Cancel" : "Sign in") {
                         if signingIn { cancelSignIn() } else { signIn() }
                     }
+                    .controlSize(.small)
                     .disabled(busy && !signingIn)
                 }
-                ModelPicker(title: "Model (chat + vision)", selection: $textModel, provider: provider)
-            } else {
-                field("OpenRouter API key", text: $apiKey, secure: true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Models").font(.system(size: 11, weight: .medium)).foregroundColor(StudioTheme.textSecondary)
-                    ModelPicker(title: "Text (chat)", selection: $textModel, provider: provider)
-                    ModelPicker(title: "Vision (image input)", selection: $visionModel, provider: provider)
-                    ModelPicker(title: "Image (generation)", selection: $imageModel, provider: provider)
-                }
+                .padding(11)
+                .studioSurface()
             }
-
-            readinessList
-
-            if let message {
-                Text(message).font(.system(size: 11)).foregroundColor(message == "Connected." ? .green : .orange)
+        } else {
+            VStack(alignment: .leading, spacing: 7) {
+                field("OpenRouter API key", text: $apiKey, secure: true)
+                Text("The key is write-only here and is stored by Goose. Connect once to load the provider model catalog.")
+                    .font(.system(size: 10))
+                    .foregroundColor(StudioTheme.textDisabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
 
-            HStack(spacing: 10) {
-                Button(busy ? "Connecting…" : (status.connected ? "Reconnect" : "Connect")) {
+    private var modelConfiguration: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("Model")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if loadingCatalog {
+                    ProgressView().controlSize(.small)
+                } else if let selected = selectedOption {
+                    Text(selected.capabilitySummary)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(StudioTheme.bixelGreen)
+                }
+            }
+
+            ModelPicker(
+                title: provider == "chatgpt_codex" ? "Primary Goose model" : "Primary chat model",
+                selection: $primaryModel,
+                options: catalog.models
+            )
+
+            if provider == "chatgpt_codex" {
+                capabilityExplanation
+            } else {
+                DisclosureGroup(isExpanded: $advancedRouting) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Use these only when the primary model does not cover a capability. Leave blank to route through the primary model.")
+                            .font(.system(size: 10))
+                            .foregroundColor(StudioTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        ModelPicker(title: "Vision override", selection: $visionModel, options: catalog.models, capability: "vision")
+                        ModelPicker(title: "Image override", selection: $imageModel, options: catalog.models, capability: "image")
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "slider.horizontal.3")
+                        Text("Advanced routing")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                }
+                .tint(StudioTheme.textSecondary)
+            }
+        }
+        .padding(12)
+        .studioSurface()
+    }
+
+    private var capabilityExplanation: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "link.circle.fill")
+                .foregroundColor(StudioTheme.accent)
+            Text("This selected Codex model serves chat, image input, and image generation. Image requests use Codex's hosted image tool — no Google image model is involved.")
+                .font(.system(size: 10))
+                .foregroundColor(StudioTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(9)
+        .background(StudioTheme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var readinessList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Readiness").font(.system(size: 12, weight: .semibold))
+                Spacer()
+                if let source = status.imageSource {
+                    Text(source == "codex_hosted" ? "Codex hosted image" : "OpenRouter image model")
+                        .font(.system(size: 10))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+            }
+            ForEach(Self.roles, id: \.self) { role in
+                let readiness = status.readiness[role]
+                HStack(spacing: 8) {
+                    Circle().fill(dot(role)).frame(width: 7, height: 7)
+                    Text(role.capitalized).font(.system(size: 11)).frame(width: 48, alignment: .leading)
+                    Text(status.models[role] ?? "—")
+                        .font(.system(size: 10, design: .monospaced))
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Text(readiness?.ready == true ? "Ready" : (readiness?.reason ?? "Not connected"))
+                        .font(.system(size: 10))
+                        .foregroundColor(readiness?.ready == true ? StudioTheme.bixelGreen : StudioTheme.textSecondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(12)
+        .studioSurface()
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Button(busy ? "Connecting…" : (status.connected && status.provider == provider ? "Reconnect" : "Connect")) {
                     connect()
                 }
-                .disabled(busy || textModel.isEmpty || imageModel.isEmpty
-                          || (provider == "openrouter" && apiKey.isEmpty && !status.connected))
+                .buttonStyle(.borderedProminent)
+                .tint(StudioTheme.accent)
+                .disabled(busy || primaryModel.isEmpty || (provider == "openrouter" && apiKey.isEmpty && status.key == nil))
+
                 if status.connected {
                     Button("Disconnect") {
                         AIService.disconnect()
                         refresh()
                     }
+                    .buttonStyle(.bordered)
                     .disabled(busy)
                 }
+                Spacer()
             }
-
-            if provider == "chatgpt_codex" {
-                Text("Image-generation skills stay offline with ChatGPT — goose has no image API. Use the OpenRouter provider for those.")
-                    .font(.system(size: 10)).foregroundColor(StudioTheme.textDisabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text("Keys are stored in the system secret store and never leave the app.")
-                .font(.system(size: 10)).foregroundColor(StudioTheme.textDisabled)
-                .fixedSize(horizontal: false, vertical: true)
+            Text("Model choices and capabilities are scoped to the selected provider, like Goose ACP.")
+                .font(.system(size: 10))
+                .foregroundColor(StudioTheme.textDisabled)
         }
-        .padding(20)
-        .frame(width: 380)
-        .foregroundColor(StudioTheme.textPrimary)
-        .background(StudioTheme.background)
-        .onAppear(perform: refresh)
-        // Leaving the sheet must not leave a browser sign-in running in the
-        // background — goose would hold its OAuth lock for the whole timeout.
-        .onDisappear { if signingIn { AIService.cancelCodexOAuth() } }
+        .padding(.top, 12)
+        .overlay(alignment: .top) { Rectangle().fill(StudioTheme.hairline).frame(height: 1) }
     }
 
-    private var readinessList: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Readiness").font(.system(size: 11, weight: .medium)).foregroundColor(StudioTheme.textSecondary)
-            ForEach(Self.roles, id: \.self) { role in
-                HStack(spacing: 7) {
-                    Circle().fill(dot(role)).frame(width: 7, height: 7)
-                    Text(role.capitalized).font(.system(size: 11)).frame(width: 46, alignment: .leading)
-                    Text(status.models[role] ?? "—").font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1).truncationMode(.middle)
-                    Spacer(minLength: 0)
-                    if let readiness = status.readiness[role] {
-                        Text(readiness.ready ? "Ready" : readiness.reason)
-                            .font(.system(size: 10)).foregroundColor(readiness.ready ? .green : .orange)
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
+    private var selectedOption: AIService.AIModelOption? {
+        catalog.models.first(where: { $0.id == primaryModel })
     }
 
     private func dot(_ role: String) -> Color {
         guard let readiness = status.readiness[role] else { return StudioTheme.textDisabled }
-        return readiness.ready ? .green : .orange
+        return readiness.ready ? StudioTheme.bixelGreen : .orange
     }
 
     private func field(_ title: String, text: Binding<String>, secure: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary)
             Group {
-                if secure {
-                    SecureField("", text: text)
-                } else {
-                    TextField("", text: text)
-                }
+                if secure { SecureField("sk-or-…", text: text) }
+                else { TextField("", text: text) }
             }
             .textFieldStyle(.roundedBorder)
             .font(.system(size: 12, design: .monospaced))
         }
     }
 
-    /// Model defaults follow the provider, the way goose sees it: Codex
-    /// models for ChatGPT (its own default first), the built-in catalog for
-    /// OpenRouter.
-    private func applyProviderDefaults(_ provider: String) {
-        if provider == "chatgpt_codex" {
-            let catalog = AIService.listModels(provider: provider)
-            if !catalog.models.contains(textModel) {
-                textModel = catalog.defaultModel ?? catalog.models.first ?? textModel
-            }
+    private func applyProviderDefaults(_ newProvider: String) {
+        let current = AIService.connectionStatus()
+        if newProvider == "chatgpt_codex" {
+            primaryModel = current.provider == newProvider ? (current.models["text"] ?? primaryModel) : primaryModel
+            visionModel = ""
+            imageModel = ""
         } else {
-            let defaults = AIService.connectionStatus().models
-            if textModel.isEmpty || !textModel.contains("/") { textModel = defaults["text"] ?? textModel }
-            if visionModel.isEmpty { visionModel = defaults["vision"] ?? visionModel }
-            if imageModel.isEmpty { imageModel = defaults["image"] ?? imageModel }
+            if primaryModel.isEmpty || newProvider != current.provider {
+                primaryModel = current.models["text"] ?? primaryModel
+            }
+            if newProvider != current.provider {
+                visionModel = ""
+                imageModel = ""
+            } else {
+                if visionModel.isEmpty { visionModel = current.models["vision"] ?? "" }
+                if imageModel.isEmpty { imageModel = current.models["image"] ?? "" }
+            }
+        }
+    }
+
+    private func loadCatalog() {
+        let selectedProvider = provider
+        loadingCatalog = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = AIService.listModels(provider: selectedProvider)
+            DispatchQueue.main.async {
+                guard provider == selectedProvider else { return }
+                catalog = result
+                loadingCatalog = false
+                if primaryModel.isEmpty || !result.models.contains(where: { $0.id == primaryModel }) {
+                    primaryModel = result.defaultModel ?? result.models.first(where: { $0.recommended })?.id ?? result.models.first?.id ?? primaryModel
+                }
+            }
         }
     }
 
@@ -170,19 +343,19 @@ struct AISettingsView: View {
 
     private func cancelSignIn() {
         AIService.cancelCodexOAuth()
+        signingIn = false
     }
 
     private func connect() {
-        let provider = provider
-        let key = provider == "openrouter" ? apiKey : ""
-        let text = textModel
-        // Codex has one model; it serves both text and vision.
-        let vision = provider == "chatgpt_codex" ? textModel : visionModel
-        let image = imageModel
+        let selectedProvider = provider
+        let key = selectedProvider == "openrouter" ? apiKey : ""
+        let text = primaryModel
+        let vision = selectedProvider == "chatgpt_codex" ? text : (visionModel.isEmpty ? text : visionModel)
+        let image = selectedProvider == "chatgpt_codex" ? text : (imageModel.isEmpty ? text : imageModel)
         busy = true
         message = nil
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = AIService.connect(provider: provider, apiKey: key, imageAPIKey: "",
+            let result = AIService.connect(provider: selectedProvider, apiKey: key, imageAPIKey: "",
                                            textModel: text, visionModel: vision, imageModel: image)
             DispatchQueue.main.async {
                 busy = false
@@ -196,69 +369,69 @@ struct AISettingsView: View {
         status = AIService.connectionStatus()
         if status.connected {
             provider = status.provider
-            textModel = status.models["text"] ?? textModel
+            primaryModel = status.models["text"] ?? primaryModel
             visionModel = status.models["vision"] ?? visionModel
             imageModel = status.models["image"] ?? imageModel
         } else {
-            if textModel.isEmpty { textModel = status.models["text"] ?? "" }
+            if primaryModel.isEmpty { primaryModel = status.models["text"] ?? "" }
             if visionModel.isEmpty { visionModel = status.models["vision"] ?? "" }
             if imageModel.isEmpty { imageModel = status.models["image"] ?? "" }
         }
+        applyProviderDefaults(provider)
+        loadCatalog()
     }
 }
 
-/// A dropdown with a search field, listing the selected provider's models
-/// (fetched per provider, so switching providers reloads). Falls back to the
-/// current selection when the list cannot be loaded yet.
+/// A searchable provider-scoped model picker with capability badges. It never
+/// mixes Codex and OpenRouter options in one list.
 private struct ModelPicker: View {
     let title: String
     @Binding var selection: String
-    let provider: String
-    @State private var options: [String]?
+    let options: [AIService.AIModelOption]
+    var capability: String? = nil
     @State private var search = ""
     @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary)
-            HStack(spacing: 6) {
-                Text(selection.isEmpty ? "Choose a model" : selection)
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
-                    .foregroundColor(selection.isEmpty ? StudioTheme.textDisabled : StudioTheme.textPrimary)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
-                    .foregroundColor(StudioTheme.textSecondary)
+            Button { open.toggle() } label: {
+                HStack(spacing: 8) {
+                    Text(selectedOption?.label ?? (selection.isEmpty ? "Choose a model" : selection))
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1).truncationMode(.middle)
+                        .foregroundColor(selection.isEmpty ? StudioTheme.textDisabled : StudioTheme.textPrimary)
+                    Spacer(minLength: 0)
+                    if let option = selectedOption, !option.capabilitySummary.isEmpty {
+                        Text(option.capabilitySummary).font(.system(size: 9)).foregroundColor(StudioTheme.textSecondary)
+                    }
+                    Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+                .padding(.horizontal, 9).padding(.vertical, 7)
+                .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 7))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
             }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
-            .contentShape(Rectangle())
-            .onTapGesture { open.toggle() }
-            .onChange(of: provider) { _ in options = nil }
+            .buttonStyle(.plain)
             .popover(isPresented: $open, arrowEdge: .bottom) {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 7) {
                     TextField("Search models", text: $search)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
-                        .onAppear { load() }
-                    let filtered = (options ?? []).filter { search.isEmpty || $0.localizedCaseInsensitiveContains(search) }
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 2) {
-                            if !selection.isEmpty && !filtered.contains(selection) {
-                                row(selection)
+                        LazyVStack(alignment: .leading, spacing: 3) {
+                            let filtered = availableOptions.filter {
+                                search.isEmpty || $0.id.localizedCaseInsensitiveContains(search) || $0.label.localizedCaseInsensitiveContains(search)
                             }
-                            ForEach(filtered, id: \.self) { model in
-                                row(model)
-                            }
+                            ForEach(filtered) { option in row(option) }
                             if filtered.isEmpty {
-                                Text(options == nil ? "Could not load models (connect a key first)." : "No matches.")
+                                Text(availableOptions.isEmpty ? "No models advertise this capability yet." : "No matches.")
                                     .font(.system(size: 11)).foregroundColor(StudioTheme.textDisabled)
-                                    .padding(.horizontal, 8).padding(.vertical, 6)
+                                    .padding(8)
                             }
                         }
                     }
-                    .frame(minWidth: 320, idealWidth: 340, maxHeight: 260)
+                    .frame(minWidth: 350, idealWidth: 390, maxHeight: 280)
                 }
                 .padding(10)
                 .foregroundColor(StudioTheme.textPrimary)
@@ -267,31 +440,33 @@ private struct ModelPicker: View {
         }
     }
 
-    private func row(_ model: String) -> some View {
-        Button {
-            selection = model
-            open = false
-        } label: {
-            HStack {
-                Text(model).font(.system(size: 12, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 0)
-                if model == selection {
-                    Image(systemName: "checkmark").font(.system(size: 10)).foregroundColor(StudioTheme.accent)
-                }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .contentShape(Rectangle())
-            .background(model == selection ? StudioTheme.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-        }
-        .buttonStyle(.plain)
+    private var selectedOption: AIService.AIModelOption? {
+        options.first(where: { $0.id == selection })
     }
 
-    private func load() {
-        guard options == nil else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let catalog = AIService.listModels(provider: provider)
-            DispatchQueue.main.async { options = catalog.models.isEmpty ? nil : catalog.models }
+    private var availableOptions: [AIService.AIModelOption] {
+        guard let capability else { return options }
+        return options.filter { $0.capabilities.contains(capability) }
+    }
+
+    private func row(_ option: AIService.AIModelOption) -> some View {
+        Button {
+            selection = option.id
+            open = false
+        } label: {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                    Text(option.id).font(.system(size: 9, design: .monospaced)).foregroundColor(StudioTheme.textSecondary)
+                }
+                Spacer(minLength: 0)
+                Text(option.capabilitySummary).font(.system(size: 9)).foregroundColor(StudioTheme.bixelGreen)
+                if option.recommended { Image(systemName: "star.fill").font(.system(size: 9)).foregroundColor(.orange) }
+                if option.id == selection { Image(systemName: "checkmark").font(.system(size: 10)).foregroundColor(StudioTheme.accent) }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(option.id == selection ? StudioTheme.accentSoft : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
+        .buttonStyle(.plain)
     }
 }

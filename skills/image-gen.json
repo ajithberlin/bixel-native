@@ -1,0 +1,17 @@
+{
+  "id": "image_gen",
+  "name": "Image generation",
+  "description": "Generate an image or edit a reference image through the connected provider image backend.",
+  "category": "generation",
+  "model": "image",
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "style": { "type": "string", "description": "Optional visual style" },
+      "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+      "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+      "transparent": { "type": "boolean", "default": false },
+      "palette": { "type": "string", "description": "Palette colors or style guidance" }
+    }
+  }
+}
