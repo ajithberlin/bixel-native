@@ -41,6 +41,7 @@ pub mod map_validate;
 pub mod palette;
 pub mod paths;
 pub mod project;
+pub mod sheet;
 pub mod sources;
 pub mod tilemap;
 pub mod timeline;

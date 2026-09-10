@@ -61,6 +61,9 @@ struct BixelApp: App {
                     .keyboardShortcut("0", modifiers: .command)
             }
         }
+        Settings {
+            AISettingsView()
+        }
     }
 
     private func post(_ name: Notification.Name) {

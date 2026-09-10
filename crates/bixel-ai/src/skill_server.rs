@@ -36,6 +36,10 @@ pub struct Artifact {
     pub width: usize,
     pub height: usize,
     pub source: bool,
+    /// Per-frame timeline metadata for sheet artifacts.
+    pub frame_meta: Vec<crate::skills::FrameMeta>,
+    /// Sheet manifest (JSON) describing the frames, when available.
+    pub atlas: Option<String>,
 }
 
 /// Shared runtime state for the skill extension: the image model client, the
@@ -107,7 +111,7 @@ impl SkillServer {
 
     #[tool(
         name = "run_skill",
-        description = "Run a Bixel pixel-art skill. Skills: image_gen, generate_art, spritesheet, next_frame, pixel_image_gen (provider image backend); compress, remove_background, pixel_reduce_colors, pixel_file_compressor, pixel_remove_bg, pixel_8dir_character, pixel_animate_text, pixel_interpolate, pixel_9slice_splitter, pixel_spritesheet_gen, pixel_tileset_gen, pixel_game_ui_gen, pixel_ui_elements_gen, pixel_ui_kit_gen, pixel_game_asset_prep (local, no network). Use image_gen for a user's natural-language request to create or edit an image. Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites and false for image_gen; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Do not compress or request a reduced target implicitly. Raw model sources are retained separately; explicitly prepared assets crop transparent padding before reduction and use nearest-neighbor pixels. Do not use shell, Python, or another tool to fabricate an image. Returns saved image filenames."
+        description = "Run a Bixel pixel-art skill. Skills: image_gen, generate_art, spritesheet, next_frame, pixel_image_gen (provider image backend); compress, remove_background, pixel_reduce_colors, pixel_file_compressor, pixel_remove_bg, pixel_8dir_character, pixel_animate_text, pixel_interpolate, pixel_9slice_splitter, pixel_spritesheet_gen, pixel_tileset_gen, pixel_game_ui_gen, pixel_ui_elements_gen, pixel_ui_kit_gen, pixel_game_asset_prep, import_spritesheet (local, no network). Use import_spritesheet to slice an existing sheet into animation frames from a JSON manifest or grid params. Use image_gen for a user's natural-language request to create or edit an image. Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites and false for image_gen; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Do not compress or request a reduced target implicitly. Raw model sources are retained separately; explicitly prepared assets crop transparent padding before reduction and use nearest-neighbor pixels. Do not use shell, Python, or another tool to fabricate an image. Returns saved image filenames."
     )]
     pub async fn run_skill(
         &self,
@@ -148,7 +152,8 @@ impl SkillServer {
 
         let mut text = output.text.clone();
         let mut saved = Vec::new();
-        let push = |img: &RgbaImage, tag: &str, source: bool| -> Result<String, String> {
+        let push = |img: &RgbaImage, tag: &str, source: bool,
+                    frame_meta: Vec<crate::skills::FrameMeta>, atlas: Option<String>| -> Result<String, String> {
             let png = image::encode_png(img).map_err(|e| e.to_string())?;
             let name = loop {
                 let name = format!("{}_{}.png", tag, counter());
@@ -164,12 +169,18 @@ impl SkillServer {
                 width: img.width,
                 height: img.height,
                 source,
+                frame_meta,
+                atlas,
             });
             Ok(name)
         };
 
+        // The packed sheet carries the full frame list + manifest so the host
+        // can offer "add as animation"; individual frames carry their own meta.
+        let sheet_meta = output.frame_meta.clone();
+        let sheet_atlas = output.atlas.clone();
         if let Some(img) = &output.source_image {
-            match push(img, &format!("{}_source", kind), true) {
+            match push(img, &format!("{}_source", kind), true, vec![], None) {
                 Ok(name) => saved.push(name),
                 Err(e) => return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e, None)),
             }
@@ -177,14 +188,15 @@ impl SkillServer {
         if let Some(img) = &output.image {
             let duplicate = output.source_image.as_ref().is_some_and(|source| source == img);
             if !duplicate {
-                match push(img, &kind.to_string(), false) {
+                match push(img, &kind.to_string(), false, sheet_meta, sheet_atlas) {
                     Ok(name) => saved.push(name),
                     Err(e) => return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e, None)),
                 }
             }
         }
         for (i, frame) in output.frames.iter().enumerate() {
-            match push(frame, &format!("{}_{}", kind, i), false) {
+            let meta = output.frame_meta.get(i).cloned().into_iter().collect();
+            match push(frame, &format!("{}_{}", kind, i), false, meta, None) {
                 Ok(name) => saved.push(name),
                 Err(e) => return Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, e, None)),
             }

@@ -30,7 +30,7 @@ impl ImageGenerator for RecordingGenerator {
 #[test]
 fn all_skills_have_metadata() {
     let specs = Skills::specs();
-    assert_eq!(specs.len(), 20);
+    assert_eq!(specs.len(), 21);
     for spec in &specs {
         assert!(!spec.id.is_empty());
         assert!(!spec.name.is_empty());
@@ -167,6 +167,49 @@ fn ui_slice_skill_returns_frames() {
         ..Default::default()
     };
     let out = Skills::run(None, SkillKind::PixelGameUiGen, input).unwrap();
+    assert_eq!(out.frames.len(), 2);
+}
+
+#[test]
+fn import_spritesheet_skill_slices_with_manifest_meta() {
+    let mut img = RgbaImage::new(4, 2);
+    for y in 0..2 {
+        for x in 0..4 {
+            img.set_pixel(x, y, [(x * 60) as u8, 10, 10, 255]);
+        }
+    }
+    let manifest = serde_json::json!({
+        "cell": {"w": 2, "h": 2},
+        "actions": {
+            "idle": {"frames": [{"x":0,"y":0,"w":2,"h":2,"duration":90}]},
+            "walk": {"frames": [{"x":2,"y":0,"w":2,"h":2,"duration":70}]}
+        }
+    });
+    let input = SkillInput {
+        image: Some(img),
+        params: serde_json::json!({ "manifest": manifest }),
+        ..Default::default()
+    };
+    let out = Skills::run(None, SkillKind::ImportSpritesheet, input).unwrap();
+    assert_eq!(out.frames.len(), 2);
+    assert_eq!(out.frame_meta.len(), 2);
+    assert_eq!(out.frame_meta[0].duration_ms, 90);
+    assert_eq!(out.frame_meta[0].tag.as_deref(), Some("idle"));
+    assert_eq!(out.frame_meta[1].tag.as_deref(), Some("walk"));
+    assert!(out.atlas.is_some());
+    // The first frame crops the left cell (r=0), the second the right (r=120).
+    assert_eq!(out.frames[1].pixel(0, 0)[0], 120);
+}
+
+#[test]
+fn import_spritesheet_skill_accepts_grid_params() {
+    let img = RgbaImage::new(4, 2);
+    let input = SkillInput {
+        image: Some(img),
+        params: serde_json::json!({ "cell_width": 2, "cell_height": 2 }),
+        ..Default::default()
+    };
+    let out = Skills::run(None, SkillKind::ImportSpritesheet, input).unwrap();
     assert_eq!(out.frames.len(), 2);
 }
 

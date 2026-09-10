@@ -110,6 +110,63 @@ final class ProjectStore: ObservableObject {
         return createProject(name: item.name, mode: .normal, width: item.width, height: item.height, pixels: pixels)
     }
 
+    /// Import a single image as a new project (canvas = image size, one frame).
+    @discardableResult
+    func importImageProject(png: Data, name: String) -> StudioProject? {
+        guard !assistant.busy else { return nil }
+        guard let image = AIService.pngToRGBA(png), image.width > 0, image.height > 0,
+              image.width <= 4096, image.height <= 4096 else {
+            self.error = "Choose an image up to 4096 × 4096 pixels."
+            return nil
+        }
+        return createImportedProject(name: name) { _ in
+            let doc = Document(width: image.width, height: image.height)
+            doc.loadImageData(image.rgba, width: image.width, height: image.height, layer: 0, frame: 0)
+            return (doc, WorkspaceDocument(name: name, mode: .normal, width: image.width, height: image.height))
+        }
+    }
+
+    /// Import a spritesheet PNG + manifest as a new animation project: the
+    /// canvas becomes the sheet's frame size and every frame/tag lands on the
+    /// timeline.
+    @discardableResult
+    func importSheetProject(png: Data, manifest: String, name: String) -> StudioProject? {
+        guard !assistant.busy else { return nil }
+        guard let image = AIService.pngToRGBA(png) else {
+            self.error = "Could not decode the spritesheet."
+            return nil
+        }
+        return createImportedProject(name: name) { _ in
+            let doc = try Document.fromSheet(rgba: image.rgba, width: image.width, height: image.height,
+                                             manifest: manifest, layerName: "Sprites")
+            return (doc, WorkspaceDocument(name: name, mode: .normal, width: doc.width, height: doc.height))
+        }
+    }
+
+    private func createImportedProject(
+        name: String,
+        make: (URL) throws -> (Document, WorkspaceDocument)
+    ) -> StudioProject? {
+        do {
+            let id = UUID().uuidString
+            let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": name])!
+            let project = try decode(StudioProject.self, value)
+            let base = root.appendingPathComponent(project.id)
+            let (doc, item) = try make(base)
+            try doc.save(base: base, path: item.path)
+            var nextCatalog = WorkspaceCatalog()
+            nextCatalog.documents = [item]
+            nextCatalog.activeDocumentID = item.id
+            try writeCatalog(nextCatalog, base: base)
+            refresh()
+            try open(project)
+            return project
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
     func closeProject() {
         guard !assistant.busy else { return }
         do {

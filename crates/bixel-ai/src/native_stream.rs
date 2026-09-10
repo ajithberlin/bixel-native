@@ -29,7 +29,21 @@ pub enum NativeEvent {
     Text { id: String, delta: String },
     ToolCall { id: String, name: String, arguments: String },
     ToolResult { id: String, name: String, text: String, success: bool },
-    Artifact { id: String, parent_id: String, name: String, png: String, width: usize, height: usize, source: bool },
+    Artifact {
+        id: String,
+        parent_id: String,
+        name: String,
+        png: String,
+        width: usize,
+        height: usize,
+        source: bool,
+        /// JSON array of per-frame `{duration_ms, tag}` for sheet artifacts.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frame_meta: Option<String>,
+        /// Sheet manifest (JSON) that produced the frames, when available.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        atlas: Option<String>,
+    },
     Usage { input_tokens: i64, output_tokens: i64 },
     Finished,
     Error { message: String },

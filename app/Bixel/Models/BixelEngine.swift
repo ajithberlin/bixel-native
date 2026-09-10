@@ -25,6 +25,11 @@ final class Document: @unchecked Sendable {
         handle = restored
     }
 
+    /// Adopt an already-owned Rust handle (e.g. from `bixel_doc_from_sheet`).
+    fileprivate init(adopting handle: UnsafeMutablePointer<BixelDoc>?) {
+        self.handle = handle
+    }
+
     func save(base: URL, path: String) throws {
         if let error = bixel_doc_save(handle, base.path, path) {
             defer { bixel_string_free(error) }
@@ -228,6 +233,74 @@ final class Document: @unchecked Sendable {
         return Int(index)
     }
 
+    /// Build a new document from a sheet image + JSON manifest (Bixel export,
+    /// atlas/actions, or grid). The canvas becomes the sheet's frame size and
+    /// every frame/tag is materialised in the timeline.
+    static func fromSheet(rgba: [UInt8], width: Int, height: Int,
+                          manifest: String, layerName: String) throws -> Document {
+        guard let w = UInt32(exactly: width), let h = UInt32(exactly: height), w > 0, h > 0 else {
+            throw StorageError.message("Invalid sheet dimensions.")
+        }
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let handle = rgba.withUnsafeBufferPointer { buffer -> UnsafeMutablePointer<BixelDoc>? in
+            manifest.withCString { manifestPtr in
+                layerName.withCString { namePtr in
+                    bixel_doc_from_sheet(buffer.baseAddress, UInt(buffer.count), w, h,
+                                         manifestPtr, namePtr, &errorPtr)
+                }
+            }
+        }
+        guard let handle else {
+            defer { if let errorPtr { bixel_string_free(errorPtr) } }
+            throw StorageError.message(errorPtr.map { String(cString: $0) } ?? "Could not import the spritesheet.")
+        }
+        return Document(adopting: handle)
+    }
+
+    /// Append a sheet plan to this document as new timeline frames on a new
+    /// layer. `replace` clears the existing frames first. Returns frames added.
+    @discardableResult
+    func appendSheet(rgba: [UInt8], width: Int, height: Int,
+                     manifest: String, layerName: String, replace: Bool = false) throws -> Int {
+        guard let w = UInt32(exactly: width), let h = UInt32(exactly: height), w > 0, h > 0 else {
+            throw StorageError.message("Invalid sheet dimensions.")
+        }
+        var errorPtr: UnsafeMutablePointer<CChar>?
+        let added = rgba.withUnsafeBufferPointer { buffer -> Int32 in
+            manifest.withCString { manifestPtr in
+                layerName.withCString { namePtr in
+                    bixel_doc_append_sheet(handle, buffer.baseAddress, UInt(buffer.count), w, h,
+                                           manifestPtr, namePtr, replace, &errorPtr)
+                }
+            }
+        }
+        guard added >= 0 else {
+            defer { if let errorPtr { bixel_string_free(errorPtr) } }
+            throw StorageError.message(errorPtr.map { String(cString: $0) } ?? "Could not import the spritesheet.")
+        }
+        return Int(added)
+    }
+
+    func tags() -> [AnimationTag] {
+        let ptr = bixel_doc_tags_json(handle)
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([AnimationTag].self, from: data)) ?? []
+    }
+
+    @discardableResult
+    func addTag(name: String, from: Int, to: Int, color: String = "#7f7fff") -> Bool {
+        guard from >= 0, to >= from, let f = UInt32(exactly: from), let t = UInt32(exactly: to) else { return false }
+        return name.withCString { n in
+            color.withCString { c in bixel_doc_add_tag(handle, n, f, t, c) }
+        }
+    }
+
+    @discardableResult
+    func removeTag(name: String) -> Bool {
+        name.withCString { bixel_doc_remove_tag(handle, $0) }
+    }
+
     @discardableResult
     func addFrame(durationMs: Int) -> Int {
         Int(bixel_doc_add_frame(handle, UInt32(durationMs)))
@@ -297,6 +370,15 @@ final class Document: @unchecked Sendable {
         buf.withUnsafeMutableBytes { composite(frame: frame, into: $0.baseAddress!) }
         return buf
     }
+}
+
+/// A named frame range in the document (an animation "tag").
+struct AnimationTag: Decodable, Identifiable, Hashable {
+    let name: String
+    let from: Int
+    let to: Int
+    let color: String
+    var id: String { name }
 }
 
 // MARK: - Timeline

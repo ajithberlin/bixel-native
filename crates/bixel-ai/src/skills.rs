@@ -4,7 +4,9 @@
 //! or none for deterministic/local skills). Model-backed skills delegate to the
 //! goose [`Engine`]; deterministic skills run locally against the image crate.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use bixel_core::sheet::SheetPlan;
 
 use crate::error::AiError;
 use crate::image::{self, PackAnchor, RgbaImage};
@@ -45,6 +47,7 @@ pub enum SkillKind {
     PixelUiElementsGen,
     PixelUiKitGen,
     PixelGameAssetPrep,
+    ImportSpritesheet,
 }
 
 impl SkillKind {
@@ -71,6 +74,7 @@ impl SkillKind {
             PixelUiElementsGen,
             PixelUiKitGen,
             PixelGameAssetPrep,
+            ImportSpritesheet,
         ]
     }
 
@@ -109,6 +113,7 @@ impl std::fmt::Display for SkillKind {
             SkillKind::PixelUiElementsGen => "pixel_ui_elements_gen",
             SkillKind::PixelUiKitGen => "pixel_ui_kit_gen",
             SkillKind::PixelGameAssetPrep => "pixel_game_asset_prep",
+            SkillKind::ImportSpritesheet => "import_spritesheet",
         };
         f.write_str(s)
     }
@@ -136,6 +141,21 @@ pub struct SkillInput {
     pub params: serde_json::Value,
 }
 
+/// Per-frame timeline metadata produced alongside sliced `frames`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FrameMeta {
+    #[serde(default)]
+    pub duration_ms: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+impl FrameMeta {
+    pub fn new(duration_ms: u32, tag: Option<String>) -> Self {
+        FrameMeta { duration_ms: duration_ms.max(1), tag }
+    }
+}
+
 /// Output of a skill run: optional text, single image, and/or sliced frames.
 #[derive(Debug, Clone, Default)]
 pub struct SkillOutput {
@@ -144,6 +164,11 @@ pub struct SkillOutput {
     pub text: String,
     pub image: Option<RgbaImage>,
     pub frames: Vec<RgbaImage>,
+    /// Timeline metadata aligned with `frames` (durations + tag/action names).
+    pub frame_meta: Vec<FrameMeta>,
+    /// Optional atlas/sheet manifest (JSON) describing the frames so the result
+    /// can be re-imported as a project or animation.
+    pub atlas: Option<String>,
 }
 
 /// The skill registry. Immutable metadata + a dispatcher.
@@ -177,9 +202,38 @@ impl Skills {
             SkillKind::PixelReduceColors => pixel_reduce_colors(input),
             SkillKind::PixelFileCompressor => pixel_file_compressor(input),
             SkillKind::PixelRemoveBg => pixel_remove_bg(input),
-            SkillKind::PixelEightDirCharacter => pack_frames_skill(input, "8-direction"),
+            SkillKind::PixelEightDirCharacter => {
+                let mut out = pack_frames_skill(input, "8-direction")?;
+                const DIRS: [&str; 8] = ["n", "ne", "e", "se", "s", "sw", "w", "nw"];
+                out.frame_meta = out
+                    .frames
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| FrameMeta::new(100, Some(DIRS[i % DIRS.len()].to_string())))
+                    .collect();
+                Ok(out)
+            }
             SkillKind::PixelAnimateText => pack_frames_skill(input, "animation"),
-            SkillKind::PixelInterpolate => pack_frames_skill(input, "in-between"),
+            SkillKind::PixelInterpolate => {
+                let mut out = pack_frames_skill(input, "in-between")?;
+                let last = out.frames.len().saturating_sub(1);
+                out.frame_meta = out
+                    .frames
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        let tag = if i == 0 {
+                            "start"
+                        } else if i == last {
+                            "end"
+                        } else {
+                            "in-between"
+                        };
+                        FrameMeta::new(100, Some(tag.to_string()))
+                    })
+                    .collect();
+                Ok(out)
+            }
             SkillKind::PixelNineSliceSplitter => pixel_9slice_splitter(input),
             SkillKind::PixelSpritesheetGen => pixel_spritesheet_gen(input),
             SkillKind::PixelTilesetGen => pixel_tileset_gen(input),
@@ -187,8 +241,19 @@ impl Skills {
             SkillKind::PixelUiElementsGen => pixel_ui_slice(input),
             SkillKind::PixelUiKitGen => pixel_ui_kit_gen(input),
             SkillKind::PixelGameAssetPrep => pixel_game_asset_prep(input),
+            SkillKind::ImportSpritesheet => import_spritesheet(input),
         }
+        .map(normalize_frame_meta)
     }
+}
+
+/// Ensure every frame has aligned metadata so downstream importers can rely on
+/// `frame_meta.len() == frames.len()`.
+fn normalize_frame_meta(mut output: SkillOutput) -> SkillOutput {
+    if output.frame_meta.len() != output.frames.len() {
+        output.frame_meta = vec![FrameMeta::new(100, None); output.frames.len()];
+    }
+    output
 }
 
 fn require_gen(gen: Option<&dyn ImageGenerator>) -> Result<&dyn ImageGenerator, AiError> {
@@ -492,6 +557,30 @@ fn spec(kind: SkillKind) -> SkillSpec {
                 "properties": {
                     "max_alpha": { "type": "integer", "minimum": 0, "maximum": 255, "default": 150 },
                     "min_alpha": { "type": "integer", "minimum": 0, "maximum": 255, "default": 0 }
+                }
+            }),
+        ),
+        ImportSpritesheet => spec_gen(
+            kind,
+            "Import spritesheet",
+            "Slice a spritesheet image into animation frames from a JSON manifest \
+             (Bixel export, atlas/actions, or grid). Returns the frames plus their \
+             durations and tags so they can be added to the timeline.",
+            "spritesheet",
+            ModelRole::None,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "manifest": {
+                        "description": "Sheet manifest as a JSON object or string (Bixel export, atlas/actions, or grid)."
+                    },
+                    "cell_width": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                    "cell_height": { "type": "integer", "minimum": 1, "maximum": 4096 },
+                    "cols": { "type": "integer", "minimum": 0, "maximum": 64, "default": 0 },
+                    "rows": { "type": "integer", "minimum": 0, "maximum": 64, "default": 0 },
+                    "margin": { "type": "integer", "minimum": 0, "default": 0 },
+                    "spacing": { "type": "integer", "minimum": 0, "default": 0 },
+                    "duration_ms": { "type": "integer", "minimum": 1, "default": 100 }
                 }
             }),
         ),
@@ -856,6 +945,78 @@ fn pixel_game_asset_prep(input: SkillInput) -> Result<SkillOutput, AiError> {
     })
 }
 
+/// Slice an arbitrary spritesheet into animation frames using the shared
+/// `bixel-core` sheet planner, so the assistant and the file importer agree on
+/// manifest semantics.
+fn import_spritesheet(input: SkillInput) -> Result<SkillOutput, AiError> {
+    let img = require_image(&input)?;
+    let plan = sheet_plan_from_params(&input, img.width as u32, img.height as u32)?;
+    let frames: Vec<RgbaImage> = plan
+        .frames
+        .iter()
+        .map(|f| {
+            image::crop(
+                img,
+                f.x as usize,
+                f.y as usize,
+                f.width as usize,
+                f.height as usize,
+            )
+        })
+        .collect();
+    let frame_meta = plan
+        .frames
+        .iter()
+        .map(|f| FrameMeta::new(f.duration_ms, f.tag.clone()))
+        .collect();
+    Ok(SkillOutput {
+        text: format!("parsed {} frames from the spritesheet", frames.len()),
+        frames,
+        frame_meta,
+        atlas: Some(plan.to_json()),
+        ..Default::default()
+    })
+}
+
+/// Build a [`SheetPlan`] from a skill's `params`: either an explicit `manifest`
+/// (object or JSON string) or grid parameters.
+fn sheet_plan_from_params(input: &SkillInput, image_w: u32, image_h: u32) -> Result<SheetPlan, AiError> {
+    if let Some(manifest) = input.params.get("manifest") {
+        let value = match manifest {
+            serde_json::Value::String(text) => {
+                serde_json::from_str(text).map_err(|e| AiError::Config(format!("invalid sheet manifest: {e}")))?
+            }
+            other => other.clone(),
+        };
+        return SheetPlan::from_json(&value, image_w, image_h).map_err(|e| AiError::Config(e.to_string()));
+    }
+
+    let read = |keys: &[&str]| -> Option<u32> {
+        keys.iter()
+            .find_map(|k| input.params.get(*k).and_then(|v| v.as_u64()))
+            .map(|v| v as u32)
+    };
+    let cell_w = read(&["cell_width", "cellWidth"])
+        .or_else(|| input.params.get("cell").and_then(|c| c.get("w")).and_then(|v| v.as_u64()).map(|v| v as u32))
+        .ok_or_else(|| AiError::Config("import_spritesheet needs a manifest or cell_width/cell_height".into()))?;
+    let cell_h = read(&["cell_height", "cellHeight"])
+        .or_else(|| input.params.get("cell").and_then(|c| c.get("h")).and_then(|v| v.as_u64()).map(|v| v as u32))
+        .ok_or_else(|| AiError::Config("import_spritesheet needs a manifest or cell_width/cell_height".into()))?;
+    let duration = read(&["duration_ms", "duration"]).filter(|d| *d > 0).unwrap_or(100);
+    SheetPlan::from_grid(
+        image_w,
+        image_h,
+        cell_w,
+        cell_h,
+        read(&["margin"]).unwrap_or(0),
+        read(&["spacing"]).unwrap_or(0),
+        read(&["cols"]).unwrap_or(0),
+        read(&["rows"]).unwrap_or(0),
+        duration,
+    )
+    .map_err(|e| AiError::Config(e.to_string()))
+}
+
 // ------------------------------------------------------------------ helpers
 
 fn crop_components(img: &RgbaImage, min_area: usize, dilate: usize, pad: usize) -> Vec<RgbaImage> {
@@ -957,6 +1118,8 @@ pub fn skill_output_to_json(output: &SkillOutput) -> String {
         "image": image,
         "source_image": output.source_image.as_ref().map(b64),
         "frames": frames,
+        "frame_meta": output.frame_meta,
+        "atlas": output.atlas,
     })
     .to_string()
 }
@@ -1339,10 +1502,13 @@ fn prepare_generated(
             "Prepared with aspect fit and transparent padding."
         }
     );
+    let frame_meta = vec![FrameMeta::new(100, None); frames.len()];
     Ok(SkillOutput {
         text,
         image: Some(prepared),
         source_image: Some(source),
         frames,
+        frame_meta,
+        atlas: None,
     })
 }

@@ -420,7 +420,9 @@ private struct AssistantArtifactCard: View {
     @State private var applied = false
 
     private var isSpriteSheet: Bool {
-        artifact.name.lowercased().contains("sheet") || (artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0)
+        artifact.atlas != nil || artifact.frameMeta != nil
+            || artifact.name.lowercased().contains("sheet")
+            || (artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0)
     }
 
     private var provenanceLabel: String { artifact.isSource ? "Original" : "Prepared" }
@@ -452,13 +454,13 @@ private struct AssistantArtifactCard: View {
                 Button("View") { showImage = true }.buttonStyle(.plain).font(.system(size: 10))
 
                 if isSpriteSheet {
-                    Button(applied ? "Imported" : "Import sheet") {
-                        model.importSheet(artifact.data, name: artifact.name)
+                    Button(applied ? "Added" : "Add as animation") {
+                        model.addSheetAsAnimation(artifact.data, manifest: artifact.atlas, name: artifact.name)
                         applied = true
                     }
                     .font(.system(size: 10))
                     .disabled(applied)
-                    .help("Import all frames from this spritesheet into the animation timeline")
+                    .help("Add every frame from this spritesheet to the animation timeline")
                 }
 
                 Button(applied ? "Added" : addLabel) {

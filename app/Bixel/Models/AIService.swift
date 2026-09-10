@@ -34,6 +34,12 @@ enum AIService {
         var readiness: [String: AIRoleReadiness] = [:]
     }
 
+    /// Image generation is available only when the provider connection and
+    /// the image model role have both passed the readiness check.
+    static func imageGenerationIsReady(_ status: AIConnectionStatus) -> Bool {
+        status.connected && status.readiness["image"]?.ready == true
+    }
+
     static func connectionStatus() -> AIConnectionStatus {
         guard let ptr = bixel_ai_connection_status() else { return AIConnectionStatus() }
         defer { bixel_string_free(ptr) }
@@ -444,6 +450,10 @@ struct SkillRunResult: Decodable {
     let source_image: String?
     let image: String?
     let frames: [String]?
+    /// Per-frame durations/tags aligned with `frames`.
+    let frame_meta: [SheetFrameMeta]?
+    /// Sheet manifest (JSON) describing the frames.
+    let atlas: String?
     let error: String?
 }
 
@@ -462,6 +472,10 @@ struct AssistantEvent: Decodable {
     var width: Int?
     var height: Int?
     var source: Bool?
+    /// JSON array of per-frame `{duration_ms, tag}` for sheet artifacts.
+    var frame_meta: String?
+    /// Sheet manifest (JSON) describing the frames.
+    var atlas: String?
     var input_tokens: Int?
     var output_tokens: Int?
 }

@@ -6,6 +6,7 @@
 //! (Swift/Metal, WebGPU, …).
 
 use crate::color::Rgba;
+use crate::sheet::{SheetFrame, SheetImportReport, SheetPlan};
 use serde::{Serialize, Deserialize};
 
 /// Layer blend mode. Only the modes Aseprite supports here are implemented.
@@ -685,6 +686,121 @@ impl AsepriteDoc {
         for existing in &mut self.layers { existing.cels.resize(self.frames.len(), None); }
         self.layers.push(layer);
         Ok(index)
+    }
+
+    /// Copy one sheet region into a canvas-sized cel, clipped to both the sheet
+    /// image and the destination canvas (top-left anchored).
+    fn crop_sheet_cel(
+        data: &[u8],
+        image_w: usize,
+        image_h: usize,
+        frame: &SheetFrame,
+        dst_w: usize,
+        dst_h: usize,
+        layer_index: usize,
+        frame_index: usize,
+    ) -> Cel {
+        let mut cel = Cel::new(layer_index, frame_index, dst_w, dst_h);
+        let src_x = frame.x as usize;
+        let src_y = frame.y as usize;
+        if src_x >= image_w || src_y >= image_h {
+            return cel;
+        }
+        let copy_w = (frame.width as usize).min(dst_w).min(image_w - src_x);
+        let copy_h = (frame.height as usize).min(dst_h).min(image_h - src_y);
+        for row in 0..copy_h {
+            let source = ((src_y + row) * image_w + src_x) * 4;
+            let target = row * dst_w * 4;
+            cel.data[target..target + copy_w * 4]
+                .copy_from_slice(&data[source..source + copy_w * 4]);
+        }
+        cel
+    }
+
+    /// Build a fresh document from a sheet image and its [`SheetPlan`]: the
+    /// canvas is the plan's frame size, each frame becomes a timeline frame with
+    /// its duration, and atlas actions become tags. This is the "import a
+    /// spritesheet as a project" path.
+    pub fn from_sheet(
+        data: &[u8],
+        image_w: usize,
+        image_h: usize,
+        plan: &SheetPlan,
+        layer_name: &str,
+    ) -> Result<Self, String> {
+        Self::validate_image(data, image_w, image_h)?;
+        plan.validate(image_w as u32, image_h as u32)
+            .map_err(|e| e.to_string())?;
+        let canvas_w = plan.canvas_width as usize;
+        let canvas_h = plan.canvas_height as usize;
+        let name = if layer_name.trim().is_empty() { "Sprites" } else { layer_name };
+
+        let mut doc = AsepriteDoc::new(canvas_w, canvas_h, &[]);
+        doc.frames.clear();
+        doc.layers.clear();
+        let mut layer = Layer::new(name);
+        for (index, frame) in plan.frames.iter().enumerate() {
+            doc.frames.push(Frame::new(index, frame.duration_ms.max(1)));
+            let cel = Self::crop_sheet_cel(data, image_w, image_h, frame, canvas_w, canvas_h, 0, index);
+            layer.cels.push(Some(cel));
+        }
+        doc.layers.push(layer);
+        for tag in &plan.tags {
+            doc.add_tag(&tag.name, tag.from as usize, tag.to as usize, &tag.color);
+        }
+        Ok(doc)
+    }
+
+    /// Append a sheet plan to this document as new timeline frames on a new
+    /// layer, preserving the current canvas (frames are clipped to it). When
+    /// `replace` is true the existing frames are cleared first. One undo step.
+    pub fn append_sheet_frames(
+        &mut self,
+        data: &[u8],
+        image_w: usize,
+        image_h: usize,
+        plan: &SheetPlan,
+        layer_name: &str,
+        replace: bool,
+    ) -> Result<SheetImportReport, String> {
+        Self::validate_image(data, image_w, image_h)?;
+        plan.validate(image_w as u32, image_h as u32)
+            .map_err(|e| e.to_string())?;
+
+        if replace {
+            while !self.frames.is_empty() {
+                let last = self.frames.len() - 1;
+                self.remove_frame(last);
+            }
+        }
+
+        self.snapshot();
+        let base = self.frames.len();
+        let name = if layer_name.trim().is_empty() { "Sprites" } else { layer_name };
+        let layer_index = self.add_layer(Some(name));
+        let mut tags_added = 0usize;
+        for frame in plan.frames.iter() {
+            let frame_index = self.add_frame(frame.duration_ms.max(1));
+            let cel = Self::crop_sheet_cel(
+                data, image_w, image_h, frame, self.width, self.height, layer_index, frame_index,
+            );
+            self.layers[layer_index].cels[frame_index] = Some(cel);
+        }
+        for tag in &plan.tags {
+            self.add_tag(
+                &tag.name,
+                base + tag.from as usize,
+                base + tag.to as usize,
+                &tag.color,
+            );
+            tags_added += 1;
+        }
+        Ok(SheetImportReport {
+            layer: layer_index,
+            first_frame: base,
+            frames_added: plan.frames.len(),
+            tags_added,
+        })
     }
 
     /// Draw a polyline stroke with a round brush of the given radius.

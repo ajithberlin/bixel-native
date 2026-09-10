@@ -385,6 +385,11 @@ where
                             let artifacts: Vec<Artifact> =
                                 std::mem::take(&mut *runtime.artifacts.lock().unwrap());
                             for artifact in artifacts {
+                                let frame_meta = if artifact.frame_meta.is_empty() {
+                                    None
+                                } else {
+                                    serde_json::to_string(&artifact.frame_meta).ok()
+                                };
                                 if !emit(NativeEvent::Artifact {
                                     id: artifact.name.clone(),
                                     parent_id: resp.id.clone(),
@@ -393,6 +398,8 @@ where
                                     width: artifact.width,
                                     height: artifact.height,
                                     source: artifact.source,
+                                    frame_meta,
+                                    atlas: artifact.atlas,
                                 }) {
                                     return false;
                                 }

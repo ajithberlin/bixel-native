@@ -691,9 +691,27 @@ struct HomePageView: View {
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             let name = url.deletingPathExtension().lastPathComponent
-            if let project = store.createProject(name: name, mode: .normal, width: 64, height: 64) {
-                onOpenProject(project)
+
+            var imageURL = url
+            var manifest: String?
+            if url.pathExtension.lowercased() == "json" {
+                guard let sibling = SheetImport.siblingImage(for: url) else {
+                    store.error = "Choose a PNG spritesheet, or a JSON manifest next to its image."
+                    return
+                }
+                imageURL = sibling
+                manifest = (try? Data(contentsOf: url)).flatMap(SheetImport.manifest(fromJSON:))
+            } else {
+                manifest = SheetImport.sidecarManifest(for: url)
             }
+
+            guard let data = try? Data(contentsOf: imageURL) else {
+                store.error = "Could not read that file."
+                return
+            }
+            let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
+                ?? store.importImageProject(png: data, name: name)
+            if let project { onOpenProject(project) }
         }
     }
 }

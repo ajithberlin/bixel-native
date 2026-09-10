@@ -130,6 +130,15 @@ fn out_cstr(s: String) -> *mut c_char {
     CString::new(s).unwrap_or_default().into_raw()
 }
 
+/// Write an owned error string to a caller out-param (freed with
+/// [`bixel_string_free`]). A null pointer is ignored.
+#[doc(hidden)]
+unsafe fn write_err(err: *mut *mut c_char, message: String) {
+    if !err.is_null() {
+        unsafe { *err = out_cstr(message) };
+    }
+}
+
 /// Free a string returned by any `bixel_*` function that returns `char*`.
 #[no_mangle]
 pub unsafe extern "C" fn bixel_string_free(ptr: *mut c_char) {
@@ -424,6 +433,188 @@ pub unsafe extern "C" fn bixel_doc_import_sheet(
     unsafe { doc(ptr) }.lock().unwrap()
         .import_sheet_data(data, width as usize, height as usize, cell_width as usize, cell_height as usize, name)
         .map_or(-1, |index| index as i32)
+}
+
+/// Build a new document from an RGBA sheet image plus a JSON manifest
+/// (Bixel export, atlas/actions, or grid). Returns an owned `BixelDoc*` — free
+/// with [`bixel_doc_free`] — or null with `*err` set (free with
+/// [`bixel_string_free`]). This is the "import a spritesheet as a project" path.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_from_sheet(
+    data: *const u8,
+    data_len: usize,
+    image_width: u32,
+    image_height: u32,
+    manifest_json: *const c_char,
+    layer_name: *const c_char,
+    err: *mut *mut c_char,
+) -> *mut BixelDoc {
+    if data.is_null() || data_len == 0 || data_len > 256 * 1024 * 1024 {
+        unsafe { write_err(err, "Invalid sheet pixel buffer".into()) };
+        return std::ptr::null_mut();
+    }
+    let expected = (image_width as usize)
+        .checked_mul(image_height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if expected != Some(data_len) {
+        unsafe { write_err(err, "Sheet dimensions do not match the pixel buffer".into()) };
+        return std::ptr::null_mut();
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    let plan = match bixel_core::sheet::SheetPlan::from_json_str(
+        &arg_str(manifest_json),
+        image_width,
+        image_height,
+    ) {
+        Ok(plan) => plan,
+        Err(e) => {
+            unsafe { write_err(err, e.to_string()) };
+            return std::ptr::null_mut();
+        }
+    };
+    let name = if layer_name.is_null() { "Sprites".to_string() } else { arg_str(layer_name) };
+    match AsepriteDoc::from_sheet(slice, image_width as usize, image_height as usize, &plan, &name) {
+        Ok(document) => Box::into_raw(Box::new(Arc::new(Mutex::new(document)))) as *mut BixelDoc,
+        Err(e) => {
+            unsafe { write_err(err, e) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Append a sheet plan to an existing document as new timeline frames on a new
+/// layer, preserving the current canvas. `replace` clears the existing frames
+/// first. Returns the number of frames added, or -1 with `*err` set. One undo step.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_append_sheet(
+    ptr: *mut BixelDoc,
+    data: *const u8,
+    data_len: usize,
+    image_width: u32,
+    image_height: u32,
+    manifest_json: *const c_char,
+    layer_name: *const c_char,
+    replace: bool,
+    err: *mut *mut c_char,
+) -> i32 {
+    if ptr.is_null() || data.is_null() || data_len == 0 || data_len > 256 * 1024 * 1024 {
+        unsafe { write_err(err, "Invalid sheet pixel buffer".into()) };
+        return -1;
+    }
+    let expected = (image_width as usize)
+        .checked_mul(image_height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if expected != Some(data_len) {
+        unsafe { write_err(err, "Sheet dimensions do not match the pixel buffer".into()) };
+        return -1;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, data_len) };
+    let plan = match bixel_core::sheet::SheetPlan::from_json_str(
+        &arg_str(manifest_json),
+        image_width,
+        image_height,
+    ) {
+        Ok(plan) => plan,
+        Err(e) => {
+            unsafe { write_err(err, e.to_string()) };
+            return -1;
+        }
+    };
+    let name = if layer_name.is_null() { "Sprites".to_string() } else { arg_str(layer_name) };
+    let mut document = lock_doc(ptr);
+    match document.append_sheet_frames(
+        slice,
+        image_width as usize,
+        image_height as usize,
+        &plan,
+        &name,
+        replace,
+    ) {
+        Ok(report) => report.frames_added as i32,
+        Err(e) => {
+            unsafe { write_err(err, e) };
+            -1
+        }
+    }
+}
+
+/// Parse a sheet manifest without touching a document. Returns a JSON
+/// `SheetPlan` (canvas, frames, tags) or `{"error": "..."}`. Free with
+/// [`bixel_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn bixel_sheet_plan_json(
+    image_width: u32,
+    image_height: u32,
+    manifest_json: *const c_char,
+) -> *mut c_char {
+    match bixel_core::sheet::SheetPlan::from_json_str(
+        &arg_str(manifest_json),
+        image_width,
+        image_height,
+    ) {
+        Ok(plan) => out_cstr(plan.to_json()),
+        Err(e) => out_cstr(serde_json::json!({ "error": e.to_string() }).to_string()),
+    }
+}
+
+// --------------------------------------------------------------------- tags
+
+/// Number of tags (named frame ranges) in the document.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_tag_count(ptr: *const BixelDoc) -> u32 {
+    unsafe { doc_ref(ptr) }.lock().unwrap().tags.len() as u32
+}
+
+/// All tags as a JSON array of `{name, from, to, color}`. Free with
+/// [`bixel_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_tags_json(ptr: *const BixelDoc) -> *mut c_char {
+    let doc = unsafe { doc_ref(ptr) }.lock().unwrap();
+    out_cstr(serde_json::to_string(&doc.tags).unwrap_or_else(|_| "[]".into()))
+}
+
+/// Add or replace a tag by name. Returns true on success.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_add_tag(
+    ptr: *mut BixelDoc,
+    name: *const c_char,
+    from: u32,
+    to: u32,
+    color: *const c_char,
+) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let name = arg_str(name);
+    if name.trim().is_empty() {
+        return false;
+    }
+    let mut document = lock_doc(ptr);
+    let frame_count = document.frames.len();
+    let from = from as usize;
+    let to = to as usize;
+    if frame_count == 0 || from > to || to >= frame_count {
+        return false;
+    }
+    let color = {
+        let c = arg_str(color);
+        if c.trim().is_empty() { "#7f7fff".to_string() } else { c }
+    };
+    document.add_tag(&name, from, to, &color);
+    true
+}
+
+/// Remove a tag by name. Returns true when a tag was removed.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_remove_tag(ptr: *mut BixelDoc, name: *const c_char) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
+    let name = arg_str(name);
+    let mut document = lock_doc(ptr);
+    let before = document.tags.len();
+    document.remove_tag(&name);
+    document.tags.len() != before
 }
 
 /// Rasterise a polyline stroke with a round brush (one FFI call per gesture).

@@ -30,17 +30,24 @@ struct AssistantArtifact: Identifiable, Codable {
     let width: Int
     let height: Int
     let isSource: Bool
+    /// Per-frame timeline metadata when this artifact is a sliced sheet.
+    var frameMeta: [SheetFrameMeta]?
+    /// Sheet manifest (JSON) describing the frames, when available.
+    var atlas: String?
 
-    init(id: String, name: String, data: Data, width: Int, height: Int, isSource: Bool = false) {
+    init(id: String, name: String, data: Data, width: Int, height: Int, isSource: Bool = false,
+         frameMeta: [SheetFrameMeta]? = nil, atlas: String? = nil) {
         self.id = id
         self.name = name
         self.data = data
         self.width = width
         self.height = height
         self.isSource = isSource
+        self.frameMeta = frameMeta
+        self.atlas = atlas
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, data, width, height, isSource }
+    private enum CodingKeys: String, CodingKey { case id, name, data, width, height, isSource, frameMeta, atlas }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -50,6 +57,8 @@ struct AssistantArtifact: Identifiable, Codable {
         width = try values.decode(Int.self, forKey: .width)
         height = try values.decode(Int.self, forKey: .height)
         isSource = try values.decodeIfPresent(Bool.self, forKey: .isSource) ?? false
+        frameMeta = try values.decodeIfPresent([SheetFrameMeta].self, forKey: .frameMeta)
+        atlas = try values.decodeIfPresent(String.self, forKey: .atlas)
     }
 }
 
@@ -300,16 +309,23 @@ final class AssistantSession: ObservableObject {
                 let result = AIService.runSkill(id: command.id, prompt: imagePrompt,
                                                 png: files.first(where: \.isImage)?.data ?? canvasPNG)
                 if let result {
-                    var outputs: [(png: String, source: Bool)] = []
-                    if let source = result.source_image { outputs.append((source, true)) }
-                    if let image = result.image { outputs.append((image, false)) }
-                    outputs += (result.frames ?? []).map { ($0, false) }
+                    var outputs: [(png: String, source: Bool, meta: [SheetFrameMeta]?, atlas: String?)] = []
+                    if let source = result.source_image { outputs.append((source, true, nil, nil)) }
+                    if let image = result.image { outputs.append((image, false, result.frame_meta, result.atlas)) }
+                    for (index, frame) in (result.frames ?? []).enumerated() {
+                        let meta = result.frame_meta.flatMap { $0.indices.contains(index) ? [$0[index]] : nil }
+                        outputs.append((frame, false, meta, nil))
+                    }
                     for (index, output) in outputs.enumerated() {
                         do {
                             guard Data(base64Encoded: output.png) != nil else { throw StorageError.message("Invalid generated image") }
                             let name = output.source ? "\(command.id)_source_\(index + 1).png" : "\(command.id)_\(index + 1).png"
+                            let metaJSON = output.meta
+                                .flatMap { try? JSONEncoder().encode($0) }
+                                .flatMap { String(data: $0, encoding: .utf8) }
                             receive(AssistantEvent(type: "artifact", id: "local-\(index)", parent_id: "local", name: name,
-                                                    png: output.png, source: output.source))
+                                                    png: output.png, source: output.source,
+                                                    frame_meta: metaJSON, atlas: output.atlas))
                         } catch { receive(AssistantEvent(type: "error", message: "Could not save generated image: \(error.localizedDescription)")) }
                     }
                     receive(AssistantEvent(type: "tool_result", id: "local", name: command.id, text: result.error ?? result.text ?? "Completed", success: result.error == nil))
@@ -352,8 +368,12 @@ final class AssistantSession: ObservableObject {
                     h = decoded.height
                 }
                 let source = event.source ?? event.name?.lowercased().contains("_source_") ?? false
+                let meta = event.frame_meta
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? JSONDecoder().decode([SheetFrameMeta].self, from: $0) }
                 let artifact = AssistantArtifact(id: id, name: event.name ?? "Image", data: data,
-                                                  width: w, height: h, isSource: source)
+                                                  width: w, height: h, isSource: source,
+                                                  frameMeta: meta, atlas: event.atlas)
                 if let index = blocks.firstIndex(where: { $0.id == event.parent_id }) { blocks[index].artifacts.append(artifact) }
                 persistArtifact(data, suggestedName: event.name ?? "generated.png")
             }

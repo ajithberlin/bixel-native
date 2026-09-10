@@ -1548,13 +1548,27 @@ final class EditorModel: ObservableObject {
         )
     }
 
-    func importSheet(_ data: Data, name: String) {
+    /// Append a spritesheet to the timeline as animation frames. A JSON manifest
+    /// (Bixel export / atlas / grid) controls slicing, durations, and tags;
+    /// without one, the sheet is sliced on the current canvas grid.
+    func addSheetAsAnimation(_ data: Data, manifest: String? = nil, name: String) {
+        operationError = nil
         guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the sheet."; return }
+        let manifest = manifest ?? SheetImport.gridManifest(cellWidth: width, cellHeight: height)
         do {
-            activeLayer = try document.importSheetData(image.rgba, width: image.width, height: image.height,
-                                                       cellWidth: width, cellHeight: height, name: name)
-            frame = 0; reloadLayers(); commitChange(allFrames: true)
+            let added = try document.appendSheet(
+                rgba: image.rgba, width: image.width, height: image.height,
+                manifest: manifest, layerName: name, replace: false
+            )
+            frame = max(0, document.frameCount - added)
+            activeLayer = max(0, document.layerCount - 1)
+            reloadLayers()
+            commitChange(allFrames: true)
         } catch { operationError = error.localizedDescription }
+    }
+
+    func importSheet(_ data: Data, name: String) {
+        addSheetAsAnimation(data, manifest: nil, name: name)
     }
 
     /// Begin a native-resolution image import for a new animation frame. The

@@ -7,6 +7,17 @@ struct AICreationFlowTests {
     @MainActor static func main() throws {
         _ = NSApplication.shared
 
+        let unconfiguredStatus = AIService.AIConnectionStatus()
+        precondition(!AIService.imageGenerationIsReady(unconfiguredStatus))
+        var readyStatus = AIService.AIConnectionStatus()
+        readyStatus.connected = true
+        readyStatus.readiness["image"] = AIService.AIRoleReadiness(
+            model: "pixel-model",
+            ready: true,
+            reason: ""
+        )
+        precondition(AIService.imageGenerationIsReady(readyStatus))
+
         let request = AICreationRequest(
             prompt: "A neon slime with an electric aura",
             size: 128,
