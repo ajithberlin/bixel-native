@@ -251,9 +251,12 @@ struct ContentView: View {
                 .allowsHitTesting(projects.activeDocument != nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Eyedropper Magnifying Loupe Overlay
+            EyedropperOverlayView(model: model)
+
             // Left vertical brush dock, vertically centered.
             HStack {
-                LeftBrushDock(model: model)
+                LeftBrushDock(model: model, viewport: viewport)
                     .padding(.leading, 14)
                     .disabled(projects.activeDocument == nil)
                 Spacer()
@@ -300,32 +303,39 @@ struct ContentView: View {
             // Top navigation bar & Bottom timeline
             spriteTopChrome
         }
+        .coordinateSpace(name: "CanvasCoordinateSpace")
         .disabled(projects.current == nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var spriteTopChrome: some View {
         VStack(spacing: 0) {
-            TopBar(
-                model: model,
-                viewport: viewport,
-                projectName: projects.current?.name ?? "Bixel Project",
-                onShowProjects: {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        currentScreen = .home
-                    }
-                },
-                onGoHome: {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        currentScreen = .home
-                    }
-                },
-                showLayers: $showLayers,
-                showColor: $showColor,
-                showAI: $showAI,
-                showTimeline: $showTimeline,
-                onNewDocument: { showNewDocument = true }
-            )
+            ZStack(alignment: .top) {
+                TopBar(
+                    model: model,
+                    viewport: viewport,
+                    projectName: projects.current?.name ?? "Bixel Project",
+                    onShowProjects: {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            currentScreen = .home
+                        }
+                    },
+                    onGoHome: {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            currentScreen = .home
+                        }
+                    },
+                    showLayers: $showLayers,
+                    showColor: $showColor,
+                    showAI: $showAI,
+                    showTimeline: $showTimeline,
+                    onNewDocument: { showNewDocument = true }
+                )
+
+                EyedropperBannerOverlay(model: model)
+            }
+            .animation(.easeInOut(duration: 0.18), value: model.eyedropperSession?.isActive)
+            .zIndex(10)
 
             Spacer()
 

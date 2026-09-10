@@ -29,6 +29,28 @@ enum Tool: String, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
 }
 
+struct EyedropperSession: Equatable {
+    var isActive: Bool = false
+    var viewPosition: CGPoint = .zero
+    var docPixel: (x: Int, y: Int) = (0, 0)
+    var previousColor: BixelColor = BixelColor(r: 0, g: 0, b: 0, a: 255)
+    var currentColor: BixelColor = BixelColor(r: 0, g: 0, b: 0, a: 255)
+    var colorName: String = ""
+    var magnifiedCrop: CGImage? = nil
+    var sourceTool: Tool? = nil
+
+    static func == (lhs: EyedropperSession, rhs: EyedropperSession) -> Bool {
+        lhs.isActive == rhs.isActive &&
+        lhs.viewPosition == rhs.viewPosition &&
+        lhs.docPixel.x == rhs.docPixel.x &&
+        lhs.docPixel.y == rhs.docPixel.y &&
+        lhs.previousColor == rhs.previousColor &&
+        lhs.currentColor == rhs.currentColor &&
+        lhs.colorName == rhs.colorName &&
+        lhs.sourceTool == rhs.sourceTool
+    }
+}
+
 /// The four draggable corners of a free-transform box.
 enum TransformCorner: CaseIterable {
     case topLeft, topRight, bottomRight, bottomLeft
@@ -81,6 +103,7 @@ final class EditorModel: ObservableObject {
     @Published var brushSize: Double = 3
     @Published var opacity: Double = 1.0
     @Published var currentColor: BixelColor = BixelColor(r: 24, g: 24, b: 24, a: 255)
+    @Published var eyedropperSession: EyedropperSession? = nil
 
     // Canvas background
     @Published var canvasBackgroundColor: BixelColor = BixelColor(r: 104, g: 178, b: 240, a: 255) {
@@ -663,6 +686,17 @@ final class EditorModel: ObservableObject {
         }
     }
 
+    /// Abort an in-flight stroke, reverting the initial snapshot dot so no
+    /// stray pixels are left behind (used when transitioning to long-press eyedropper).
+    func abortStroke() {
+        if strokeChanged {
+            document.undo()
+            strokeChanged = false
+            lastPoint = nil
+            pixelsChanged()
+        }
+    }
+
     /// Shift-draw: a straight line with the current brush. With no drag
     /// (Shift+click), the line starts where the previous stroke ended —
     /// Photoshop-style connected lines.
@@ -689,12 +723,166 @@ final class EditorModel: ObservableObject {
         return drawColor
     }
 
-    func pick(x: Int, y: Int) {
-        let c = document.getPixel(layer: activeLayer, frame: frame, x: x, y: y)
-        if c.a > 0 {
-            currentColor = c
-            opacity = 1.0
+    // MARK: - Eyedropper & Loupe
+
+    /// Sample the composited visible canvas pixel at `(x, y)` taking transparency
+    /// and background color into account.
+    func sampleCompositePixel(x: Int, y: Int) -> BixelColor {
+        guard x >= 0, x < width, y >= 0, y < height else {
+            return showBackgroundColor ? canvasBackgroundColor : BixelColor(r: 128, g: 128, b: 128, a: 255)
         }
+        let pixels = compositeCurrentFrame()
+        let idx = (y * width + x) * 4
+        guard idx + 3 < pixels.count else {
+            return showBackgroundColor ? canvasBackgroundColor : BixelColor(r: 128, g: 128, b: 128, a: 255)
+        }
+        let r = pixels[idx]
+        let g = pixels[idx + 1]
+        let b = pixels[idx + 2]
+        let a = pixels[idx + 3]
+
+        if a == 255 {
+            return BixelColor(r: r, g: g, b: b, a: 255)
+        } else if a > 0 {
+            if showBackgroundColor {
+                let alphaF = Double(a) / 255.0
+                let bgR = Double(canvasBackgroundColor.r)
+                let bgG = Double(canvasBackgroundColor.g)
+                let bgB = Double(canvasBackgroundColor.b)
+                let finalR = UInt8((Double(r) * alphaF + bgR * (1.0 - alphaF)).rounded())
+                let finalG = UInt8((Double(g) * alphaF + bgG * (1.0 - alphaF)).rounded())
+                let finalB = UInt8((Double(b) * alphaF + bgB * (1.0 - alphaF)).rounded())
+                return BixelColor(r: finalR, g: finalG, b: finalB, a: 255)
+            } else {
+                return BixelColor(r: r, g: g, b: b, a: 255)
+            }
+        } else {
+            return showBackgroundColor ? canvasBackgroundColor : BixelColor(r: 128, g: 128, b: 128, a: 255)
+        }
+    }
+
+    /// Extract an un-interpolated (nearest-neighbor) square patch around `center`
+    /// for the magnifying loupe.
+    func generateLoupeCrop(around center: (x: Int, y: Int), radius: Int = 7) -> CGImage? {
+        let size = radius * 2 + 1
+        var cropBuffer = [UInt8](repeating: 0, count: size * size * 4)
+        let pixels = compositeCurrentFrame()
+
+        for dy in -radius...radius {
+            let py = center.y + dy
+            let targetRow = dy + radius
+            for dx in -radius...radius {
+                let px = center.x + dx
+                let targetCol = dx + radius
+                let destIdx = (targetRow * size + targetCol) * 4
+
+                if px >= 0 && px < width && py >= 0 && py < height {
+                    let srcIdx = (py * width + px) * 4
+                    if srcIdx + 3 < pixels.count {
+                        let r = pixels[srcIdx]
+                        let g = pixels[srcIdx + 1]
+                        let b = pixels[srcIdx + 2]
+                        let a = pixels[srcIdx + 3]
+                        if a == 255 {
+                            cropBuffer[destIdx] = r
+                            cropBuffer[destIdx + 1] = g
+                            cropBuffer[destIdx + 2] = b
+                            cropBuffer[destIdx + 3] = 255
+                        } else if a > 0 {
+                            if showBackgroundColor {
+                                let alphaF = Double(a) / 255.0
+                                cropBuffer[destIdx] = UInt8((Double(r) * alphaF + Double(canvasBackgroundColor.r) * (1.0 - alphaF)).rounded())
+                                cropBuffer[destIdx + 1] = UInt8((Double(g) * alphaF + Double(canvasBackgroundColor.g) * (1.0 - alphaF)).rounded())
+                                cropBuffer[destIdx + 2] = UInt8((Double(b) * alphaF + Double(canvasBackgroundColor.b) * (1.0 - alphaF)).rounded())
+                                cropBuffer[destIdx + 3] = 255
+                            } else {
+                                cropBuffer[destIdx] = r
+                                cropBuffer[destIdx + 1] = g
+                                cropBuffer[destIdx + 2] = b
+                                cropBuffer[destIdx + 3] = a
+                            }
+                        } else {
+                            if showBackgroundColor {
+                                cropBuffer[destIdx] = canvasBackgroundColor.r
+                                cropBuffer[destIdx + 1] = canvasBackgroundColor.g
+                                cropBuffer[destIdx + 2] = canvasBackgroundColor.b
+                                cropBuffer[destIdx + 3] = 255
+                            } else {
+                                // Transparent checkerboard gray
+                                let isEven = ((px / 4) + (py / 4)) % 2 == 0
+                                let v: UInt8 = isEven ? 140 : 100
+                                cropBuffer[destIdx] = v
+                                cropBuffer[destIdx + 1] = v
+                                cropBuffer[destIdx + 2] = v
+                                cropBuffer[destIdx + 3] = 255
+                            }
+                        }
+                    }
+                } else {
+                    // Out-of-bounds workspace background (~#121316)
+                    cropBuffer[destIdx] = 18
+                    cropBuffer[destIdx + 1] = 19
+                    cropBuffer[destIdx + 2] = 22
+                    cropBuffer[destIdx + 3] = 255
+                }
+            }
+        }
+
+        return makeCGImage(pixels: cropBuffer, width: size, height: size)
+    }
+
+    func startEyedropperSession(at docPixel: (x: Int, y: Int), viewPosition: CGPoint, sourceTool: Tool? = nil) {
+        let sampled = sampleCompositePixel(x: docPixel.x, y: docPixel.y)
+        let crop = generateLoupeCrop(around: docPixel)
+        eyedropperSession = EyedropperSession(
+            isActive: true,
+            viewPosition: viewPosition,
+            docPixel: docPixel,
+            previousColor: currentColor,
+            currentColor: sampled,
+            colorName: sampled.descriptiveName,
+            magnifiedCrop: crop,
+            sourceTool: sourceTool ?? tool
+        )
+        currentColor = sampled
+    }
+
+    func updateEyedropperSession(at docPixel: (x: Int, y: Int), viewPosition: CGPoint) {
+        guard var session = eyedropperSession, session.isActive else { return }
+        let sampled = sampleCompositePixel(x: docPixel.x, y: docPixel.y)
+        let crop = generateLoupeCrop(around: docPixel)
+        session.viewPosition = viewPosition
+        session.docPixel = docPixel
+        session.currentColor = sampled
+        session.colorName = sampled.descriptiveName
+        session.magnifiedCrop = crop
+        eyedropperSession = session
+        currentColor = sampled
+    }
+
+    func commitEyedropperSession() {
+        guard let session = eyedropperSession, session.isActive else { return }
+        currentColor = session.currentColor
+        opacity = 1.0
+        if let src = session.sourceTool, src != .eyedropper {
+            selectTool(src)
+        }
+        eyedropperSession = nil
+    }
+
+    func cancelEyedropperSession() {
+        guard let session = eyedropperSession, session.isActive else { return }
+        currentColor = session.previousColor
+        if let src = session.sourceTool, src != .eyedropper {
+            selectTool(src)
+        }
+        eyedropperSession = nil
+    }
+
+    func pick(x: Int, y: Int) {
+        let c = sampleCompositePixel(x: x, y: y)
+        currentColor = c
+        opacity = 1.0
     }
 
     // MARK: - Animation

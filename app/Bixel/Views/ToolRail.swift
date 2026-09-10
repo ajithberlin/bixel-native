@@ -10,6 +10,13 @@ import SwiftUI
 
 struct LeftBrushDock: View {
     @ObservedObject var model: EditorModel
+    var viewport: CanvasViewport? = nil
+
+    @State private var isDraggingEyedropper = false
+
+    private var isEyedropperActive: Bool {
+        model.tool == .eyedropper || model.eyedropperSession?.isActive == true
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -23,20 +30,8 @@ struct LeftBrushDock: View {
                     title: "Size"
                 )
 
-                // Middle square button (Quick Eyedropper)
-                Button {
-                    model.selectTool((model.tool == .eyedropper) ? .pencil : .eyedropper)
-                } label: {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(model.tool == .eyedropper ? StudioTheme.accent : Color.white.opacity(0.45), lineWidth: 1.5)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(model.tool == .eyedropper ? StudioTheme.accentSoft : Color.white.opacity(0.08))
-                        )
-                        .frame(width: 18, height: 18)
-                }
-                .buttonStyle(.plain)
-                .help("Eyedropper tool")
+                // Middle Modify / Eyedropper button (Procreate style)
+                modifyButton
 
                 // Brush opacity slider
                 ProcreateVerticalSlider(
@@ -86,6 +81,61 @@ struct LeftBrushDock: View {
                 .help("Redo (⇧⌘Z)")
             }
         }
+    }
+
+    private var modifyButton: some View {
+        Button {
+            model.selectTool((model.tool == .eyedropper) ? .pencil : .eyedropper)
+        } label: {
+            ZStack {
+                // Outer container background
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isEyedropperActive ? StudioTheme.accentSoft : Color.white.opacity(0.08))
+                    .frame(width: 24, height: 24)
+
+                // Outer border
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(
+                        isEyedropperActive ? StudioTheme.accent : Color.white.opacity(0.35),
+                        lineWidth: isEyedropperActive ? 1.5 : 1.0
+                    )
+                    .frame(width: 24, height: 24)
+
+                // Inner rounded rectangle icon (Procreate modify button icon)
+                RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                    .strokeBorder(
+                        isEyedropperActive ? StudioTheme.accent : Color.white.opacity(0.65),
+                        lineWidth: 1.2
+                    )
+                    .frame(width: 12, height: 12)
+            }
+            .shadow(color: isEyedropperActive ? StudioTheme.accent.opacity(0.4) : .clear, radius: 4)
+        }
+        .buttonStyle(.plain)
+        .help("Modify / Eyedropper: tap to toggle or drag onto canvas to pick color")
+        .highPriorityGesture(
+            DragGesture(minimumDistance: 4, coordinateSpace: .named("CanvasCoordinateSpace"))
+                .onChanged { gesture in
+                    isDraggingEyedropper = true
+                    guard let viewport else { return }
+                    let point = gesture.location
+                    let appKitPoint = CGPoint(x: point.x, y: viewport.lastViewSize.height - point.y)
+                    if let pixel = viewport.viewToDoc(appKitPoint, viewSize: viewport.lastViewSize,
+                                                      width: model.width, height: model.height, clamp: true) {
+                        if model.eyedropperSession?.isActive != true {
+                            model.startEyedropperSession(at: pixel, viewPosition: point, sourceTool: model.tool)
+                        } else {
+                            model.updateEyedropperSession(at: pixel, viewPosition: point)
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    if isDraggingEyedropper {
+                        isDraggingEyedropper = false
+                        model.commitEyedropperSession()
+                    }
+                }
+        )
     }
 }
 

@@ -152,6 +152,12 @@ final class PixelCanvas: NSView {
     private var transformStartPoint: CGPoint = .zero
     private var didTransformDrag = false
 
+    // Long-press Eyedropper state
+    private var eyedropperGesture = false
+    private var isLongPressActive = false
+    private var longPressWorkItem: DispatchWorkItem?
+    private var longPressStartPoint: CGPoint = .zero
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupLayers()
@@ -516,6 +522,17 @@ final class PixelCanvas: NSView {
         }
         let point = convert(event.locationInWindow, from: nil)
         if let coordinator {
+            if coordinator.model.tool == .eyedropper {
+                eyedropperGesture = true
+                isLongPressActive = false
+                longPressWorkItem?.cancel()
+                longPressWorkItem = nil
+                let swiftUIPoint = CGPoint(x: point.x, y: bounds.height - point.y)
+                if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                    coordinator.model.startEyedropperSession(at: pixel, viewPosition: swiftUIPoint, sourceTool: .eyedropper)
+                }
+                return
+            }
             if coordinator.model.tool == .selection {
                 selectionGesture = true
                 // A marquee may begin just outside the artboard so full-canvas
@@ -555,10 +572,51 @@ final class PixelCanvas: NSView {
             return
         }
         coordinator?.begin(at: point, in: self)
+
+        // Long-press detection for Procreate-style canvas color picking
+        if let coordinator, coordinator.model.tool == .pencil || coordinator.model.tool == .eraser || coordinator.model.tool == .smudge {
+            longPressStartPoint = point
+            isLongPressActive = false
+            longPressWorkItem?.cancel()
+
+            let workItem = DispatchWorkItem { [weak self, weak coordinator] in
+                guard let self, let coordinator else { return }
+                guard !self.panning, !self.lineGesture, !self.selectionGesture, !self.transformGesture, !self.resizeGesture else { return }
+                coordinator.model.abortStroke()
+                self.isLongPressActive = true
+                let swiftUIPoint = CGPoint(x: self.longPressStartPoint.x, y: self.bounds.height - self.longPressStartPoint.y)
+                if let pixel = coordinator.pixelCoordinate(self.longPressStartPoint, in: self, clamp: true) {
+                    coordinator.model.startEyedropperSession(
+                        at: pixel,
+                        viewPosition: swiftUIPoint,
+                        sourceTool: coordinator.model.tool
+                    )
+                }
+            }
+            longPressWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.26, execute: workItem)
+        }
     }
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if eyedropperGesture || isLongPressActive {
+            let swiftUIPoint = CGPoint(x: point.x, y: bounds.height - point.y)
+            if let coordinator, let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                coordinator.model.updateEyedropperSession(at: pixel, viewPosition: swiftUIPoint)
+            }
+            return
+        }
+
+        if let item = longPressWorkItem, !item.isCancelled {
+            let dx = point.x - longPressStartPoint.x
+            let dy = point.y - longPressStartPoint.y
+            if hypot(dx, dy) > 4.0 {
+                item.cancel()
+                longPressWorkItem = nil
+            }
+        }
+
         if panning {
             coordinator?.viewport.panBy(dx: point.x - lastPanPoint.x, dy: point.y - lastPanPoint.y)
             lastPanPoint = point
@@ -602,6 +660,21 @@ final class PixelCanvas: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        longPressWorkItem?.cancel()
+        longPressWorkItem = nil
+
+        if eyedropperGesture {
+            eyedropperGesture = false
+            coordinator?.model.commitEyedropperSession()
+            return
+        }
+
+        if isLongPressActive {
+            isLongPressActive = false
+            coordinator?.model.commitEyedropperSession()
+            return
+        }
+
         if panning {
             panning = false
             (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
@@ -726,7 +799,17 @@ final class PixelCanvas: NSView {
             }
         }
 
-        if event.keyCode == 53 { model.clearSelection() }
+        if event.keyCode == 53 {
+            if coordinator.model.eyedropperSession?.isActive == true {
+                longPressWorkItem?.cancel()
+                longPressWorkItem = nil
+                isLongPressActive = false
+                eyedropperGesture = false
+                coordinator.model.cancelEyedropperSession()
+                return
+            }
+            model.clearSelection()
+        }
         if event.keyCode == 36, model.tool == .transform { model.commitTransform() }
     }
 
