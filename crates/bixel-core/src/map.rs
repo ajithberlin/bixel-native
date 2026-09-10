@@ -11,6 +11,8 @@
 //! are preserved per node so files produced by the real Tiled editor
 //! round-trip losslessly even when Bixel does not model the field yet.
 
+use std::sync::Arc;
+
 use serde_json::{json, Map, Value};
 
 use crate::tilemap::{self, Pattern, TileLayer};
@@ -53,8 +55,10 @@ pub struct Tileset {
     pub columns: u32,
     pub tile_count: u32,
     /// RGBA pixels (`image_width*image_height*4`). Not serialized; uploaded by
-    /// the host after load so the file stays a relative-path reference.
-    pub pixels: Vec<u8>,
+    /// the host after load so the file stays a relative-path reference. Stored
+    /// behind an `Arc` so undo/redo snapshots share the buffer instead of
+    /// deep-cloning a full tileset image per stroke.
+    pub pixels: Arc<Vec<u8>>,
     pub properties: Vec<Property>,
     /// Optional edge-based autotile set: `autotile[mask]` is the local tile id
     /// (None = untouched) resolving a 4-bit N/E/S/W membership mask. Persisted
@@ -78,7 +82,7 @@ impl Default for Tileset {
             spacing: 0,
             columns: 0,
             tile_count: 0,
-            pixels: Vec::new(),
+            pixels: Arc::new(Vec::new()),
             properties: Vec::new(),
             autotile: Vec::new(),
             extra: Map::new(),
@@ -598,7 +602,7 @@ impl TileMap {
             spacing,
             columns,
             tile_count,
-            pixels: Vec::new(),
+            pixels: Arc::new(Vec::new()),
             properties: Vec::new(),
             autotile: Vec::new(),
             extra: Map::new(),
@@ -607,19 +611,27 @@ impl TileMap {
     }
 
     /// Remove a tileset, clearing cells that referenced it and re-basing the
-    /// remaining `first_gid` chain.
+    /// remaining `first_gid` chain. GIDs that pointed at later tilesets are
+    /// shifted down so their artwork is preserved.
     pub fn remove_tileset(&mut self, index: usize) -> bool {
         if index >= self.tilesets.len() {
             return false;
         }
         let first = self.tilesets[index].first_gid;
-        let last = first + self.tilesets[index].tile_count;
+        let count = self.tilesets[index].tile_count;
+        let last = first + count;
         for layer in &mut self.layers {
             if let MapLayer::Tile(data) = layer {
                 for gid in data.layer.data.iter_mut() {
+                    let flags = *gid & GID_FLAGS;
                     let raw = *gid & GID_MASK;
-                    if raw != 0 && raw >= first && raw < last {
+                    if raw == 0 {
+                        continue;
+                    }
+                    if raw >= first && raw < last {
                         *gid = 0;
+                    } else if raw >= last {
+                        *gid = (raw - count) | flags;
                     }
                 }
             }
@@ -642,8 +654,7 @@ impl TileMap {
         if rgba.len() != expected {
             return false;
         }
-        ts.pixels.clear();
-        ts.pixels.extend_from_slice(rgba);
+        ts.pixels = Arc::new(rgba.to_vec());
         true
     }
 
@@ -654,7 +665,7 @@ impl TileMap {
         if out.len() < ts.pixels.len() {
             return false;
         }
-        out[..ts.pixels.len()].copy_from_slice(&ts.pixels);
+        out[..ts.pixels.len()].copy_from_slice(&ts.pixels[..]);
         !ts.pixels.is_empty()
     }
 

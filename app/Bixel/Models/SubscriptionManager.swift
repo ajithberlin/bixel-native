@@ -21,8 +21,19 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
     // MARK: - Configuration Constants
 
-    /// Public RevenueCat API Key provided by developer.
-    static let apiKey = "test_pkkHNclGCtYhJXIjPBDZtpIgvOJ"
+    /// Info.plist key populated by the build scripts from the selected dotenv file.
+    static let apiKeyInfoPlistKey = "RevenueCatAPIKey"
+
+    /// Public RevenueCat API key for the current build, if configured.
+    static var apiKey: String? {
+        guard let configuredKey = Bundle.main.object(forInfoDictionaryKey: apiKeyInfoPlistKey) as? String else {
+            return nil
+        }
+
+        let key = configuredKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty, !key.hasPrefix("$(") else { return nil }
+        return key
+    }
 
     /// Entitlement identifier in RevenueCat dashboard.
     static let entitlementID = "ad_free"
@@ -69,23 +80,29 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// Call this once during application startup in `BixelApp.init()`.
     func configure() {
         guard !hasConfigured else { return }
-        hasConfigured = true
 
         #if canImport(RevenueCat)
+        guard let apiKey = Self.apiKey else {
+            print("[SubscriptionManager] RevenueCat API key is not configured for this build.")
+            return
+        }
+
         #if DEBUG
         Purchases.logLevel = .debug
         #else
         Purchases.logLevel = .info
         #endif
 
-        Purchases.configure(withAPIKey: Self.apiKey)
+        Purchases.configure(withAPIKey: apiKey)
         Purchases.shared.delegate = self
+        hasConfigured = true
 
         Task {
             await refreshCustomerInfo()
             await fetchOfferings()
         }
         #else
+        hasConfigured = true
         print("[SubscriptionManager] RevenueCat SDK is not linked in this build target. Using mock fallback.")
         #endif
     }

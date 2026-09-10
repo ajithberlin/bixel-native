@@ -48,7 +48,8 @@ The primary interface is the **macOS app** (`app/Bixel`, SwiftUI + Metal). The
 AI assistant panel (sparkles button) drives the embedded goose agent directly.
 
 ```bash
-cp .env.example .env   # add your OPENROUTER_API_KEY
+cp .env.example .env         # production RevenueCat key
+cp .env.dev.example .env.dev # local/test RevenueCat key
 xcodegen generate
 open Bixel.xcodeproj
 ```
@@ -64,7 +65,8 @@ the configured vision model.
 Cargo.toml                 # Cargo workspace
 project.yml                # XcodeGen spec (generates Bixel.xcodeproj)
 cbindgen.toml              # header generation config
-.env.example               # AI model/key template (copy to .env)
+.env.example               # production RevenueCat + AI model/key template
+.env.dev.example           # local/test RevenueCat + AI model/key template
 crates/
   bixel-core/              # platform-independent domain engine (no UI, no I/O beyond fs)
     src/
@@ -131,11 +133,12 @@ instead of failing at HTTP time. Keys are stored in the system secret store
 (Keychain, file fallback under `~/Library/Application Support/Bixel/goose`)
 and are write-only across the FFI.
 
-For headless dev use, `.env` is a legacy fallback the *examples* still read —
-the app itself never looks at it:
+For headless use, `.env` is a legacy fallback the *examples* still read. The
+app receives the RevenueCat key through its build settings:
 
 ```bash
-cp .env.example .env   # then edit and add your key
+cp .env.example .env         # production key
+cp .env.dev.example .env.dev # local/test key
 ```
 
 ```dotenv
@@ -168,10 +171,12 @@ xcodegen generate
 # 2. Open and run (or build from the CLI)
 open Bixel.xcodeproj
 #    …or…
+set -a; source .env.dev; set +a
 xcodebuild -project Bixel.xcodeproj -scheme Bixel -configuration Debug \
-  -destination 'platform=macOS' build
+  -destination 'platform=macOS' \
+  REVENUECAT_API_KEY="$REVENUECAT_API_KEY" build
 
-# 3. Package DMG installer
+# 3. Package DMG installer (loads .env.dev)
 scripts/package-dmg.sh --version v1.0.0 --build
 ```
 
@@ -182,6 +187,7 @@ workflow (via GitHub Actions `workflow_dispatch` or by pushing a `v*` tag).
 ### Mac App Store
 
 ```bash
+# .env contains the production RevenueCat key; .env.deploy contains App Store auth.
 cp .env.deploy.example .env.deploy   # fill in team ID, profile, API key
 scripts/publish-appstore.sh          # archive → .pkg → validate → upload
 ```
@@ -255,4 +261,3 @@ The original "server owns disk, processes, and secrets" rule carries over:
   config (env-var precedence); the frontend only ever sees masked key status.
 * Snapshot/backup semantics (write-backups under `.studio/backups/`) are the
   intended next addition on top of the existing in-place source model.
-

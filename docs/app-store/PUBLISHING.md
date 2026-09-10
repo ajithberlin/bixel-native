@@ -43,12 +43,30 @@ The listing copy you must paste into App Store Connect lives in
 
 ---
 
-## 3. Configure `.env.deploy`
+## 3. Configure production and deployment environments
+
+The RevenueCat public SDK key is selected separately from the App Store Connect
+credentials. Put the production key in `.env`:
+
+```dotenv
+REVENUECAT_API_KEY=appl_your_production_public_sdk_key
+```
+
+Local/DMG builds use `.env.dev` instead. The repository provides
+`.env.dev.example` with the RevenueCat test key. Both files are gitignored.
+
+The publish script loads `.env` automatically, while App Store Connect
+credentials continue to come from `.env.deploy`:
 
 ```bash
+cp .env.example .env
 cp .env.deploy.example .env.deploy
+$EDITOR .env
 $EDITOR .env.deploy
 ```
+
+You can override the production file for CI or a rehearsal with
+`BIXEL_PRODUCTION_ENV=/path/to/.env`.
 
 Minimum fields:
 
@@ -70,7 +88,8 @@ mkdir -p private_keys
 cp ~/Downloads/AuthKey_ABC123DEFG.p8 private_keys/
 ```
 
-`private_keys/` and `.env.deploy` are gitignored — never commit them.
+`private_keys/`, `.env`, `.env.dev`, and `.env.deploy` are gitignored — never
+commit them.
 
 > Prefer Apple ID auth? Leave the API fields empty and set
 > `APPSTORE_APPLE_ID` + `APPSTORE_APP_SPECIFIC_PASSWORD` (generate the
@@ -107,15 +126,16 @@ scripts/publish-appstore.sh --dry-run
 
 The script performs, in order:
 
-1. Loads `.env.deploy` (or `$BIXEL_DEPLOY_ENV`).
-2. Writes `CFBundleShortVersionString` / `CFBundleVersion` into `project.yml`.
-3. `xcodegen generate`.
-4. `scripts/build-rust.sh` (release static lib + cbindgen header).
-5. Writes `build/appstore/ExportOptions.plist` (`method: app-store-connect`).
-6. `xcodebuild archive` with the App Sandbox entitlements.
-7. `xcodebuild -exportArchive` → `build/appstore/export/Bixel.pkg`.
-8. `xcrun altool --validate-app` then `--upload-app`.
-9. Optionally tags and pushes `vX.Y.Z`.
+1. Loads `.env` (or `$BIXEL_PRODUCTION_ENV`) for the production RevenueCat key.
+2. Loads `.env.deploy` (or `$BIXEL_DEPLOY_ENV`) for App Store Connect settings.
+3. Writes `CFBundleShortVersionString` / `CFBundleVersion` into `project.yml`.
+4. `xcodegen generate`.
+5. `scripts/build-rust.sh` (release static lib + cbindgen header).
+6. Writes `build/appstore/ExportOptions.plist` (`method: app-store-connect`).
+7. `xcodebuild archive` with the App Sandbox entitlements and production key.
+8. `xcodebuild -exportArchive` → `build/appstore/export/Bixel.pkg`.
+9. `xcrun altool --validate-app` then `--upload-app`.
+10. Optionally tags and pushes `vX.Y.Z`.
 
 Artifacts land in `build/appstore/` (gitignored):
 

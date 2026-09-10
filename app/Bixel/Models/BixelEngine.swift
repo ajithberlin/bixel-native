@@ -696,11 +696,16 @@ final class TileMap: @unchecked Sendable {
     func tilesetPixels(index: Int) -> [UInt8] {
         let info = tilesetsInfo()
         guard index >= 0, index < info.count else { return [] }
-        let w = info[index].imageWidth, h = info[index].imageHeight
-        guard w > 0, h > 0 else { return [] }
-        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        return tilesetPixels(info: info[index])
+    }
+
+    /// Same as `tilesetPixels(index:)` but reuses an already-parsed info record,
+    /// so registering many tilesets doesn't re-parse the FFI JSON per tileset.
+    func tilesetPixels(info: MapTilesetInfo) -> [UInt8] {
+        guard info.imageWidth > 0, info.imageHeight > 0 else { return [] }
+        var buf = [UInt8](repeating: 0, count: info.imageWidth * info.imageHeight * 4)
         let ok = buf.withUnsafeMutableBufferPointer {
-            bixel_map_tileset_pixels(handle, UInt32(index), $0.baseAddress, UInt($0.count))
+            bixel_map_tileset_pixels(handle, UInt32(info.index), $0.baseAddress, UInt($0.count))
         }
         return ok ? buf : []
     }
@@ -942,6 +947,21 @@ enum ProjectStorage {
 
     static func read(base: URL, path: String) throws -> String? {
         try request(base: base, ["op": "read", "path": path]) as? String
+    }
+
+    /// Bulk binary read that never marshals bytes through JSON. Two-call FFI:
+    /// ask for the length, then fill a caller buffer. Returns nil when missing.
+    static func readBytes(base: URL, path: String) throws -> Data? {
+        let length = bixel_storage_read_bytes(base.path, path, nil, 0)
+        if length == -2 { return nil }
+        guard length >= 0 else { throw StorageError.message("Could not read \(path).") }
+        if length == 0 { return Data() }
+        var buffer = [UInt8](repeating: 0, count: Int(length))
+        let written = buffer.withUnsafeMutableBufferPointer { ptr in
+            bixel_storage_read_bytes(base.path, path, ptr.baseAddress, UInt64(ptr.count))
+        }
+        guard written == length else { throw StorageError.message("Could not read \(path).") }
+        return Data(buffer)
     }
 
     static func write(base: URL, path: String, data: Data) throws {

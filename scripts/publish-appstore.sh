@@ -3,8 +3,9 @@
 # Build Bixel Studio for the Mac App Store, export a signed .pkg, optionally
 # validate + upload it to App Store Connect, and optionally push the release tag.
 #
-# Configuration is read from `.env.deploy` (see `.env.deploy.example`). Any value
-# can also be passed as an environment variable or overridden with a CLI flag.
+# Production app configuration is read from `.env`; App Store Connect settings
+# are read from `.env.deploy`. Any value can also be passed as an environment
+# variable or overridden with a CLI flag.
 #
 # Usage:
 #   scripts/publish-appstore.sh [options]
@@ -31,15 +32,25 @@ warn() { printf '\033[1;33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
+# Load production app configuration
+# ---------------------------------------------------------------------------
+PRODUCTION_ENV_FILE="${BIXEL_PRODUCTION_ENV:-$ROOT/.env}"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/load-build-env.sh"
+if [[ -f "$PRODUCTION_ENV_FILE" ]]; then
+  log "Loading production app config: $PRODUCTION_ENV_FILE"
+  load_build_env "$PRODUCTION_ENV_FILE"
+else
+  warn "No $PRODUCTION_ENV_FILE found; RevenueCat production key must be supplied in the environment."
+fi
+
+# ---------------------------------------------------------------------------
 # Load .env.deploy
 # ---------------------------------------------------------------------------
 ENV_FILE="${BIXEL_DEPLOY_ENV:-$ROOT/.env.deploy}"
 if [[ -f "$ENV_FILE" ]]; then
   log "Loading deployment config: $ENV_FILE"
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  load_build_env "$ENV_FILE"
 else
   warn "No $ENV_FILE found; relying on environment + defaults."
 fi
@@ -63,6 +74,7 @@ APPSTORE_APP_SPECIFIC_PASSWORD="${APPSTORE_APP_SPECIFIC_PASSWORD:-}"
 APPSTORE_SKIP_UPLOAD="${APPSTORE_SKIP_UPLOAD:-0}"
 APPSTORE_GIT_PUSH="${APPSTORE_GIT_PUSH:-0}"
 APPSTORE_GIT_REMOTE="${APPSTORE_GIT_REMOTE:-origin}"
+REVENUECAT_API_KEY="${REVENUECAT_API_KEY:-}"
 
 SKIP_UPLOAD=0
 SKIP_BUILD=0
@@ -88,8 +100,9 @@ Usage: scripts/publish-appstore.sh [options]
 Build Bixel Studio for the Mac App Store, export a signed .pkg, optionally
 validate + upload it to App Store Connect, and optionally push the release tag.
 
-Configuration is read from .env.deploy (see .env.deploy.example). Any value can
-also be passed as an environment variable or overridden with a CLI flag.
+Production RevenueCat configuration is read from .env; App Store Connect
+configuration is read from .env.deploy. Any value can also be passed as an
+environment variable or overridden with a CLI flag.
 
 Options:
   --version <x.y.z>     Marketing version (overrides APPSTORE_VERSION)
@@ -142,6 +155,10 @@ validate_config() {
   [[ -n "$DEVELOPMENT_TEAM" ]] || missing+=("DEVELOPMENT_TEAM")
   [[ -n "$APPSTORE_BUNDLE_ID" ]] || missing+=("APPSTORE_BUNDLE_ID")
   [[ -f "$ENTITLEMENTS_PATH" ]] || missing+=("entitlements file ($ENTITLEMENTS_PATH)")
+
+  if [[ "$SKIP_BUILD" -eq 0 ]]; then
+    [[ -n "${REVENUECAT_API_KEY//[[:space:]]/}" ]] || missing+=("REVENUECAT_API_KEY in $PRODUCTION_ENV_FILE")
+  fi
 
   if [[ "$APPSTORE_SIGNING_STYLE" == "manual" ]]; then
     [[ -n "$APPSTORE_PROVISIONING_PROFILE" ]] || missing+=("APPSTORE_PROVISIONING_PROFILE")
@@ -206,6 +223,7 @@ cat <<EOF
   identity:       $APPSTORE_CODE_SIGN_IDENTITY
   profile:        ${APPSTORE_PROVISIONING_PROFILE:-(automatic)}
   entitlements:   $ENTITLEMENTS_PATH
+  revenuecat:     $([[ -n "${REVENUECAT_API_KEY//[[:space:]]/}" ]] && mask_build_secret "$REVENUECAT_API_KEY" || echo "not configured")
   archive:        $ARCHIVE_PATH
   pkg:            $PKG_PATH
   skip upload:    $SKIP_UPLOAD
@@ -339,6 +357,7 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
     -destination "generic/platform=macOS"
     -archivePath "$ARCHIVE_PATH"
     -derivedDataPath "$DERIVED_DATA"
+    "REVENUECAT_API_KEY=$REVENUECAT_API_KEY"
     "${SIGN_ARGS[@]}"
   )
   if [[ "$APPSTORE_SIGNING_STYLE" == "automatic" ]]; then

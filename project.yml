@@ -81,6 +81,7 @@ targets:
         NSHighResolutionCapable: true
         ITSAppUsesNonExemptEncryption: false
         GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
+        RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
         NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication
     preBuildScripts:

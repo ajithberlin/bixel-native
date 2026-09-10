@@ -406,6 +406,30 @@ fn wand_mask_finds_same_tile_region() {
 }
 
 #[test]
+fn removing_tileset_remaps_later_gids() {
+    let mut map = map_with_sheet(); // tileset 0: 4 tiles (2x2), first_gid = 1
+    let (px, w, h) = two_tile_sheet();
+    map.add_tileset("b", "assets/b.png", w, h, 16, 16, 0, 0).unwrap(); // tileset 1: first_gid = 5
+    map.set_tileset_pixels(1, &px);
+
+    // Cell 0 references tileset 1 local 1 (gid 6) with an H flip.
+    map.set_tile(0, 0, 0, TileMap::encode_gid(1, 5, GID_H_FLIP));
+    // Cell 1 references tileset 0 local 0 (gid 1).
+    map.set_tile(0, 1, 0, 1);
+    assert_eq!(map.gid_lookup(map.get_tile(0, 0, 0)).unwrap(), (1, 1, GID_H_FLIP));
+
+    // Removing the first tileset must shift the later tileset down and keep
+    // its cells pointing at the same artwork (including flip flags).
+    assert!(map.remove_tileset(0));
+    assert_eq!(map.tilesets.len(), 1);
+    assert_eq!(map.tilesets[0].first_gid, 1);
+    let remapped = map.get_tile(0, 0, 0);
+    assert_eq!(map.gid_lookup(remapped).unwrap(), (0, 1, GID_H_FLIP));
+    // The removed tileset's cells are cleared.
+    assert_eq!(map.get_tile(0, 1, 0), 0);
+}
+
+#[test]
 fn oversized_dimensions_are_rejected_on_load() {
     let json = format!(
         r#"{{"type":"map","version":"1.10","orientation":"orthogonal","infinite":false,

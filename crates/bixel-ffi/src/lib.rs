@@ -1297,6 +1297,33 @@ pub unsafe extern "C" fn bixel_storage_write(base: *const c_char, path: *const c
     }
 }
 
+/// Bulk file read under the storage root (avoids the JSON byte-array round trip).
+/// Two-call pattern: call with `out` null to get the required length, then again
+/// with a buffer of that size. Returns bytes written, the required length when
+/// `out` is null/too small, `-2` when the file is missing, or `-1` on error.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_storage_read_bytes(
+    base: *const c_char,
+    path: *const c_char,
+    out: *mut u8,
+    out_len: u64,
+) -> i64 {
+    if out_len > isize::MAX as u64 {
+        return -1;
+    }
+    match bixel_core::storage::read_bytes(std::path::Path::new(&arg_str(base)), &arg_str(path)) {
+        Ok(Some(bytes)) => {
+            if out.is_null() || (out_len as usize) < bytes.len() {
+                return bytes.len() as i64;
+            }
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+            bytes.len() as i64
+        }
+        Ok(None) => -2,
+        Err(_) => -1,
+    }
+}
+
 // ----------------------------------------------------------------- tile map
 //
 // The TileMap designer (`.map` documents are Tiled 1.10 JSON). Same contract

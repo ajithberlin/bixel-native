@@ -3,6 +3,7 @@
 
 # Environment / secrets
 .env
+.env.dev
 .env.deploy
 private_keys/
 *.p8

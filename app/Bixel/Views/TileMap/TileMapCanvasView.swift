@@ -31,6 +31,7 @@ struct TileMapCanvasView: NSViewRepresentable {
         context.coordinator.model = model
         context.coordinator.viewport = viewport
         view.updateArtboardGeometry()
+        view.updateCanvasContents()
     }
 
     final class Coordinator: NSObject {
@@ -46,6 +47,7 @@ struct TileMapCanvasView: NSViewRepresentable {
         func connect(_ view: MapCanvas) {
             model.canvasChanged.sink { [weak view] in
                 view?.updateCanvasContents()
+                view?.updateReferenceLayer()
                 view?.updateOverlays()
             }.store(in: &observations)
 
@@ -110,6 +112,7 @@ final class MapCanvas: NSView {
     private let artboardShadowLayer = CALayer()
     private let artboardLayer = CALayer()
     private let checkerboardLayer = CALayer()
+    private let referenceLayer = CALayer()
     private let compositeLayer = CALayer()
     private let gridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
@@ -175,6 +178,12 @@ final class MapCanvas: NSView {
         checkerboardLayer.backgroundColor = Self.checkerboardPatternColor
         artboardLayer.addSublayer(checkerboardLayer)
 
+        // Reference/backdrop sits above the checkerboard but under the tiles.
+        referenceLayer.magnificationFilter = .nearest
+        referenceLayer.minificationFilter = .nearest
+        referenceLayer.isHidden = true
+        artboardLayer.addSublayer(referenceLayer)
+
         compositeLayer.magnificationFilter = .nearest
         compositeLayer.minificationFilter = .nearest
         artboardLayer.addSublayer(compositeLayer)
@@ -222,7 +231,40 @@ final class MapCanvas: NSView {
             }
         }
         updateArtboardGeometry()
+        updateCanvasContents()
         updateOverlays()
+    }
+
+    // MARK: - Drop a reference image onto the map
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        registerForDraggedTypes([.png, .tiff, .fileURL])
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        droppedImageData(sender) != nil ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let data = droppedImageData(sender),
+              let image = AIService.pngToRGBA(data),
+              let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
+            return false
+        }
+        coordinator?.model.setReferenceImage(cg, name: nil)
+        return true
+    }
+
+    private func droppedImageData(_ sender: NSDraggingInfo) -> Data? {
+        let pasteboard = sender.draggingPasteboard
+        if let data = pasteboard.data(forType: .png) { return data }
+        if let data = pasteboard.data(forType: .tiff) { return data }
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let url = urls.first {
+            return try? Data(contentsOf: url)
+        }
+        return nil
     }
 
     func scheduleGeometryRefresh() {
@@ -278,7 +320,30 @@ final class MapCanvas: NSView {
             gridLayer.isHidden = true
         }
         CATransaction.commit()
+        updateReferenceLayer()
         updateOverlays()
+    }
+
+    /// Position the optional reference/backdrop image at the map origin, 1:1 in
+    /// document pixels (so it lines up with the tile grid at any zoom).
+    func updateReferenceLayer() {
+        guard let coordinator else { return }
+        let model = coordinator.model
+        let zoom = coordinator.viewport.zoom
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if let image = model.referenceImage {
+            referenceLayer.isHidden = false
+            referenceLayer.contents = image
+            referenceLayer.opacity = Float(model.referenceOpacity)
+            referenceLayer.frame = CGRect(x: 0, y: 0,
+                                          width: CGFloat(image.width) * zoom,
+                                          height: CGFloat(image.height) * zoom)
+        } else {
+            referenceLayer.isHidden = true
+            referenceLayer.contents = nil
+        }
+        CATransaction.commit()
     }
 
     private func makeGridPath(model: TileMapModel, zoom: CGFloat) -> CGPath {

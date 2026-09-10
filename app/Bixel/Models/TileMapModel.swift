@@ -109,6 +109,13 @@ final class TileMapModel: ObservableObject {
     private var tilesetImages: [Int: CGImage] = [:]
     private var tilesetAutotileCache: [Int: [Int32?]] = [:]
 
+    /// A reference/backdrop image shown under the tiles (visual only — never
+    /// written to the Tiled map data). Dropped from the asset sidebar or picked
+    /// from the toolbar.
+    @Published var referenceImage: CGImage?
+    @Published var referenceOpacity: Double = 0.55
+    @Published var referenceName: String?
+
     /// Object editing state (phase 2): the object under the pointer, if any.
     @Published var selectedObjectID: Int?
 
@@ -288,8 +295,9 @@ final class TileMapModel: ObservableObject {
     func registerTilesets() {
         tilesetList = map.tilesetsInfo()
         // Build display images for any tileset whose pixels Rust still holds.
+        // Pass the parsed info so each tileset doesn't re-parse the FFI JSON.
         for info in tilesetList where tilesetImages[info.index] == nil {
-            let rgba = map.tilesetPixels(index: info.index)
+            let rgba = map.tilesetPixels(info: info)
             if let cg = makeCGImage(pixels: rgba, width: info.imageWidth, height: info.imageHeight) {
                 tilesetImages[info.index] = cg
             }
@@ -305,20 +313,43 @@ final class TileMapModel: ObservableObject {
     }
 
     /// Push decoded tileset RGBA into the engine and cache its display image.
+    /// Does not re-parse the tileset list — the host uploads many in a row.
     func uploadTileset(_ index: Int, cgImage: CGImage, rgba: [UInt8]) {
         _ = map.setTilesetPixels(index, rgba: rgba)
         tilesetImages[index] = cgImage
-        registerTilesets()
+        objectWillChange.send()
+    }
+
+    /// Bump the canvas revision once after a batch of host-side mutations
+    /// (e.g. uploading every tileset) so the map composites exactly once.
+    func refreshCanvas() {
+        notifyCanvasChanged()
     }
 
     func tilesetDisplayImage(_ index: Int) -> CGImage? {
         tilesetImages[index]
     }
 
+    // MARK: - Reference image (visual backdrop, not map data)
+
+    func setReferenceImage(_ image: CGImage?, name: String? = nil) {
+        referenceImage = image
+        referenceName = image == nil ? nil : name
+        canvasChanged.send()
+    }
+
+    func setReferenceOpacity(_ value: Double) {
+        referenceOpacity = min(max(0, value), 1)
+        canvasChanged.send()
+    }
+
     func removeTileset(_ index: Int) {
         map.snapshot()
         map.removeTileset(index)
-        tilesetImages[index] = nil
+        // Indices shift down and later GIDs are remapped, so drop every cached
+        // image and rebuild from the engine's (still valid) pixel buffers.
+        tilesetImages.removeAll()
+        tilesetAutotileCache.removeAll()
         registerTilesets()
         if brush.tilesetIndex == index { clearBrush() }
         commitChange()

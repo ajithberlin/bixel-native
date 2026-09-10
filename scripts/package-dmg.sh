@@ -13,6 +13,16 @@ VERSION="v1.0.0"
 APP_PATH=""
 OUTPUT_DIR="$ROOT/build/dist"
 DO_BUILD=0
+DRY_RUN=0
+
+DEV_ENV_FILE="${BIXEL_DEV_ENV:-$ROOT/.env.dev}"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/load-build-env.sh"
+if [[ -f "$DEV_ENV_FILE" ]]; then
+  echo "==> Loading development app config: $DEV_ENV_FILE"
+  load_build_env "$DEV_ENV_FILE"
+fi
+REVENUECAT_API_KEY="${REVENUECAT_API_KEY:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,8 +42,12 @@ while [[ $# -gt 0 ]]; do
       DO_BUILD=1
       shift
       ;;
+    --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
     --help|-h)
-      echo "Usage: $0 [--version v1.0.0] [--app path/to/Bixel.app] [--output build/dist] [--build]"
+      echo "Usage: $0 [--version v1.0.0] [--app path/to/Bixel.app] [--output build/dist] [--build] [--dry-run]"
       exit 0
       ;;
     *)
@@ -42,6 +56,18 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "Configuration"
+  echo "  environment: $DEV_ENV_FILE"
+  if [[ -n "${REVENUECAT_API_KEY//[[:space:]]/}" ]]; then
+    echo "  revenuecat:  $(mask_build_secret "$REVENUECAT_API_KEY")"
+  else
+    echo "  revenuecat:  not configured"
+  fi
+  echo "Dry run — no changes made."
+  exit 0
+fi
 
 # Normalize version (e.g. 1.0.0 -> TAG=v1.0.0, CLEAN=1.0.0)
 CLEAN_VERSION="${VERSION#v}"
@@ -65,6 +91,7 @@ restore_project_yml() {
 trap restore_project_yml EXIT
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
+  require_build_env_value "$REVENUECAT_API_KEY" "REVENUECAT_API_KEY in $DEV_ENV_FILE"
   PROJECT_YML_BACKUP="$(mktemp "${TMPDIR:-/tmp}/bixel-project-yml.XXXXXX")"
   cp -p "$PROJECT_YML" "$PROJECT_YML_BACKUP"
 
@@ -85,6 +112,7 @@ if [[ "$DO_BUILD" -eq 1 ]]; then
     ARCHS=arm64 \
     ONLY_ACTIVE_ARCH=NO \
     -derivedDataPath build/DerivedData \
+    REVENUECAT_API_KEY="$REVENUECAT_API_KEY" \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \

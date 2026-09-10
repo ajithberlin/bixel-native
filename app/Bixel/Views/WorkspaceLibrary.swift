@@ -1,245 +1,192 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Always-visible project asset rail. It is intentionally independent from the
-/// AI pane so the project stays browsable while the assistant is open.
+/// Project asset rail: a thumbnail grid of the project's images that can be
+/// dragged onto the canvas. Kept intentionally simple — a compact document
+/// switcher plus the image grid. Files/documents and style live elsewhere.
 struct ProjectAssetsPanel: View {
     @ObservedObject var store: ProjectStore
     @State private var showNew = false
     @State private var selected: ProjectAssetFile?
     @State private var selectedData: Data?
-    @State private var style = ""
     @State private var search = ""
-    @State private var filter: AssetFilter = .all
-    @State private var showSources = false
 
-    private enum AssetFilter: String, CaseIterable, Identifiable {
-        case all = "All"
-        case images = "Images"
-        case files = "Files"
-        var id: String { rawValue }
-    }
-
-    private var visibleAssets: [ProjectAssetFile] {
-        store.assets.filter { asset in
-            guard matches(asset.name), (showSources || !asset.isSource) else { return false }
-            switch filter {
-            case .all: return true
-            case .images: return asset.isImage
-            case .files: return !asset.isImage
-            }
-        }
+    private var imageAssets: [ProjectAssetFile] {
+        store.assets
+            .filter { $0.isImage && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(StudioTheme.accent.opacity(0.18))
-                        Image(systemName: "square.stack.3d.up.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(StudioTheme.accent)
-                    }
-                    .frame(width: 28, height: 28)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Project Assets")
-                            .font(.system(size: 14, weight: .bold, design: .rounded))
-                        Text(store.current?.name ?? "Open a project")
-                            .font(.system(size: 10))
-                            .foregroundColor(StudioTheme.textSecondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Text("\(store.assets.count)")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(StudioTheme.textSecondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(Color.white.opacity(0.07)))
-                    Button { store.refreshAssets() } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .buttonStyle(.plain)
-                    .help("Refresh project assets")
-                }
-
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(StudioTheme.textDisabled)
-                    TextField("Search assets and documents", text: $search)
-                        .textFieldStyle(.plain)
-                    if !search.isEmpty {
-                        Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                            .buttonStyle(.plain)
-                            .foregroundColor(StudioTheme.textDisabled)
-                    }
-                }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 7)
-                .background(StudioTheme.background.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-
-                Picker("Asset filter", selection: $filter) {
-                    ForEach(AssetFilter.allCases) { option in
-                        Text(option.rawValue).tag(option)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 14)
-            .padding(.bottom, 12)
-
+        VStack(spacing: 0) {
+            header
+            searchBar
             Divider().overlay(StudioTheme.hairline)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        Text("DOCUMENTS")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundColor(StudioTheme.textSecondary)
-                        Spacer()
-                        Button { showNew = true } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .bold))
-                        }
-                        .buttonStyle(.plain)
-                        .help("New document")
-                        .disabled(store.assistant.busy)
-                    }
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(store.catalog.documents.filter { matches($0.name) }) { item in
-                            Button { store.openDocument(item) } label: {
-                                HStack(spacing: 9) {
-                                    Image(systemName: item.mode.symbol)
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(item.id == store.catalog.activeDocumentID ? StudioTheme.accent : StudioTheme.textSecondary)
-                                        .frame(width: 20)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(item.name)
-                                            .font(.system(size: 11, weight: .medium))
-                                            .lineLimit(1)
-                                        Text("\(item.mode.title) · \(item.summary)")
-                                            .font(.system(size: 9))
-                                            .foregroundColor(StudioTheme.textDisabled)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer(minLength: 4)
-                                    if item.id == store.catalog.activeDocumentID {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(StudioTheme.accent)
-                                    }
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 7)
-                                .contentShape(Rectangle())
-                                .background(item.id == store.catalog.activeDocumentID ? StudioTheme.accent.opacity(0.13) : Color.clear,
-                                            in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                if imageAssets.isEmpty {
+                    emptyState
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 8)], spacing: 8) {
+                        ForEach(imageAssets) { asset in
+                            AssetTile(asset: asset, store: store, selected: selected?.id == asset.id) {
+                                select(asset)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(store.assistant.busy)
-                        }
-                        if store.catalog.documents.isEmpty {
-                            Text("Create a normal document or a map document.")
-                                .font(.caption)
-                                .foregroundColor(StudioTheme.textSecondary)
-                                .padding(.vertical, 4)
                         }
                     }
-
-                    Divider().overlay(StudioTheme.hairline)
-
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("ASSETS")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundColor(StudioTheme.textSecondary)
-                        Spacer()
-                        HStack(spacing: 8) {
-                            Toggle("Sources", isOn: $showSources)
-                                .toggleStyle(.checkbox)
-                                .font(.system(size: 9))
-                            Text("Drag image → canvas")
-                                .font(.system(size: 9))
-                                .foregroundColor(StudioTheme.textDisabled)
-                        }
-                    }
-
-                    LazyVStack(alignment: .leading, spacing: 5) {
-                        ForEach(visibleAssets) { asset in
-                            ProjectAssetRow(
-                                asset: asset,
-                                store: store,
-                                selected: selected?.id == asset.id,
-                                onSelect: {
-                                    selected = asset
-                                    selectedData = nil
-                                    Task { @MainActor in
-                                        do {
-                                            let data = try await store.assetDataAsync(asset)
-                                            guard selected?.id == asset.id else { return }
-                                            selectedData = data
-                                        } catch {
-                                            guard selected?.id == asset.id else { return }
-                                            store.error = error.localizedDescription
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                        if visibleAssets.isEmpty {
-                            VStack(alignment: .leading, spacing: 5) {
-                                Image(systemName: filter == .images ? "photo.on.rectangle.angled" : "tray")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(StudioTheme.textDisabled)
-                                Text(store.assets.isEmpty ? "Generated images and files will appear here." : "No assets match this filter.")
-                                    .font(.caption)
-                                    .foregroundColor(StudioTheme.textSecondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 10)
-                        }
-                    }
-
-                    if let selected, let data = selectedData {
-                        AssetPreview(asset: selected, data: data, store: store)
-                            .id(selected.id)
-                    }
-
-                    DisclosureGroup("Project style") {
-                        TextField("e.g. top-down woodland, muted palette", text: $style, axis: .vertical)
-                            .lineLimit(2...4)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Save style") { store.setStyle(style) }
-                            .font(.caption)
-                    }
-                    .font(.caption)
+                    .padding(12)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 14)
+            }
+
+            if let selected, let data = selectedData {
+                Divider().overlay(StudioTheme.hairline)
+                AssetPreview(asset: selected, data: data, store: store)
             }
         }
         .frame(width: 292)
         .frame(maxHeight: .infinity)
         .background(StudioTheme.panel)
-        .onAppear { style = store.catalog.style; store.refreshAssets() }
+        .onAppear { store.refreshAssets() }
         .onChange(of: store.current?.id) { _ in
             selected = nil
             selectedData = nil
-            style = store.catalog.style
             store.refreshAssets()
         }
         .sheet(isPresented: $showNew) { NewWorkspaceDocument(store: store) }
     }
 
-    private func matches(_ name: String) -> Bool { search.isEmpty || name.localizedCaseInsensitiveContains(search) }
+    // MARK: Header + document switcher
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(StudioTheme.accent.opacity(0.18))
+                    Image(systemName: "photo.stack.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(StudioTheme.accent)
+                }
+                .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Assets")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                    Text(store.current?.name ?? "Open a project")
+                        .font(.system(size: 10))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Button { store.refreshAssets() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .help("Refresh")
+            }
+
+            documentSwitcher
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder
+    private var documentSwitcher: some View {
+        if !store.catalog.documents.isEmpty {
+            Menu {
+                ForEach(store.catalog.documents) { item in
+                    Button {
+                        store.openDocument(item)
+                    } label: {
+                        if item.id == store.catalog.activeDocumentID {
+                            Label(item.name, systemImage: "checkmark")
+                        } else {
+                            Text(item.name)
+                        }
+                    }
+                }
+                Divider()
+                Button { showNew = true } label: { Label("New document…", systemImage: "plus") }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: store.activeDocument?.mode.symbol ?? "doc")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(StudioTheme.accent)
+                    Text(store.activeDocument?.name ?? "Select document")
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(StudioTheme.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(StudioTheme.hairline, lineWidth: 1))
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(store.assistant.busy)
+        }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundColor(StudioTheme.textDisabled)
+            TextField("Search images", text: $search)
+                .textFieldStyle(.plain)
+            if !search.isEmpty {
+                Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.plain)
+                    .foregroundColor(StudioTheme.textDisabled)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(StudioTheme.background.opacity(0.75), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 22))
+                .foregroundColor(StudioTheme.textDisabled)
+            Text(store.assets.isEmpty
+                 ? "No images yet. Generate art with the AI assistant, or import a project."
+                 : "No images match your search.")
+                .font(.caption)
+                .foregroundColor(StudioTheme.textSecondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .padding(.horizontal, 16)
+    }
+
+    private func select(_ asset: ProjectAssetFile) {
+        selected = asset
+        selectedData = nil
+        Task { @MainActor in
+            do {
+                let data = try await store.assetDataAsync(asset)
+                guard selected?.id == asset.id else { return }
+                selectedData = data
+            } catch {
+                guard selected?.id == asset.id else { return }
+                store.error = error.localizedDescription
+            }
+        }
+    }
 }
 
-private struct ProjectAssetRow: View {
+// MARK: - Asset tile (thumbnail grid cell, draggable)
+
+private struct AssetTile: View {
     let asset: ProjectAssetFile
     @ObservedObject var store: ProjectStore
     let selected: Bool
@@ -247,106 +194,106 @@ private struct ProjectAssetRow: View {
     @State private var previewData: Data?
 
     var body: some View {
-        rowContent
-            .task(id: asset.id) {
-                guard asset.isImage else { return }
-                let data = try? await store.assetDataAsync(asset)
-                guard !Task.isCancelled else { return }
-                previewData = data
-            }
-    }
-
-    @ViewBuilder
-    private var rowContent: some View {
-        let row = HStack(spacing: 9) {
-            assetThumbnail
-            VStack(alignment: .leading, spacing: 3) {
-                Text(asset.name)
-                    .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1)
-                HStack(spacing: 5) {
-                    Text(asset.locationLabel)
-                    if asset.isImage { Text("IMAGE") }
+        Button(action: onSelect) {
+            VStack(spacing: 4) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(StudioTheme.background)
+                    if let previewData, let image = NSImage(data: previewData) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .interpolation(.none)
+                            .scaledToFit()
+                            .padding(3)
+                    } else {
+                        Image(systemName: "photo")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(StudioTheme.textDisabled)
+                    }
                 }
-                .font(.system(size: 8, weight: .semibold, design: .rounded))
-                .foregroundColor(asset.isGenerated ? StudioTheme.bixelGreen : StudioTheme.textDisabled)
+                .frame(height: 66)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(selected ? StudioTheme.accent : StudioTheme.hairline, lineWidth: selected ? 1.5 : 1)
+                )
+                Text(asset.name)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Spacer(minLength: 4)
-            if asset.isImage {
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(StudioTheme.textDisabled)
-            }
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 6)
-        .contentShape(Rectangle())
-        .background(selected ? StudioTheme.accent.opacity(0.16) : Color.white.opacity(0.025),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .onTapGesture(perform: onSelect)
-
-        if asset.isImage, let data = previewData {
-            row.onDrag { imageProvider(data) }
-        } else {
-            row
+        .buttonStyle(.plain)
+        .help("Drag onto the canvas · \(asset.bytes / 1024) KB")
+        .task(id: asset.id) {
+            previewData = try? await store.assetDataAsync(asset)
+        }
+        .onDrag {
+            if let previewData { return imageProvider(previewData) }
+            if let data = try? store.assetData(asset) { return imageProvider(data) }
+            return NSItemProvider()
         }
     }
-
-    private var assetThumbnail: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(StudioTheme.background)
-            if let previewData, let image = NSImage(data: previewData) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.none)
-                    .scaledToFit()
-                    .padding(3)
-            } else {
-                Image(systemName: asset.isImage ? "photo" : "doc.text")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(StudioTheme.textDisabled)
-            }
-        }
-        .frame(width: 38, height: 38)
-        .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(StudioTheme.hairline, lineWidth: 1))
-    }
-
 }
+
+// MARK: - Selected asset preview + actions
 
 private struct AssetPreview: View {
     let asset: ProjectAssetFile
     let data: Data
     @ObservedObject var store: ProjectStore
+
+    private var isMap: Bool { store.isMapActive }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if asset.isImage, let bitmap = NSBitmapImageRep(data: data), let cg = bitmap.cgImage {
-                Image(nsImage: NSImage(cgImage: cg, size: .zero))
-                    .resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 130)
-                    .background(StudioTheme.background)
-                    .onDrag { imageProvider(data) }
-                    .help("Drag onto the canvas to place as a new layer")
-                Text("\(cg.width) × \(cg.height) px · Drag to canvas").font(.caption2).foregroundColor(.secondary)
-                HStack {
-                    Button("Open image") { store.openImageAsset(asset) }.disabled(store.assistant.busy)
-                    Button("Add layer") { store.editor.placeAsset(data, name: asset.name) }.disabled(store.activeDocument == nil || store.isMapActive)
-                    Button("Use as reference") {
-                        guard store.assistant.attachments.count < 4 else { return }
-                        store.assistant.attachments.append(AssistantAttachment(name: asset.name, data: data, text: nil))
-                    }.disabled(data.count > 5_000_000 || store.assistant.busy || store.assistant.attachments.count >= 4)
-                }.font(.caption2)
-                if let document = store.activeDocument, document.mode == .normal {
-                    Button("Slice into \(store.editor.width) × \(store.editor.height) animation frames") {
-                        store.editor.importSheet(data, name: asset.name)
-                    }.font(.caption).disabled(cg.width % store.editor.width != 0 || cg.height % store.editor.height != 0)
+            HStack(spacing: 8) {
+                if let bitmap = NSBitmapImageRep(data: data), let cg = bitmap.cgImage {
+                    Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                        .resizable().interpolation(.none).scaledToFit()
+                        .frame(width: 52, height: 52)
+                        .background(StudioTheme.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text("\(cg.width) × \(cg.height) px")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
                 }
-            } else if let text = String(data: data, encoding: .utf8) {
-                ScrollView { Text(String(text.prefix(4000))).font(.system(size: 10, design: .monospaced)).textSelection(.enabled) }.frame(height: 100)
+                Spacer()
+                Button { store.acceptAsset(asset) } label: {
+                    Image(systemName: "tray.and.arrow.down")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("Keep in project assets")
             }
-            if asset.isCached {
-                Button("Keep in project assets") { store.acceptAsset(asset) }.font(.caption)
+
+            if isMap {
+                Button {
+                    store.placeImageOnMap(asset)
+                } label: {
+                    Label("Place on canvas", systemImage: "photo.badge.plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(store.assistant.busy)
+                Text("Shows as a reference under the tiles — not saved into the map.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            } else {
+                HStack(spacing: 6) {
+                    Button("Add layer") { store.editor.placeAsset(data, name: asset.name) }
+                        .disabled(store.activeDocument == nil)
+                    Button("Open image") { store.openImageAsset(asset) }
+                        .disabled(store.assistant.busy)
+                }
+                .font(.system(size: 11))
+                .controlSize(.small)
             }
-        }.padding(8).background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(12)
     }
 }
 

@@ -24,6 +24,7 @@ final class ProjectStore: ObservableObject {
     @Published private(set) var saving = false
     let assistant = AssistantSession()
     let root: URL
+    let aiGallery: AIGalleryStore
     private let saves = DispatchQueue(label: "studio.bixel.project-storage", qos: .utility)
     private var saveGeneration = 0
     private var pendingSave: DispatchWorkItem?
@@ -32,8 +33,10 @@ final class ProjectStore: ObservableObject {
     var isMapActive: Bool { activeDocument?.mode == .map }
 
     init(root: URL? = nil) {
-        self.root = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let resolvedRoot = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bixel/Projects", isDirectory: true)
+        self.root = resolvedRoot
+        self.aiGallery = AIGalleryStore(root: resolvedRoot)
         refresh()
         bootstrapSamplesIfEmpty()
         do {
@@ -362,9 +365,9 @@ final class ProjectStore: ObservableObject {
     func loadMapTilesetImages(_ model: TileMapModel, base: URL) {
         model.registerTilesets()
         for info in model.map.tilesetsInfo() where !info.image.isEmpty {
+            if model.tilesetDisplayImage(info.index) != nil { continue }
             do {
-                guard let bytes = try ProjectStorage.request(base: base, ["op": "read_bytes", "path": info.image]) else { continue }
-                let data = Data(try decode([UInt8].self, bytes))
+                guard let data = try ProjectStorage.readBytes(base: base, path: info.image) else { continue }
                 guard let image = AIService.pngToRGBA(data),
                       image.width == info.imageWidth, image.height == info.imageHeight,
                       let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else { continue }
@@ -373,6 +376,7 @@ final class ProjectStore: ObservableObject {
                 continue
             }
         }
+        model.refreshCanvas()
     }
 
     /// Persist a decoded image into `assets/` and return its workspace-relative
@@ -540,6 +544,20 @@ final class ProjectStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// Place an image from the library onto the active map canvas as a visual
+    /// reference/backdrop (not part of the map data).
+    func placeImageOnMap(_ asset: ProjectAssetFile) {
+        guard isMapActive, let map = mapEditor else { return }
+        do {
+            let data = try assetData(asset)
+            guard let image = AIService.pngToRGBA(data),
+                  let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
+                throw StorageError.message("Could not decode that image.")
+            }
+            map.setReferenceImage(cg, name: asset.name)
+        } catch { self.error = error.localizedDescription }
+    }
+
     func openImageAsset(_ asset: ProjectAssetFile) {
         guard !assistant.busy, let base = projectRoot else { return }
         do {
@@ -600,9 +618,8 @@ final class ProjectStore: ObservableObject {
 
 private func readProjectAssetData(base: URL, path: String, bytes: Int) throws -> Data {
     guard bytes <= 32_000_000 else { throw StorageError.message("Choose an asset smaller than 32 MB.") }
-    guard let value = try ProjectStorage.request(base: base, ["op": "read_bytes", "path": path]) else {
+    guard let data = try ProjectStorage.readBytes(base: base, path: path) else {
         throw StorageError.message("This asset is missing.")
     }
-    let json = try JSONSerialization.data(withJSONObject: value)
-    return Data(try JSONDecoder().decode([UInt8].self, from: json))
+    return data
 }

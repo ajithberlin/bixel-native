@@ -3,7 +3,7 @@
 // Native macOS Home Page & Dashboard for Bixel Studio:
 // - Top Bar: Bixel logo, search bar with ⌘K
 // - Hero Banner: Pixel art forest scene with glowing moon, headline, and quick action bar
-// - AI Studio Creator: High-end conversational AI prompt composer with modes, sizes, and instant creation
+// - AI Studio Creator: Prompt composer with size/style controls, preview, and project-or-gallery handoff
 // - Recent Projects Grid: Pixel art thumbnail previews, tag badges, dimensions, and click-to-open
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
 
@@ -12,8 +12,10 @@ import AppKit
 
 struct HomePageView: View {
     @ObservedObject var store: ProjectStore
+    @ObservedObject var aiGallery: AIGalleryStore
     let onOpenProject: (StudioProject) -> Void
-    let onOpenWithAIPrompt: (String) -> Void
+    let onOpenWithAIPrompt: (AICreationRequest) -> Void
+    let isAIGenerating: Bool
     var onPresentPaywall: (() -> Void)? = nil
     var onPresentCustomerCenter: (() -> Void)? = nil
 
@@ -24,6 +26,7 @@ struct HomePageView: View {
     @State private var aiPrompt = ""
     @State private var selectedSize: Int = 32
     @State private var selectedStyle: String = "16-Bit Retro"
+    @State private var selectedGalleryItem: AIGalleryItem?
     @State private var renamingProject: StudioProject? = nil
     @State private var renameText = ""
     @FocusState private var searchFieldFocused: Bool
@@ -51,7 +54,14 @@ struct HomePageView: View {
                     // 3. Middle Section: Recent Projects
                     recentProjectsSection
 
-                    // 4. Bottom Section: Templates & Inspirations + Quote
+                    // 4. Generated images kept for later
+                    if !aiGallery.items.isEmpty {
+                        AIGalleryStrip(gallery: aiGallery) { item in
+                            selectedGalleryItem = item
+                        }
+                    }
+
+                    // 5. Bottom Section: Templates & Inspirations + Quote
                     HStack(alignment: .top, spacing: 24) {
                         templatesSection
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -60,7 +70,7 @@ struct HomePageView: View {
                             .frame(width: 300)
                     }
 
-                    // 5. Ad Banner (displayed only for free-tier users)
+                    // 6. Ad Banner (displayed only for free-tier users)
                     if !subscriptionManager.isAdFree {
                         AdBannerView {
                             onPresentPaywall?()
@@ -87,6 +97,9 @@ struct HomePageView: View {
                 store.renameProject(project, newName: newName)
                 renamingProject = nil
             }
+        }
+        .sheet(item: $selectedGalleryItem) { item in
+            AIGalleryImagePreview(item: item)
         }
     }
 
@@ -380,12 +393,13 @@ struct HomePageView: View {
                         .foregroundColor(StudioTheme.bixelGreen)
                         .padding(.top, 2)
 
-                    TextField("Describe what you want to create or design... (e.g., 'A 32x32 cyber slime monster with electric aura and idle bounce', 'Dungeon crypt tileset with stone walls and torches')", text: $aiPrompt, axis: .vertical)
+                    TextField("Describe what you want to create or design... (e.g., 'A cyber slime monster with an electric aura', 'A dungeon crypt with stone walls and torches')", text: $aiPrompt, axis: .vertical)
                         .lineLimit(2...4)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .foregroundColor(.white)
                         .focused($promptFieldFocused)
+                        .disabled(isAIGenerating)
                         .onSubmit {
                             submitAIPrompt()
                         }
@@ -421,6 +435,7 @@ struct HomePageView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    .disabled(isAIGenerating)
 
                     // Art Style Menu
                     Menu {
@@ -445,6 +460,7 @@ struct HomePageView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    .disabled(isAIGenerating)
 
                     Spacer()
 
@@ -457,6 +473,7 @@ struct HomePageView: View {
                         }
                         .buttonStyle(.plain)
                         .padding(.trailing, 4)
+                        .disabled(isAIGenerating)
                     }
 
                     // Prominent "Design & Create" Action Button
@@ -464,10 +481,17 @@ struct HomePageView: View {
                         submitAIPrompt()
                     } label: {
                         HStack(spacing: 7) {
-                            Text("Design & Create")
+                            if isAIGenerating {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.black)
+                            }
+                            Text(isAIGenerating ? "Generating…" : "Design & Create")
                                 .font(.system(size: 12, weight: .bold, design: .rounded))
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 14, weight: .bold))
+                            if !isAIGenerating {
+                                Image(systemName: "arrow.up.circle.fill")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
                         }
                         .foregroundColor(.black)
                         .padding(.horizontal, 14)
@@ -479,7 +503,7 @@ struct HomePageView: View {
                         .shadow(color: StudioTheme.bixelGreen.opacity(0.4), radius: 8, y: 2)
                     }
                     .buttonStyle(.plain)
-                    .disabled(aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isAIGenerating || aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
@@ -518,9 +542,10 @@ struct HomePageView: View {
 
     private func submitAIPrompt() {
         let text = aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !isAIGenerating else { return }
         aiPrompt = ""
-        onOpenWithAIPrompt(text)
+        promptFieldFocused = false
+        onOpenWithAIPrompt(AICreationRequest(prompt: text, size: selectedSize, style: selectedStyle))
     }
 
     // MARK: - Recent Projects Section

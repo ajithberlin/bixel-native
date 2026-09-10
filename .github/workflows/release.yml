@@ -77,6 +77,10 @@ jobs:
 
       - name: Build macOS App (Release)
         run: |
+          if [ -z "${REVENUECAT_API_KEY:-}" ]; then
+            echo "REVENUECAT_API_KEY GitHub secret is required for production releases" >&2
+            exit 1
+          fi
           xcodebuild -project Bixel.xcodeproj \
             -scheme Bixel \
             -configuration Release \
@@ -87,7 +91,10 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            REVENUECAT_API_KEY="$REVENUECAT_API_KEY" \
             build
+        env:
+          REVENUECAT_API_KEY: ${{ secrets.REVENUECAT_API_KEY }}
 
       - name: Package DMG
         run: |

@@ -28,6 +28,11 @@ struct ContentView: View {
     @State private var loadingProject: StudioProject? = nil
     @State private var showLoadingAd = false
     @State private var pendingPostAction: (() -> Void)? = nil
+    @State private var aiCreationInProgress = false
+    @State private var generatedImageDraft: AIGeneratedImageDraft?
+    @State private var presentedAIDraft: AIGeneratedImageDraft?
+    @State private var aiReviewCompleted = false
+    @State private var aiGenerationError: String?
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -40,22 +45,14 @@ struct ContentView: View {
             if currentScreen == .home {
                 HomePageView(
                     store: projects,
+                    aiGallery: projects.aiGallery,
                     onOpenProject: { project in
                         handleOpenProject(project)
                     },
-                    onOpenWithAIPrompt: { prompt in
-                        let lower = prompt.lowercased()
-                        let mode: WorkspaceMode = lower.contains("map") ? .map : .normal
-                        let size = mode == .map ? 40 : 32
-                        let name = "AI: " + String(prompt.prefix(20)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if let newProject = projects.createProject(name: name, mode: mode, width: size, height: mode == .map ? 25 : size) {
-                            handleOpenProject(newProject) {
-                                projects.assistant.input = prompt
-                                showAI = true
-                                projects.assistant.send(model: projects.editor)
-                            }
-                        }
+                    onOpenWithAIPrompt: { request in
+                        startAIImageGeneration(request)
                     },
+                    isAIGenerating: aiCreationInProgress,
                     onPresentPaywall: { showPaywall = true },
                     onPresentCustomerCenter: { showCustomerCenter = true }
                 )
@@ -150,6 +147,24 @@ struct ContentView: View {
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .sheet(isPresented: $showPaywall) { PaywallContainerView() }
         .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
+        .sheet(item: $generatedImageDraft, onDismiss: handleGeneratedImageReviewDismissed) { draft in
+            AIGeneratedImageReviewView(
+                draft: draft,
+                onCreateProject: { createProject(from: draft) },
+                onKeepInGallery: { keepInGallery(draft) }
+            )
+        }
+        .alert(
+            "AI creation needs attention",
+            isPresented: Binding(
+                get: { aiGenerationError != nil },
+                set: { if !$0 { aiGenerationError = nil } }
+            )
+        ) {
+            Button("OK") { aiGenerationError = nil }
+        } message: {
+            Text(aiGenerationError ?? "")
+        }
         .onAppear {
             currentScreen = .home
             showLayers = true
@@ -171,6 +186,77 @@ struct ContentView: View {
             }
             postAction?()
         }
+    }
+
+    private func startAIImageGeneration(_ request: AICreationRequest) {
+        guard !aiCreationInProgress else { return }
+        guard !projects.assistant.busy else {
+            aiGenerationError = "Finish the current assistant request before generating another image."
+            return
+        }
+
+        aiCreationInProgress = true
+        aiGenerationError = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = AIService.runSkill(
+                id: "image_gen",
+                params: request.imageParameters,
+                prompt: request.prompt
+            )
+            let outcome: Result<AIGeneratedImageDraft, Error>
+            do {
+                outcome = .success(try AIGenerationFlow.makeDraft(request: request, result: result))
+            } catch {
+                outcome = .failure(error)
+            }
+            DispatchQueue.main.async {
+                aiCreationInProgress = false
+                switch outcome {
+                case .success(let draft):
+                    presentedAIDraft = draft
+                    aiReviewCompleted = false
+                    generatedImageDraft = draft
+                case .failure(let error):
+                    aiGenerationError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func createProject(from draft: AIGeneratedImageDraft) {
+        guard let project = projects.createProject(
+            name: draft.projectName,
+            mode: .normal,
+            width: draft.width,
+            height: draft.height,
+            pixels: draft.rgba
+        ) else {
+            aiGenerationError = projects.error ?? "The image was generated, but the project could not be created."
+            return
+        }
+        aiReviewCompleted = true
+        generatedImageDraft = nil
+        handleOpenProject(project)
+    }
+
+    private func keepInGallery(_ draft: AIGeneratedImageDraft) {
+        guard projects.aiGallery.save(draft) else {
+            aiGenerationError = projects.aiGallery.error ?? "The image could not be saved to the AI Gallery."
+            return
+        }
+        aiReviewCompleted = true
+        generatedImageDraft = nil
+    }
+
+    private func handleGeneratedImageReviewDismissed() {
+        if !aiReviewCompleted, let draft = presentedAIDraft {
+            if !projects.aiGallery.save(draft) {
+                aiGenerationError = projects.aiGallery.error ?? "The image could not be saved to the AI Gallery."
+            }
+        }
+        presentedAIDraft = nil
+        generatedImageDraft = nil
+        aiReviewCompleted = false
     }
 
     private func flushProject() {

@@ -91,6 +91,40 @@ pub fn write(base: &Path, relative: &str, bytes: &[u8]) -> Result<(), String> {
     result.map_err(|e: std::io::Error| e.to_string())
 }
 
+/// Read a regular file under the storage root. `Ok(None)` means not found.
+/// Used by the bulk FFI path so the host never round-trips bytes as JSON.
+pub fn read_bytes(base: &Path, relative: &str) -> Result<Option<Vec<u8>>, String> {
+    use std::io::Read;
+    const MAX_BYTES: u64 = 32_000_000;
+    let root = ensure_root(base)?;
+    let path = file_path(&root, relative)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {},
+        Ok(_) => return Err("Expected a regular file".into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    }
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("Expected a regular file".into());
+    }
+    if metadata.len() > MAX_BYTES {
+        return Err("Choose an asset no larger than 32 MB.".into());
+    }
+    // Bound the actual read too: a file may grow after metadata is read.
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err("Choose an asset no larger than 32 MB.".into());
+    }
+    Ok(Some(bytes))
+}
+
 pub fn request(base: &Path, value: &Value) -> Result<Value, String> {
     if !base.is_absolute() { return Err("Storage root must be absolute".into()); }
     let root = ensure_root(base)?;
@@ -145,28 +179,10 @@ pub fn request(base: &Path, value: &Value) -> Result<Value, String> {
             files(&root, field("path")?, recursive)
         }
         "read_bytes" => {
-            use std::io::Read;
-            const MAX_BYTES: u64 = 32_000_000;
-            let path = file_path(&root, field("path")?)?;
-            match fs::symlink_metadata(&path) {
-                Ok(metadata) if metadata.is_file() => {},
-                Ok(_) => return Err("Expected a regular file".into()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
-                Err(e) => return Err(e.to_string()),
+            match read_bytes(&root, field("path")?)? {
+                Some(bytes) => Ok(json!(bytes)),
+                None => Ok(Value::Null),
             }
-            let file = match fs::File::open(path) {
-                Ok(file) => file,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
-                Err(e) => return Err(e.to_string()),
-            };
-            let metadata = file.metadata().map_err(|e| e.to_string())?;
-            if !metadata.is_file() { return Err("Expected a regular file".into()); }
-            if metadata.len() > MAX_BYTES { return Err("Choose an asset no larger than 32 MB.".into()); }
-            // Bound the actual read too: a file may grow after metadata is read.
-            let mut bytes = Vec::new();
-            file.take(MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            if bytes.len() as u64 > MAX_BYTES { return Err("Choose an asset no larger than 32 MB.".into()); }
-            Ok(json!(bytes))
         }
         "write" => { write(&root, field("path")?, field("text")?.as_bytes())?; Ok(Value::Null) }
         _ => Err("Unknown storage operation".into()),
