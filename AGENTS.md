@@ -63,6 +63,7 @@ Module → original Python/JS source (porting reference):
 | `tilemap.rs` | `web/mapcore.js` |
 | `map.rs` | *(new — Tilemap Designer: Tiled JSON editor engine, no web origin)* |
 | `atlas.rs` | `core/atlases.py` |
+| `sheet.rs` | *(new — spritesheet import planner: Bixel-export / atlas / grid manifests → frames + tags)* |
 | `map_validate.rs` | `core/maps.py` |
 | `paths.rs` | `core/paths.py` |
 | `project.rs` | `core/projects.py` |
@@ -95,6 +96,12 @@ Pixel-art skills are exposed to the agent as an in-process `rmcp` builtin
 extension (`skill_server.rs` → `run_skill` tool) that dispatches to the skill
 registry (`skills.rs`). Deterministic skills run locally; model-backed skills
 call the OpenRouter image endpoints (`image_gen.rs`).
+
+Spritesheet import is shared between the file importer and the `import_spritesheet`
+skill: both build a `bixel_core::sheet::SheetPlan` (Bixel-export / atlas-actions /
+grid) and either `AsepriteDoc::from_sheet` (project) or `append_sheet_frames`
+(timeline). Skill outputs carry `frame_meta` (durations + tags) and an optional
+`atlas` manifest so generated sheets can be added to the timeline in one click.
 
 Rules: keep `bixel-core` free of goose/network deps; all AI/network code stays in
 `bixel-ai`. FFI for AI is in `crates/bixel-ffi/src/lib.rs` (search `bixel_ai_`).
