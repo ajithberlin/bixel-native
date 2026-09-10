@@ -166,6 +166,15 @@ final class AdManager: ObservableObject {
         withAnimation(.easeInOut(duration: 0.3)) {
             currentAdIndex = (currentAdIndex - 1 + Self.sampleAds.count) % Self.sampleAds.count
         }
+        recordImpression()
+    }
+
+    func selectAd(at index: Int) {
+        guard index >= 0 && index < Self.sampleAds.count else { return }
+        withAnimation(.easeInOut(duration: 0.3)) {
+            currentAdIndex = index
+        }
+        recordImpression()
     }
 
     // MARK: - Interactions & Tracking

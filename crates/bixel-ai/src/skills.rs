@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::error::AiError;
 use crate::image::{self, PackAnchor, RgbaImage};
-use crate::image_gen::ImageGen;
+use crate::image_gen::ImageGenerator;
 
 /// The model role a skill needs (or `None` for local/deterministic skills).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -157,9 +157,9 @@ impl Skills {
     }
 
     /// Run a skill. Deterministic skills ignore `gen` (pass `None`); model-backed
-    /// skills need an [`ImageGen`] client.
+    /// skills need an [`ImageGenerator`] backend.
     pub fn run(
-        gen: Option<&ImageGen>,
+        gen: Option<&dyn ImageGenerator>,
         kind: SkillKind,
         input: SkillInput,
     ) -> Result<SkillOutput, AiError> {
@@ -187,7 +187,7 @@ impl Skills {
     }
 }
 
-fn require_gen(gen: Option<&ImageGen>) -> Result<&ImageGen, AiError> {
+fn require_gen(gen: Option<&dyn ImageGenerator>) -> Result<&dyn ImageGenerator, AiError> {
     gen.ok_or_else(|| {
         AiError::Config(
             "this skill needs the image model role, which is not ready — \
@@ -557,14 +557,14 @@ fn param_usize(input: &SkillInput, key: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn generate_art(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn generate_art(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     generation_target(&input, None)?;
     let prompt = format!("{} {}", build_art_prompt(&input), generation_guidance(&input));
     let image = gen.generate_image(&prompt, None)?;
     prepare_generated(image, &input, None)
 }
 
-fn spritesheet(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn spritesheet(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     let (cols, rows) = generation_grid(&input)?;
     generation_target(&input, Some((cols, rows)))?;
     let prompt = format!("{} {}", build_spritesheet_prompt(&input, cols, rows), generation_guidance(&input));
@@ -572,7 +572,7 @@ fn spritesheet(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError
     prepare_generated(sheet, &input, Some((cols, rows)))
 }
 
-fn next_frame(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn next_frame(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     let current = require_image(&input)?;
     generation_target(&input, None)?;
     let prompt = format!("{} {}", build_next_frame_prompt(&input), generation_guidance(&input));
@@ -580,7 +580,7 @@ fn next_frame(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError>
     prepare_generated(frame, &input, None)
 }
 
-fn pixel_image_gen(gen: &ImageGen, input: SkillInput) -> Result<SkillOutput, AiError> {
+fn pixel_image_gen(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     generation_target(&input, None)?;
     let prompt = format!("{} {}", build_pixel_image_prompt(&input), generation_guidance(&input));
     let reference = if let Some(img) = &input.image {

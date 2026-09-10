@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AiError;
 use crate::image::{self, RgbaImage};
-use crate::image_gen::ImageGen;
+use crate::image_gen::ImageGenerator;
 use crate::skills::{SkillInput, SkillKind, Skills};
 
 /// An image produced by a skill, collected for the UI.
@@ -41,13 +41,13 @@ pub struct Artifact {
 /// per-request workspace, and a mailbox of produced artifacts.
 pub struct SkillRuntime {
     /// The image-role client; None while the image role is not ready.
-    pub image_gen: Mutex<Option<Arc<ImageGen>>>,
+    pub image_gen: Mutex<Option<Arc<dyn ImageGenerator>>>,
     pub workspace: Mutex<Option<PathBuf>>,
     pub artifacts: Mutex<Vec<Artifact>>,
 }
 
 impl SkillRuntime {
-    pub fn new(image_gen: Option<Arc<ImageGen>>) -> Self {
+    pub fn new(image_gen: Option<Arc<dyn ImageGenerator>>) -> Self {
         SkillRuntime {
             image_gen: Mutex::new(image_gen),
             workspace: Mutex::new(None),

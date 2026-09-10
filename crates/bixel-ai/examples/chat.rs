@@ -1,4 +1,4 @@
-use bixel_ai::image_gen::ImageGen;
+use bixel_ai::image_gen::{ImageGen, ImageGenerator};
 use bixel_ai::AiSettings;
 
 fn main() {

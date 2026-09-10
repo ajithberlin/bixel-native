@@ -4,8 +4,11 @@ use std::path::PathBuf;
 use bixel_core::paths::{safe_resolve, to_rel, PathJailError};
 use bixel_core::project;
 
+static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn temp_dir() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("bixel-paths-{}", std::process::id()));
+    let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("bixel-paths-{}-{id}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path.canonicalize().unwrap()

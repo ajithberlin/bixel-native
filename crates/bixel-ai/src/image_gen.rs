@@ -6,11 +6,41 @@ use base64::Engine as _;
 use crate::error::AiError;
 use crate::image::{encode_png, decode_any, RgbaImage};
 
+/// A synchronous text→image / image→image backend (OpenRouter's `/images/*`
+/// endpoints or the ChatGPT Codex backend's hosted tool).
+pub trait ImageGenerator: Send + Sync {
+    fn model(&self) -> &str;
+
+    /// Generate an image (optionally conditioned on an input image for edits).
+    fn generate_image(
+        &self,
+        prompt: &str,
+        input: Option<&RgbaImage>,
+    ) -> Result<RgbaImage, AiError>;
+}
+
 /// A synchronous client for the OpenRouter image endpoints.
 pub struct ImageGen {
     base_url: String,
     api_key: String,
     image_model: String,
+}
+
+impl ImageGenerator for ImageGen {
+    fn model(&self) -> &str {
+        &self.image_model
+    }
+
+    fn generate_image(
+        &self,
+        prompt: &str,
+        input: Option<&RgbaImage>,
+    ) -> Result<RgbaImage, AiError> {
+        match input {
+            None => self.image_generations(prompt),
+            Some(img) => self.image_edits(prompt, img),
+        }
+    }
 }
 
 impl ImageGen {
@@ -19,22 +49,6 @@ impl ImageGen {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             image_model: image_model.to_string(),
-        }
-    }
-
-    pub fn model(&self) -> &str {
-        &self.image_model
-    }
-
-    /// Generate an image (optionally conditioned on an input image for edits).
-    pub fn generate_image(
-        &self,
-        prompt: &str,
-        input: Option<&RgbaImage>,
-    ) -> Result<RgbaImage, AiError> {
-        match input {
-            None => self.image_generations(prompt),
-            Some(img) => self.image_edits(prompt, img),
         }
     }
 

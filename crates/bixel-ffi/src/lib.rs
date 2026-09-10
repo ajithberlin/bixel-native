@@ -1060,7 +1060,7 @@ pub unsafe extern "C" fn bixel_ai_free_buffer(ptr: *mut u8) {
 // -- model-backed skills (blocking; return PNG bytes via the length out-param)
 
 /// The image-role client from the active connection, if the image role is ready.
-fn image_gen() -> Option<std::sync::Arc<bixel_ai::image_gen::ImageGen>> {
+fn image_gen() -> Option<std::sync::Arc<dyn bixel_ai::image_gen::ImageGenerator>> {
     ai_agent().ok().and_then(|agent| agent.image_gen())
 }
 

@@ -34,10 +34,12 @@ struct CanvasTemplate: Identifiable {
 struct ProjectPicker: View {
     @ObservedObject var store: ProjectStore
     @ObservedObject private var assistant: AssistantSession
+    var onSelectProject: ((StudioProject) -> Void)? = nil
 
-    init(store: ProjectStore) {
+    init(store: ProjectStore, onSelectProject: ((StudioProject) -> Void)? = nil) {
         self.store = store
         self.assistant = store.assistant
+        self.onSelectProject = onSelectProject
     }
 
     @Environment(\.dismiss) private var dismiss
@@ -111,8 +113,13 @@ struct ProjectPicker: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
                         ForEach(store.projects) { project in
                             ProjectCard(project: project, isCurrent: project.id == store.current?.id) {
-                                store.select(project)
-                                if store.current?.id == project.id { dismiss() }
+                                if let onSelectProject = onSelectProject {
+                                    dismiss()
+                                    onSelectProject(project)
+                                } else {
+                                    store.select(project)
+                                    if store.current?.id == project.id { dismiss() }
+                                }
                             }
                             .disabled(assistant.busy)
                         }
@@ -148,9 +155,15 @@ struct ProjectPicker: View {
 
     private func create() {
         guard canCreate else { return }
-        let previous = store.current?.id
-        store.create(name: name.trimmingCharacters(in: .whitespacesAndNewlines))
-        if store.current?.id != previous { dismiss() }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let created = store.createProject(name: trimmedName, kind: .sprite, width: canvasSize.width, height: canvasSize.height) {
+            dismiss()
+            onSelectProject?(created)
+        } else {
+            let previous = store.current?.id
+            store.create(name: trimmedName)
+            if store.current?.id != previous { dismiss() }
+        }
     }
 }
 

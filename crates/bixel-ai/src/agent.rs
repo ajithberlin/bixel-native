@@ -90,7 +90,7 @@ impl GooseAgent {
     }
 
     /// The image-role client used by model-backed skills.
-    pub fn image_gen(&self) -> Option<Arc<crate::image_gen::ImageGen>> {
+    pub fn image_gen(&self) -> Option<Arc<dyn crate::image_gen::ImageGenerator>> {
         self.handle().and_then(|h| h.image_gen.clone())
     }
 

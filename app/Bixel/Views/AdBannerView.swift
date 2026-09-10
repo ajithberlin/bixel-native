@@ -1,8 +1,9 @@
 // AdBannerView.swift
 //
 // Responsive commercial ad banner component for Bixel Studio.
-// Displays rotating commercial advertisements (Google Ads, Unity Store, itch.io, Wacom)
-// for free-tier users. Automatically hidden when the user acquires the 'ad_free' lifetime entitlement.
+// Displays rotating commercial advertisements (Google Ads, Unity Store, itch.io, Wacom, Lospec)
+// for free-tier users with interactive carousel controls, rich typography, sponsor icons, and paywall trigger.
+// Automatically hidden when the user acquires the 'ad_free' lifetime entitlement.
 
 import SwiftUI
 import AppKit
@@ -15,6 +16,12 @@ struct AdBannerView: View {
     var onPresentPaywall: () -> Void
 
     @State private var isHovered = false
+    @State private var isCtaHovered = false
+    @State private var isCrownHovered = false
+
+    init(onPresentPaywall: @escaping () -> Void = {}) {
+        self.onPresentPaywall = onPresentPaywall
+    }
 
     var body: some View {
         if adManager.shouldShowAds {
@@ -30,119 +37,179 @@ struct AdBannerView: View {
     private var bannerContainer: some View {
         let ad = adManager.currentAd
 
-        return HStack(spacing: 12) {
-            // MARK: - Ad Network Badges (AD + AdChoices)
-            HStack(spacing: 5) {
-                Text("AD")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
-                    .foregroundColor(Color.white.opacity(0.9))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(Color.white.opacity(0.14))
-                    )
-
-                Text(ad.badgeText)
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundColor(ad.accentColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .fill(ad.accentColor.opacity(0.15))
-                    )
-            }
-
-            // MARK: - Advertiser Brand Icon & Name
+        return HStack(spacing: 14) {
+            // MARK: - Sponsor Icon / Brand Avatar Container
             Button {
                 adManager.clickCurrentAd()
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: ad.iconSystemName)
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(ad.accentColor)
-                        .frame(width: 16)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    ad.accentColor.opacity(0.22),
+                                    ad.accentColor.opacity(0.08)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(ad.accentColor.opacity(isHovered ? 0.55 : 0.35), lineWidth: 1)
+                        )
 
-                    Text(ad.advertiser)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
+                    Image(systemName: ad.iconSystemName)
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(ad.accentColor)
                 }
+                .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
             .help("Visit \(ad.advertiser)")
 
-            Divider()
-                .frame(height: 14)
-                .overlay(Color.white.opacity(0.12))
-
-            // MARK: - Ad Headline & Description (Clickable)
+            // MARK: - Ad Content (Headline, Badges & Description)
             Button {
                 adManager.clickCurrentAd()
             } label: {
-                HStack(spacing: 6) {
-                    Text(ad.headline)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.95))
-                        .lineLimit(1)
+                VStack(alignment: .leading, spacing: 3) {
+                    // Line 1: Badges + Advertiser + Headline
+                    HStack(spacing: 6) {
+                        // "AD" badge
+                        Text("AD")
+                            .font(.system(size: 8.5, weight: .heavy, design: .monospaced))
+                            .foregroundColor(Color.white.opacity(0.85))
+                            .padding(.horizontal, 4.5)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(Color.white.opacity(0.12))
+                            )
 
-                    Text("—")
-                        .foregroundColor(Color.white.opacity(0.3))
+                        // Network badge (e.g. "Google Ad", "Sponsored")
+                        Text(ad.badgeText)
+                            .font(.system(size: 8.5, weight: .bold, design: .rounded))
+                            .foregroundColor(ad.accentColor)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(ad.accentColor.opacity(0.16))
+                            )
 
+                        // Advertiser name
+                        Text(ad.advertiser)
+                            .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+
+                        Text("•")
+                            .font(.system(size: 10))
+                            .foregroundColor(Color.white.opacity(0.35))
+
+                        // Headline
+                        Text(ad.headline)
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(Color.white.opacity(0.92))
+                            .lineLimit(1)
+                    }
+
+                    // Line 2: Descriptive Subtitle
                     Text(ad.description)
                         .font(.system(size: 11, weight: .regular))
-                        .foregroundColor(Color.white.opacity(0.68))
+                        .foregroundColor(Color.white.opacity(0.65))
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
             .help("Click ad: \(ad.destinationURL.absoluteString)")
 
             Spacer(minLength: 8)
 
-            // MARK: - Ad Call-To-Action (Advertiser link)
+            // MARK: - Carousel Navigation Indicators & Arrows
+            HStack(spacing: 5) {
+                // Prev button
+                Button {
+                    adManager.previousAd()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.5))
+                        .frame(width: 20, height: 20)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Previous sponsor")
+
+                // Dot pagination indicators
+                HStack(spacing: 4) {
+                    ForEach(0..<AdManager.sampleAds.count, id: \.self) { idx in
+                        let isCurrent = idx == adManager.currentAdIndex
+                        Button {
+                            adManager.selectAd(at: idx)
+                        } label: {
+                            Capsule()
+                                .fill(isCurrent ? ad.accentColor : Color.white.opacity(0.22))
+                                .frame(width: isCurrent ? 12 : 4, height: 4)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show ad \(idx + 1)")
+                    }
+                }
+                .padding(.horizontal, 2)
+
+                // Next button
+                Button {
+                    adManager.nextAd()
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.5))
+                        .frame(width: 20, height: 20)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Next sponsor")
+            }
+
+            Divider()
+                .frame(height: 24)
+                .overlay(Color.white.opacity(0.12))
+
+            // MARK: - Ad Call-To-Action (Advertiser Website)
             Button {
                 adManager.clickCurrentAd()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 5) {
                     Text(ad.callToAction)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                     Image(systemName: "arrow.up.right")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                 }
                 .foregroundColor(ad.accentColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(ad.accentColor.opacity(0.14))
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(ad.accentColor.opacity(isCtaHovered ? 0.24 : 0.14))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .strokeBorder(ad.accentColor.opacity(0.35), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(ad.accentColor.opacity(isCtaHovered ? 0.6 : 0.35), lineWidth: 1)
                         )
                 )
             }
             .buttonStyle(.plain)
-            .help("Open advertiser website")
+            .onHover { isCtaHovered = $0 }
+            .help("Open \(ad.advertiser) website")
 
-            // MARK: - Next / Rotate Ad Affordance
-            Button {
-                adManager.nextAd()
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(Color.white.opacity(0.4))
-                    .frame(width: 18, height: 18)
-            }
-            .buttonStyle(.plain)
-            .help("Show next advertisement")
-
-            Divider()
-                .frame(height: 16)
-                .overlay(Color.white.opacity(0.18))
-
-            // MARK: - "Remove Ads" Action Button -> Opens RevenueCat Paywall
+            // MARK: - "Remove Ads" Paywall Trigger
             Button {
                 onPresentPaywall()
             } label: {
@@ -153,28 +220,40 @@ struct AdBannerView: View {
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                 }
                 .foregroundColor(.black)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(StudioTheme.bixelGreen)
                 )
-                .shadow(color: StudioTheme.bixelGreen.opacity(0.35), radius: 5, y: 1)
+                .shadow(color: StudioTheme.bixelGreen.opacity(isCrownHovered ? 0.5 : 0.3), radius: isCrownHovered ? 8 : 4, y: 1)
             }
             .buttonStyle(.plain)
+            .onHover { isCrownHovered = $0 }
             .help("One-time lifetime purchase: Remove all ads forever")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 56)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.96))
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.11, green: 0.12, blue: 0.15).opacity(0.98),
+                            Color(red: 0.08, green: 0.09, blue: 0.11).opacity(0.98)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(isHovered ? ad.accentColor.opacity(0.4) : Color.white.opacity(0.10), lineWidth: 1)
                 )
         )
+        .shadow(color: Color.black.opacity(0.35), radius: 10, y: 3)
+        .onHover { isHovered = $0 }
         .onAppear {
             adManager.recordImpression()
         }

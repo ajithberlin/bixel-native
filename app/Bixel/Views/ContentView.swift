@@ -25,6 +25,9 @@ struct ContentView: View {
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
+    @State private var loadingProject: StudioProject? = nil
+    @State private var showLoadingAd = false
+    @State private var pendingPostAction: (() -> Void)? = nil
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -38,23 +41,19 @@ struct ContentView: View {
                 HomePageView(
                     store: projects,
                     onOpenProject: { project in
-                        projects.select(project)
-                        withAnimation(.easeInOut(duration: 0.22)) {
-                            currentScreen = .project
-                        }
+                        handleOpenProject(project)
                     },
                     onOpenWithAIPrompt: { prompt in
                         let lower = prompt.lowercased()
                         let kind: AssetKind = lower.contains("tile") ? .tileset : (lower.contains("anim") || lower.contains("walk")) ? .animation : .sprite
                         let size = kind == .tileset ? 128 : (kind == .animation ? 64 : 32)
                         let name = "AI: " + String(prompt.prefix(20)).trimmingCharacters(in: .whitespacesAndNewlines)
-                        if projects.createProject(name: name, kind: kind, width: size, height: size) != nil {
-                            projects.assistant.input = prompt
-                            withAnimation(.easeInOut(duration: 0.22)) {
-                                currentScreen = .project
+                        if let newProject = projects.createProject(name: name, kind: kind, width: size, height: size) {
+                            handleOpenProject(newProject) {
+                                projects.assistant.input = prompt
                                 showAI = true
+                                projects.assistant.send(model: projects.editor)
                             }
-                            projects.assistant.send(model: projects.editor)
                         }
                     },
                     onPresentPaywall: { showPaywall = true },
@@ -99,6 +98,38 @@ struct ContentView: View {
                 .alert("Project could not be saved or opened", isPresented: Binding(get: { projects.error != nil }, set: { if !$0 { projects.error = nil } })) {
                     Button("OK") { projects.error = nil }
                 } message: { Text(projects.error ?? "") }
+
+            // Interstitial Loading Ad Overlay (when opening / launching a project)
+            if showLoadingAd, let project = loadingProject {
+                ProjectLoadingAdView(
+                    project: project,
+                    onFinish: {
+                        projects.select(project)
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            currentScreen = .project
+                        }
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showLoadingAd = false
+                            loadingProject = nil
+                        }
+                        let action = pendingPostAction
+                        pendingPostAction = nil
+                        action?()
+                    },
+                    onDismiss: {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            showLoadingAd = false
+                            loadingProject = nil
+                        }
+                        pendingPostAction = nil
+                    },
+                    onPresentPaywall: {
+                        showPaywall = true
+                    }
+                )
+                .transition(.opacity)
+                .zIndex(100)
+            }
         }
         .frame(minWidth: 1040, minHeight: 680)
         .background(StudioTheme.background)
@@ -107,13 +138,33 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: showLayers)
         .animation(.easeInOut(duration: 0.2), value: showColor)
         .animation(.easeInOut(duration: 0.22), value: currentScreen)
-        .sheet(isPresented: $showProjects) { ProjectPicker(store: projects) }
+        .sheet(isPresented: $showProjects) {
+            ProjectPicker(store: projects, onSelectProject: { project in
+                handleOpenProject(project)
+            })
+        }
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .sheet(isPresented: $showPaywall) { PaywallContainerView() }
         .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
         .onAppear {
             currentScreen = .home
             showLayers = true
+        }
+    }
+
+    private func handleOpenProject(_ project: StudioProject, postAction: (() -> Void)? = nil) {
+        if AdManager.shared.shouldShowAds {
+            loadingProject = project
+            pendingPostAction = postAction
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showLoadingAd = true
+            }
+        } else {
+            projects.select(project)
+            withAnimation(.easeInOut(duration: 0.22)) {
+                currentScreen = .project
+            }
+            postAction?()
         }
     }
 

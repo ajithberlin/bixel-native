@@ -173,11 +173,14 @@ pub struct ModelReadiness {
 impl ModelReadiness {
     /// Pure readiness computation (no network). `vision_capable` comes from
     /// the local canonical model catalog (input modalities); `text_probe` is
-    /// the optional network validation result from connect.
+    /// the optional network validation result from connect;
+    /// `image_backend_ready` means the provider can serve the image role
+    /// (OpenRouter key present, or cached ChatGPT tokens for Codex).
     pub fn compute(
         cfg: &ConnectionConfig,
         vision_capable: Option<bool>,
         text_probe: Result<(), String>,
+        image_backend_ready: bool,
     ) -> Self {
         let text = if cfg.models.text.trim().is_empty() {
             RoleReadiness::blocked("", "text model is not configured")
@@ -199,18 +202,30 @@ impl ModelReadiness {
             }
         };
 
-        let image = if cfg.models.image.trim().is_empty() {
-            RoleReadiness::blocked("", "image model is not configured")
-        } else if cfg.image_api_key().is_none() {
-            let reason = match cfg.provider {
-                ProviderChoice::OpenRouter => "image generation requires an OpenRouter API key",
-                ProviderChoice::ChatgptCodex => {
-                    "image generation requires the OpenRouter provider"
+        let image = match cfg.provider {
+            ProviderChoice::ChatgptCodex => {
+                // The hosted image_generation tool rides the chat model.
+                if image_backend_ready {
+                    RoleReadiness::ready(&cfg.models.text)
+                } else {
+                    RoleReadiness::blocked(
+                        "",
+                        "image generation requires signing in with ChatGPT",
+                    )
                 }
-            };
-            RoleReadiness::blocked(&cfg.models.image, reason)
-        } else {
-            RoleReadiness::ready(&cfg.models.image)
+            }
+            ProviderChoice::OpenRouter => {
+                if cfg.models.image.trim().is_empty() {
+                    RoleReadiness::blocked("", "image model is not configured")
+                } else if !image_backend_ready {
+                    RoleReadiness::blocked(
+                        &cfg.models.image,
+                        "image generation requires an OpenRouter API key",
+                    )
+                } else {
+                    RoleReadiness::ready(&cfg.models.image)
+                }
+            }
         };
 
         ModelReadiness { text, vision, image }
@@ -226,7 +241,7 @@ impl ModelReadiness {
 pub struct ProviderHandle {
     pub config: ConnectionConfig,
     pub provider: Arc<dyn Provider>,
-    pub image_gen: Option<Arc<ImageGen>>,
+    pub image_gen: Option<Arc<dyn crate::image_gen::ImageGenerator>>,
     pub vision: Option<Arc<Vision>>,
     pub readiness: ModelReadiness,
 }
@@ -395,15 +410,27 @@ pub fn connect(
     } else {
         vision_capability(cfg.provider.goose_name(), cfg.models.vision.trim())
     };
-    let readiness = ModelReadiness::compute(&cfg, vision_capable, text_probe);
+    let image_backend_ready = match cfg.provider {
+        ProviderChoice::OpenRouter => cfg.image_api_key().is_some(),
+        // The hosted image tool rides the cached ChatGPT tokens.
+        ProviderChoice::ChatgptCodex => codex_tokens_exist(&root),
+    };
+    let readiness = ModelReadiness::compute(&cfg, vision_capable, text_probe, image_backend_ready);
 
-    let image_gen = readiness.image.ready.then(|| {
-        Arc::new(ImageGen::new(
-            &cfg.base_url,
-            cfg.image_api_key().unwrap_or_default(),
-            &cfg.models.image,
-        ))
-    });
+    let image_gen: Option<Arc<dyn crate::image_gen::ImageGenerator>> = if readiness.image.ready {
+        match cfg.provider {
+            ProviderChoice::OpenRouter => Some(Arc::new(ImageGen::new(
+                &cfg.base_url,
+                cfg.image_api_key().unwrap_or_default(),
+                &cfg.models.image,
+            ))),
+            ProviderChoice::ChatgptCodex => {
+                Some(Arc::new(crate::codex_image::CodexImageGen::new(&cfg.models.text)?))
+            }
+        }
+    } else {
+        None
+    };
     let vision = (readiness.vision.ready && cfg.image_api_key().is_some()).then(|| {
         Arc::new(Vision::new(
             &cfg.base_url,
@@ -563,7 +590,7 @@ mod tests {
         c.models.text.clear();
         c.models.vision.clear();
         c.models.image.clear();
-        let r = ModelReadiness::compute(&c, None, Ok(()));
+        let r = ModelReadiness::compute(&c, None, Ok(()), false);
         assert!(!r.text.ready && !r.vision.ready && !r.image.ready);
         assert!(r.image.reason.contains("not configured"));
     }
@@ -571,7 +598,7 @@ mod tests {
     #[test]
     fn readiness_blocks_non_vision_model() {
         let c = cfg(ProviderChoice::OpenRouter, Some("sk-key"), None);
-        let r = ModelReadiness::compute(&c, Some(false), Ok(()));
+        let r = ModelReadiness::compute(&c, Some(false), Ok(()), true);
         assert!(r.text.ready);
         assert!(!r.vision.ready);
         assert!(r.image.ready);
@@ -580,18 +607,26 @@ mod tests {
     #[test]
     fn readiness_reports_failed_text_probe() {
         let c = cfg(ProviderChoice::OpenRouter, Some("sk-key"), None);
-        let r = ModelReadiness::compute(&c, Some(true), Err("provider unreachable".into()));
+        let r = ModelReadiness::compute(&c, Some(true), Err("provider unreachable".into()), true);
         assert!(!r.text.ready);
         assert_eq!(r.text.reason, "provider unreachable");
         assert!(r.vision.ready && r.image.ready);
     }
 
     #[test]
-    fn codex_without_image_key_blocks_image_role_only() {
+    fn codex_without_tokens_blocks_image_role_only() {
         let c = cfg(ProviderChoice::ChatgptCodex, None, None);
-        let r = ModelReadiness::compute(&c, Some(true), Ok(()));
+        let r = ModelReadiness::compute(&c, Some(true), Ok(()), false);
         assert!(r.text.ready && r.vision.ready);
         assert!(!r.image.ready);
-        assert!(r.image.reason.contains("OpenRouter provider"));
+        assert!(r.image.reason.contains("signing in with ChatGPT"));
+    }
+
+    #[test]
+    fn codex_with_tokens_serves_image_role_from_chat_model() {
+        let c = cfg(ProviderChoice::ChatgptCodex, None, None);
+        let r = ModelReadiness::compute(&c, Some(true), Ok(()), true);
+        assert!(r.text.ready && r.vision.ready && r.image.ready);
+        assert_eq!(r.image.model, c.models.text);
     }
 }
