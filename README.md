@@ -128,7 +128,8 @@ instead of failing at HTTP time. Keys are stored in the system secret store
 (Keychain, file fallback under `~/Library/Application Support/Bixel/goose`)
 and are write-only across the FFI.
 
-For headless/dev use, `.env` remains the lowest-precedence fallback:
+For headless dev use, `.env` is a legacy fallback the *examples* still read —
+the app itself never looks at it:
 
 ```bash
 cp .env.example .env   # then edit and add your key

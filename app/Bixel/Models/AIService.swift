@@ -30,7 +30,6 @@ enum AIService {
         var key: String?
         var models: [String: String] = [:]
         var baseURL = "https://openrouter.ai/api/v1"
-        var envAvailable = false
         var readiness: [String: AIRoleReadiness] = [:]
     }
 
@@ -46,7 +45,6 @@ enum AIService {
         status.key = json["key"] as? String
         status.models = json["models"] as? [String: String] ?? [:]
         status.baseURL = json["base_url"] as? String ?? status.baseURL
-        status.envAvailable = json["env_available"] as? Bool ?? false
         if let readiness = json["readiness"] as? [String: Any] {
             for (role, value) in readiness {
                 guard let roleJSON = value as? [String: Any] else { continue }
@@ -63,12 +61,10 @@ enum AIService {
     /// Connect the assistant. Keys are write-only (stored in the system
     /// secret store); returns nil on success or an error message.
     static func connect(provider: String, apiKey: String, imageAPIKey: String,
-                        textModel: String, visionModel: String, imageModel: String,
-                        baseURL: String) -> String? {
+                        textModel: String, visionModel: String, imageModel: String) -> String? {
         var cfg: [String: Any] = [
             "provider": provider,
             "models": ["text": textModel, "vision": visionModel, "image": imageModel],
-            "base_url": baseURL,
             "validate": true,
         ]
         if !apiKey.isEmpty { cfg["api_key"] = apiKey }
@@ -91,6 +87,20 @@ enum AIService {
         guard let errorPtr = bixel_ai_start_codex_oauth() else { return nil }
         defer { bixel_string_free(errorPtr) }
         return String(cString: errorPtr)
+    }
+
+    /// Abort an in-flight ChatGPT sign-in so it can be retried immediately.
+    static func cancelCodexOAuth() {
+        bixel_ai_cancel_codex_oauth()
+    }
+
+    /// Selectable model ids for a provider (`openrouter` / `chatgpt_codex`).
+    static func listModels(provider: String) -> [String] {
+        guard let ptr = bixel_ai_list_models(provider) else { return [] }
+        defer { bixel_string_free(ptr) }
+        guard let data = String(cString: ptr).data(using: .utf8),
+              let models = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return models
     }
 
     static func listSkills() -> [SkillInfo] {

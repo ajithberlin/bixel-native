@@ -181,7 +181,10 @@ final class ProjectStore: ObservableObject {
            let data = json.data(using: .utf8),
            let catalog = try? JSONDecoder().decode(WorkspaceCatalog.self, from: data),
            let active = catalog.documents.first(where: { $0.id == catalog.activeDocumentID }) ?? catalog.documents.first {
-            return (active.kind, "\(active.pixelWidth) × \(active.pixelHeight)", relativeTime(since: project.created))
+            let sizeText = active.kind == .map
+                ? "\(active.width) × \(active.height) cells"
+                : "\(active.pixelWidth) × \(active.pixelHeight)"
+            return (active.kind, sizeText, relativeTime(since: project.created))
         }
         return (.sprite, "32 × 32", relativeTime(since: project.created))
     }
@@ -399,7 +402,17 @@ final class ProjectStore: ObservableObject {
     func importTiledMap(from url: URL) {
         guard let base = projectRoot, !assistant.busy else { return }
         do {
-            let json = try String(contentsOf: url, encoding: .utf8)
+            let sourceData = try Data(contentsOf: url)
+            let preparedJSON = try TileMapImport.prepareMapJSON(
+                sourceData,
+                sourceDirectory: url.deletingLastPathComponent()
+            ) { [weak self] data, name in
+                guard let self, let path = self.persistImageAsset(data: data, name: name) else {
+                    throw StorageError.message("Could not copy imported tileset image into the project.")
+                }
+                return path
+            }
+            let json = preparedJSON
             let model = try TileMapModel(json: json)
             try flush()
             let name = url.deletingPathExtension().lastPathComponent
@@ -413,6 +426,7 @@ final class ProjectStore: ObservableObject {
             catalog = next
             installEditor(EditorModel(width: item.pixelWidth, height: item.pixelHeight))
             installMapEditor(model)
+            loadMapTilesetImages(model, base: base)
         } catch {
             self.error = error.localizedDescription
         }

@@ -494,35 +494,6 @@ struct HomePageView: View {
                     )
             )
 
-            // 4. Quick Inspiration Chips
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    promptChip("✨ Slime Sprite", mode: .sprite, size: 32) {
-                        aiPrompt = "Create a cute 32x32 animated slime sprite with bounce frames"
-                        submitAIPrompt()
-                    }
-                    promptChip("🏰 Dungeon Crypt", mode: .tileset, size: 128) {
-                        aiPrompt = "Design a 128x128 dungeon crypt tileset with stone walls, floor tiles, and torches"
-                        submitAIPrompt()
-                    }
-                    promptChip("⚔️ RPG Weapon Icons", mode: .icons, size: 32) {
-                        aiPrompt = "Generate 32x32 fantasy RPG items: sword, magic shield, ruby potion bottle"
-                        submitAIPrompt()
-                    }
-                    promptChip("🏃 64×64 Character Walk", mode: .animation, size: 64) {
-                        aiPrompt = "Design a 64x64 pixel art adventurer walk cycle animation"
-                        submitAIPrompt()
-                    }
-                    promptChip("🌆 Tokyo Cyberpunk Alley", mode: .tileset, size: 128) {
-                        aiPrompt = "Create a futuristic Tokyo cyberpunk street tileset with glowing neon signs"
-                        submitAIPrompt()
-                    }
-                    promptChip("🧙 Fantasy Mage Portrait", mode: .sprite, size: 64) {
-                        aiPrompt = "Design a 64x64 detailed pixel art fantasy mage girl portrait"
-                        submitAIPrompt()
-                    }
-                }
-            }
         }
         .padding(18)
         .background(
@@ -545,24 +516,6 @@ struct HomePageView: View {
         )
     }
 
-    private func promptChip(_ label: String, mode: AIMode, size: Int, action: @escaping () -> Void) -> some View {
-        Button {
-            selectedAIMode = mode
-            selectedSize = size
-            action()
-        } label: {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(StudioTheme.textSecondary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule().fill(Color.white.opacity(0.06))
-                        .overlay(Capsule().strokeBorder(StudioTheme.homeCardBorder, lineWidth: 1))
-                )
-        }
-        .buttonStyle(.plain)
-    }
 
     private func submitAIPrompt() {
         let text = aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -737,7 +690,7 @@ struct RecentProjectCard: View {
         Button(action: onOpen) {
             HStack(spacing: 12) {
                 // Pixel Art Preview Thumbnail
-                PixelPreviewThumb(name: project.name, size: 76)
+                PixelPreviewThumb(name: project.name, kind: metadata.kind, size: 76)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -771,7 +724,7 @@ struct RecentProjectCard: View {
                         .menuIndicator(.hidden)
                     }
 
-                    // Tag Badge (Sprite, Animation, Tileset)
+                    // Tag Badge (Sprite, Animation, Tileset, Map)
                     tagBadge(kind: metadata.kind)
 
                     // Details: Dimensions & Edited time
@@ -813,8 +766,12 @@ struct RecentProjectCard: View {
             return (StudioTheme.tagSpriteBg, StudioTheme.tagSpriteText, "Sprite")
         case .animation:
             return (StudioTheme.tagAnimationBg, StudioTheme.tagAnimationText, "Animation")
-        case .tileset, .map, .spritesheet:
+        case .tileset:
             return (StudioTheme.tagTilesetBg, StudioTheme.tagTilesetText, "Tileset")
+        case .map:
+            return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Map")
+        case .spritesheet:
+            return (StudioTheme.tagTilesetBg, StudioTheme.tagTilesetText, "Sheet")
         }
     }
 }
@@ -881,10 +838,11 @@ struct TemplateInspirationCard: View {
 
 struct PixelPreviewThumb: View {
     let name: String
+    var kind: AssetKind? = nil
     let size: CGFloat
 
     var body: some View {
-        if let cgImage = SamplePixelArt.makePreviewImage(for: name) {
+        if let cgImage = SamplePixelArt.makePreviewImage(for: name, kind: kind) {
             Image(decorative: cgImage, scale: 1.0)
                 .resizable()
                 .interpolation(.none)

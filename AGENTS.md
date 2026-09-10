@@ -88,8 +88,8 @@ readiness gate (`ModelReadiness`: text/vision/image) is computed at connect
 and blocks model-backed skills with the precise missing role. Image
 generation has no goose abstraction and stays on bixel's own OpenRouter
 client (`image_gen.rs`); vision (attachment descriptions) uses `vision.rs`.
-`.env` (`OPENROUTER_API_KEY`, `BIXEL_{TEXT,VISION,IMAGE}_MODEL`) is the
-lowest-precedence dev fallback (`ConnectionConfig::from_env`).
+The app does not read `.env` — connection config is UI-owned (the
+`ConnectionConfig::from_env` path remains for headless examples only).
 
 Pixel-art skills are exposed to the agent as an in-process `rmcp` builtin
 extension (`skill_server.rs` → `run_skill` tool) that dispatches to the skill

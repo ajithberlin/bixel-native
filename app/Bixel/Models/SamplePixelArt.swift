@@ -50,11 +50,13 @@ enum SamplePixelArt {
 
     // MARK: - Pixel Buffer Generation
 
-    static func generateSampleData(for name: String, width: Int, height: Int) -> [UInt8] {
+    static func generateSampleData(for name: String, kind: AssetKind? = nil, width: Int, height: Int) -> [UInt8] {
         var buf = [UInt8](repeating: 0, count: max(1, width * height * 4))
         let lower = name.lowercased()
 
-        if lower.contains("slime") {
+        if kind == .map || lower.contains("map") || lower.contains("dungeon") || lower.contains("world") {
+            drawMapPreview(into: &buf, w: width, h: height)
+        } else if lower.contains("slime") {
             drawSlime(into: &buf, w: width, h: height)
         } else if lower.contains("character") || lower.contains("walk") {
             drawCharacter(into: &buf, w: width, h: height)
@@ -303,6 +305,78 @@ enum SamplePixelArt {
         setPixel(&buf, w: w, h: h, x: cx, y: cy + 8, r: 240, g: 200, b: 80) // Gold brooch
     }
 
+    // 7. Tilemap World (Top-down RPG tilemap preview)
+    private static func drawMapPreview(into buf: inout [UInt8], w: Int, h: Int) {
+        // Base grass fill with texture
+        for y in 0..<h {
+            for x in 0..<w {
+                let pattern = (x * 7 + y * 13) % 11
+                if pattern == 0 {
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 75, g: 155, b: 60)
+                } else if pattern == 1 {
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 50, g: 120, b: 42)
+                } else {
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 62, g: 138, b: 52)
+                }
+            }
+        }
+
+        // River / Water body on the right edge
+        for y in 0..<h {
+            let riverStart = max(0, w * 3 / 4 + Int(sin(Double(y) / 6.0) * Double(w / 10)))
+            for x in riverStart..<w {
+                if x == riverStart {
+                    // Sand/shore edge
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 215, g: 195, b: 125)
+                } else if (x + y * 2) % 7 == 0 {
+                    // Water reflection
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 120, g: 190, b: 245)
+                } else {
+                    // Deep water
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 50, g: 110, b: 195)
+                }
+            }
+        }
+
+        // Dirt/cobblestone path from bottom-left to center
+        for y in 0..<h {
+            let pathX = w / 4 + Int(sin(Double(y) / 8.0) * Double(w / 12))
+            for x in (pathX - 2)...(pathX + 2) {
+                if (x + y) % 3 == 0 {
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 185, g: 150, b: 105)
+                } else {
+                    setPixel(&buf, w: w, h: h, x: x, y: y, r: 160, g: 125, b: 85)
+                }
+            }
+        }
+
+        // Stone structure / Castle dungeon in top-left
+        let bldW = max(14, w * 3 / 8)
+        let bldH = max(12, h * 3 / 8)
+        let bldX = max(4, w / 8)
+        let bldY = max(4, h / 8)
+        // Stone walls
+        fillRect(&buf, w: w, h: h, rect: CGRect(x: bldX, y: bldY, width: bldW, height: bldH), r: 95, g: 100, b: 110)
+        // Inner floor
+        fillRect(&buf, w: w, h: h, rect: CGRect(x: bldX + 2, y: bldY + 2, width: bldW - 4, height: bldH - 4), r: 130, g: 135, b: 145)
+        // Roof red accent banner
+        fillRect(&buf, w: w, h: h, rect: CGRect(x: bldX, y: bldY, width: bldW, height: 2), r: 195, g: 50, b: 50)
+        // Door entrance
+        fillRect(&buf, w: w, h: h, rect: CGRect(x: bldX + bldW / 2 - 2, y: bldY + bldH - 2, width: 4, height: 3), r: 45, g: 30, b: 20)
+
+        // Trees (Green crown + trunk)
+        let treePositions = [
+            (w / 2, h * 3 / 4),
+            (w * 5 / 8, h / 3),
+            (w / 8, h * 3 / 4)
+        ]
+        for (tx, ty) in treePositions {
+            fillRect(&buf, w: w, h: h, rect: CGRect(x: tx - 1, y: ty + 2, width: 2, height: 3), r: 110, g: 70, b: 40)
+            fillRect(&buf, w: w, h: h, rect: CGRect(x: tx - 4, y: ty - 4, width: 8, height: 6), r: 35, g: 100, b: 40)
+            fillRect(&buf, w: w, h: h, rect: CGRect(x: tx - 3, y: ty - 5, width: 6, height: 2), r: 50, g: 130, b: 55)
+        }
+    }
+
     private static func drawDefaultGrid(into buf: inout [UInt8], w: Int, h: Int) {
         for y in 0..<h {
             for x in 0..<w {
@@ -314,8 +388,8 @@ enum SamplePixelArt {
 
     // MARK: - CGImage Thumbnail Helper
 
-    static func makePreviewImage(for name: String, width: Int = 48, height: Int = 48) -> CGImage? {
-        let pixels = generateSampleData(for: name, width: width, height: height)
+    static func makePreviewImage(for name: String, kind: AssetKind? = nil, width: Int = 48, height: Int = 48) -> CGImage? {
+        let pixels = generateSampleData(for: name, kind: kind, width: width, height: height)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
         guard let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }

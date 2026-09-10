@@ -43,6 +43,8 @@ enum StudioTheme {
     static let tagAnimationText = Color(red: 0.78, green: 0.58, blue: 0.98)
     static let tagTilesetBg = Color(red: 0.14, green: 0.24, blue: 0.42)
     static let tagTilesetText = Color(red: 0.46, green: 0.72, blue: 0.98)
+    static let tagMapBg = Color(red: 0.32, green: 0.20, blue: 0.10)
+    static let tagMapText = Color(red: 0.98, green: 0.72, blue: 0.36)
 
     static let canvasBackground = Color(red: 0.11, green: 0.113, blue: 0.125)
 

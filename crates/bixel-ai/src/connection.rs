@@ -8,7 +8,7 @@
 //! lowest-precedence dev fallback via [`ConnectionConfig::from_env`].
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use goose::config::Config;
 use goose::providers;
@@ -435,15 +435,89 @@ pub fn disconnect(runtime: &tokio::runtime::Runtime, provider: ProviderChoice) -
 /// Run the ChatGPT (Codex) browser sign-in ahead of `connect`, so the UI can
 /// offer a dedicated "Sign in with ChatGPT" action. Tokens are cached under
 /// `GOOSE_PATH_ROOT`, so a later `connect` reuses them.
+///
+/// The flow is spawned (not called inline) so [`cancel_codex_oauth`] can abort
+/// it: goose holds a process-wide mutex for the whole flow, including its
+/// 300 s browser-callback wait — aborting the task is the only way to release
+/// that mutex early and let the user retry immediately.
 pub fn start_codex_oauth(runtime: &tokio::runtime::Runtime) -> Result<(), AiError> {
     ensure_goose_env()?;
+    cancel_codex_oauth();
     let provider = runtime
         .block_on(providers::create(CHATGPT_CODEX_PROVIDER, vec![]))
         .map_err(|e| AiError::Provider(e.to_string()))?;
-    runtime
-        .block_on(provider.configure_oauth())
-        .map_err(|e| AiError::Provider(format!("ChatGPT sign-in failed: {e}")))?;
-    Ok(())
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
+    let task = runtime.spawn(async move {
+        let result = provider.configure_oauth().await.map_err(|e| e.to_string());
+        let _ = tx.send(result);
+    });
+    *OAUTH_TASK.lock().unwrap() = Some(task);
+    let result = rx
+        .recv()
+        .map_err(|_| AiError::Provider("ChatGPT sign-in was cancelled".into()))?;
+    *OAUTH_TASK.lock().unwrap() = None;
+    result.map_err(|e| AiError::Provider(format!("ChatGPT sign-in failed: {e}")))
+}
+
+/// Abort an in-flight [`start_codex_oauth`] flow (releases goose's OAuth
+/// mutex so the next attempt can start immediately).
+pub fn cancel_codex_oauth() {
+    if let Some(handle) = OAUTH_TASK.lock().unwrap().take() {
+        handle.abort();
+    }
+}
+
+static OAUTH_TASK: Mutex<Option<tokio::task::JoinHandle<()>>> = Mutex::new(None);
+
+/// Model ids selectable in the UI: the provider's known models (Codex) or the
+/// OpenRouter catalog (requires a stored OpenRouter key). No network for
+/// Codex; one `/models` call for OpenRouter.
+pub fn list_models(provider: ProviderChoice) -> Result<Vec<String>, AiError> {
+    ensure_goose_env()?;
+    match provider {
+        ProviderChoice::ChatgptCodex => {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| AiError::Provider(format!("failed to start runtime: {e}")))?;
+            let entry = runtime
+                .block_on(providers::get_from_registry(CHATGPT_CODEX_PROVIDER))
+                .map_err(|e| AiError::Provider(e.to_string()))?;
+            let mut names: Vec<String> = entry
+                .metadata()
+                .known_models
+                .iter()
+                .map(|m| m.name.clone())
+                .collect();
+            names.sort();
+            Ok(names)
+        }
+        ProviderChoice::OpenRouter => {
+            let key: String = Config::global()
+                .get_secret("OPENROUTER_API_KEY")
+                .map_err(|_| AiError::Config("connect an OpenRouter API key first".into()))?;
+            let url = format!("{}/models", default_base_url().trim_end_matches('/'));
+            let text = reqwest::blocking::Client::new()
+                .get(&url)
+                .header("Authorization", format!("Bearer {key}"))
+                .send()
+                .map_err(|e| AiError::Provider(e.to_string()))?
+                .text()
+                .map_err(|e| AiError::Provider(e.to_string()))?;
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| AiError::Provider(format!("unexpected /models response: {e}")))?;
+            let mut ids: Vec<String> = v
+                .get("data")
+                .and_then(|d| d.as_array())
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            ids.sort();
+            Ok(ids)
+        }
+    }
 }
 
 #[cfg(test)]

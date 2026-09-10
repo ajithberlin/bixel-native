@@ -783,26 +783,18 @@ fn connect_agent(cfg: ConnectionConfig) -> Result<std::sync::Arc<GooseAgent>, St
     }
 }
 
-/// The shared agent. When the UI has not connected one yet, fall back to the
-/// `.env` / process-env credential set (lowest precedence).
+/// The shared agent, usable only after an explicit UI connect.
 fn ai_agent() -> Result<std::sync::Arc<GooseAgent>, String> {
-    {
-        let state = AI_STATE.lock().unwrap();
-        if let Some(agent) = &state.agent {
-            return Ok(agent.clone());
-        }
+    let state = AI_STATE.lock().unwrap();
+    match &state.agent {
+        Some(agent) if agent.handle().is_some() => Ok(agent.clone()),
+        _ => Err("AI provider is not connected".to_string()),
     }
-    let cfg = ConnectionConfig::from_env();
-    if cfg.api_key.is_none() {
-        return Err("AI provider is not connected".to_string());
-    }
-    connect_agent(cfg)
 }
 
 /// Connection status as a JSON value. Credentials never appear here — only a
-/// masked `…last4` label. `connected`/`readiness` are None until the UI (or
-/// the env fallback) has connected; `env` always reflects the `.env` fallback
-/// so the UI can show what connecting from env would use.
+/// masked `…last4` label. Until the UI connects, the models shown are the
+/// built-in defaults the next connect would use.
 fn connection_status_json() -> serde_json::Value {
     let (connected_cfg, readiness, connected) = {
         let state = AI_STATE.lock().unwrap();
@@ -814,9 +806,7 @@ fn connection_status_json() -> serde_json::Value {
             _ => (None, None, false),
         }
     };
-    let env_cfg = ConnectionConfig::from_env();
-
-    let active = connected_cfg.as_ref().unwrap_or(&env_cfg);
+    let active = connected_cfg.unwrap_or_default();
     let readiness_json = |r: Option<&ModelReadiness>| {
         serde_json::json!({
             "text": r.map(|r| serde_json::to_value(&r.text).unwrap()),
@@ -836,7 +826,6 @@ fn connection_status_json() -> serde_json::Value {
         },
         "base_url": active.base_url,
         "readiness": readiness_json(readiness.as_ref()),
-        "env_available": env_cfg.api_key.is_some(),
     })
 }
 
@@ -902,19 +891,38 @@ pub extern "C" fn bixel_ai_start_codex_oauth() -> *mut c_char {
     }
 }
 
-/// Lightweight availability check: connected through the UI, or a usable
-/// `.env` fallback exists. Provider startup belongs on the worker thread.
+/// Abort an in-flight ChatGPT sign-in so it can be retried immediately
+/// (goose otherwise holds its OAuth lock for the full callback timeout).
+#[no_mangle]
+pub extern "C" fn bixel_ai_cancel_codex_oauth() {
+    bixel_ai::connection::cancel_codex_oauth();
+}
+
+/// JSON array of selectable model ids for a provider (`openrouter` or
+/// `chatgpt_codex`), or `{"error": ...}`. OpenRouter requires a stored key.
+/// Free with [`bixel_string_free`].
+#[no_mangle]
+pub extern "C" fn bixel_ai_list_models(provider: *const c_char) -> *mut c_char {
+    let provider = match arg_str(provider).as_str() {
+        "chatgpt_codex" => bixel_ai::ProviderChoice::ChatgptCodex,
+        _ => bixel_ai::ProviderChoice::OpenRouter,
+    };
+    match bixel_ai::connection::list_models(provider) {
+        Ok(models) => out_cstr(
+            serde_json::to_string(&models).unwrap_or_else(|_| "[]".into()),
+        ),
+        Err(e) => out_cstr(
+            serde_json::json!({ "error": e.to_string() }).to_string(),
+        ),
+    }
+}
+
+/// Lightweight availability check: connected through the UI. Provider
+/// startup belongs on the worker thread.
 #[no_mangle]
 pub extern "C" fn bixel_ai_available() -> bool {
-    {
-        let state = AI_STATE.lock().unwrap();
-        if let Some(agent) = &state.agent {
-            if agent.handle().is_some() {
-                return true;
-            }
-        }
-    }
-    ConnectionConfig::from_env().api_key.is_some()
+    let state = AI_STATE.lock().unwrap();
+    matches!(&state.agent, Some(agent) if agent.handle().is_some())
 }
 
 /// JSON array of the available skills (id, name, description, params schema).
@@ -1846,23 +1854,33 @@ pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -
 mod tests {
     use super::*;
 
-    /// The status JSON must expose the masked credential and model readiness
-    /// shapes, and must never contain a full API key.
+    /// The status JSON must expose model roles and per-role readiness shapes
+    /// and must never contain a full API key.
     #[test]
     fn connection_status_json_never_returns_secrets() {
-        std::env::set_var("OPENROUTER_API_KEY", "sk-or-testsecret9876");
         let value = connection_status_json();
         let text = value.to_string();
-        assert!(!text.contains("sk-or-testsecret9876"), "status leaked the API key: {text}");
-        assert_eq!(value["key"], "…9876");
+        assert!(!text.contains("sk-or-"), "status leaked an API key: {text}");
+        assert!(value["key"].is_null());
         assert_eq!(value["provider"], "openrouter");
         for role in ["text", "vision", "image"] {
             assert!(value["models"][role].is_string(), "missing model role {role}");
             assert!(value["readiness"][role].is_null(), "unexpected readiness while offline");
         }
-        assert_eq!(value["env_available"], true);
         assert_eq!(value["connected"], false);
-        std::env::remove_var("OPENROUTER_API_KEY");
+    }
+
+    /// Masking must show only the last 4 characters of a key.
+    #[test]
+    fn masked_key_shows_last4_only() {
+        let cfg = ConnectionConfig {
+            provider: bixel_ai::ProviderChoice::OpenRouter,
+            api_key: Some("sk-or-testsecret9876".into()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.masked_key().as_deref(), Some("…9876"));
+        let json = connection_status_json().to_string();
+        assert!(!json.contains("sk-or-testsecret9876"));
     }
 
     #[test]

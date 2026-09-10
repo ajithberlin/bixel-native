@@ -72,6 +72,10 @@ struct AIPanel: View {
         .sheet(isPresented: $showSettings) {
             AISettingsView()
         }
+        .onAppear {
+            // No provider set up yet — jump straight into the setup sheet.
+            if !session.status.connected { showSettings = true }
+        }
     }
 
     private func roleDot(_ role: String) -> Color {
