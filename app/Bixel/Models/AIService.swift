@@ -292,6 +292,62 @@ enum AIService {
         return (rgba, w, h)
     }
 
+    /// Rasterizes a native-resolution source into a destination buffer using
+    /// inverse nearest-neighbour sampling. The source remains untouched, so
+    /// oversized images can be transformed before they are clipped on commit.
+    static func rasterizeNativeImage(
+        rgba: [UInt8], srcWidth: Int, srcHeight: Int,
+        center: CGPoint, scaleX: CGFloat, scaleY: CGFloat,
+        angle: CGFloat, dstWidth: Int, dstHeight: Int
+    ) -> [UInt8] {
+        guard dstWidth > 0, dstHeight > 0,
+              dstHeight <= Int.max / 4,
+              dstWidth <= Int.max / (dstHeight * 4) else { return [] }
+        let destinationCount = dstWidth * dstHeight * 4
+        var destination = [UInt8](repeating: 0, count: destinationCount)
+
+        guard srcWidth > 0, srcHeight > 0,
+              srcHeight <= Int.max / 4,
+              srcWidth <= Int.max / (srcHeight * 4),
+              rgba.count >= srcWidth * srcHeight * 4,
+              center.x.isFinite, center.y.isFinite,
+              scaleX.isFinite, scaleY.isFinite, angle.isFinite else {
+            return destination
+        }
+
+        let safeScaleX = max(0.0001, scaleX)
+        let safeScaleY = max(0.0001, scaleY)
+        let cosine = cos(angle)
+        let sine = sin(angle)
+        let sourceCenterX = CGFloat(srcWidth) / 2
+        let sourceCenterY = CGFloat(srcHeight) / 2
+
+        for y in 0..<dstHeight {
+            let destinationY = CGFloat(y) + 0.5
+            for x in 0..<dstWidth {
+                let destinationX = CGFloat(x) + 0.5
+                let offsetX = destinationX - center.x
+                let offsetY = destinationY - center.y
+
+                // Inverse-rotate into source-local space, then undo scale.
+                let sourceLocalX = (offsetX * cosine + offsetY * sine) / safeScaleX
+                let sourceLocalY = (-offsetX * sine + offsetY * cosine) / safeScaleY
+                let mappedSourceX = sourceCenterX + sourceLocalX
+                let mappedSourceY = sourceCenterY + sourceLocalY
+                guard mappedSourceX >= 0, mappedSourceX < CGFloat(srcWidth),
+                      mappedSourceY >= 0, mappedSourceY < CGFloat(srcHeight) else { continue }
+                let sourceX = Int(floor(mappedSourceX))
+                let sourceY = Int(floor(mappedSourceY))
+
+                let sourceOffset = (sourceY * srcWidth + sourceX) * 4
+                let destinationOffset = (y * dstWidth + x) * 4
+                destination[destinationOffset..<(destinationOffset + 4)] =
+                    rgba[sourceOffset..<(sourceOffset + 4)]
+            }
+        }
+        return destination
+    }
+
     /// Resamples an RGBA image to target dimensions using nearest-neighbor pixel art scaling.
     /// Preserves aspect ratio by centering on a transparent canvas if aspect ratios differ.
     static func fitToFrame(rgba: [UInt8], srcWidth: Int, srcHeight: Int, dstWidth: Int, dstHeight: Int) -> [UInt8] {

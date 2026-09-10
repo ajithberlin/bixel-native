@@ -40,6 +40,102 @@ struct EditorInteractionTests {
             model.updateRotation(x: 5, y: 3)
             model.endRotation(commit: false)
         }
+
+        let tolerance: CGFloat = 0.001
+        func assertNear(_ actual: CGPoint, _ expected: CGPoint, _ message: String) {
+            precondition(abs(actual.x - expected.x) <= tolerance && abs(actual.y - expected.y) <= tolerance,
+                         "\(message): expected \(expected), got \(actual)")
+        }
+
+        let geometry = TransformGeometry(
+            center: CGPoint(x: 10, y: 20),
+            size: CGSize(width: 8, height: 4),
+            angle: .pi / 2
+        )
+        let expectedCorners = [
+            CGPoint(x: 12, y: 16), CGPoint(x: 12, y: 24),
+            CGPoint(x: 8, y: 24), CGPoint(x: 8, y: 16)
+        ]
+        for (actual, expected) in zip(geometry.corners, expectedCorners) {
+            assertNear(actual, expected, "Rotated transform corner")
+        }
+        let expectedTop = CGPoint(x: 12, y: 20)
+        let expectedRotationHandle = CGPoint(x: 30, y: 20)
+        assertNear(geometry.point(for: .top), expectedTop, "Rotated top handle")
+        assertNear(geometry.rotationHandlePoint, expectedRotationHandle, "Rotated rotation handle")
+        func hit(_ point: CGPoint) -> TransformHandle? {
+            TransformHandle.allCases.first { handle in
+                hypot(point.x - geometry.point(for: handle).x,
+                      point.y - geometry.point(for: handle).y) <= 1
+            }
+        }
+        precondition(hit(expectedTop) == .top, "Rotated top handle must be hit-testable")
+        precondition(hit(CGPoint(x: 10, y: 18)) == nil,
+                     "The old axis-aligned top handle location must not hit rotated geometry")
+        precondition(geometry.contains(geometry.center), "The transform center must remain inside rotated geometry")
+
+        func sourcePixel(_ x: Int, _ y: Int) -> [UInt8] {
+            [UInt8(x + 1), UInt8(y + 11), UInt8(x + y + 21), 255]
+        }
+        var source = [UInt8](repeating: 0, count: 3 * 2 * 4)
+        for y in 0..<2 {
+            for x in 0..<3 {
+                let offset = (y * 3 + x) * 4
+                source.replaceSubrange(offset..<(offset + 4), with: sourcePixel(x, y))
+            }
+        }
+        let rotated = AIService.rasterizeNativeImage(
+            rgba: source, srcWidth: 3, srcHeight: 2,
+            center: CGPoint(x: 2, y: 2), scaleX: 1, scaleY: 1,
+            angle: .pi / 2, dstWidth: 5, dstHeight: 5
+        )
+        precondition(rotated.count == 5 * 5 * 4)
+        for y in 0..<5 {
+            for x in 0..<5 {
+                let offset = (y * 5 + x) * 4
+                let expected: [UInt8]
+                switch (x, y) {
+                case (1, 0): expected = sourcePixel(0, 1)
+                case (2, 0): expected = sourcePixel(0, 0)
+                case (1, 1): expected = sourcePixel(1, 1)
+                case (2, 1): expected = sourcePixel(1, 0)
+                case (1, 2): expected = sourcePixel(2, 1)
+                case (2, 2): expected = sourcePixel(2, 0)
+                default: expected = [0, 0, 0, 0]
+                }
+                precondition(Array(rotated[offset..<(offset + 4)]) == expected,
+                             "Rotated source mismatch at (\(x), \(y))")
+            }
+        }
+
+        var oversized = [UInt8](repeating: 0, count: 7 * 2 * 4)
+        for y in 0..<2 {
+            for x in 0..<7 {
+                let offset = (y * 7 + x) * 4
+                oversized.replaceSubrange(offset..<(offset + 4), with: [UInt8(x + 1), UInt8(y + 31), UInt8(x + y + 61), 255])
+            }
+        }
+        let oversizedResult = AIService.rasterizeNativeImage(
+            rgba: oversized, srcWidth: 7, srcHeight: 2,
+            center: CGPoint(x: 2, y: 2), scaleX: 1, scaleY: 1,
+            angle: 0, dstWidth: 5, dstHeight: 5
+        )
+        let oversizedOffset = (1 * 5 + 4) * 4
+        precondition(Array(oversizedResult[oversizedOffset..<(oversizedOffset + 4)]) == [7, 31, 67, 255],
+                     "An oversized source must be scanned directly instead of cropped first")
+
+        let scaled = AIService.rasterizeNativeImage(
+            rgba: source, srcWidth: 3, srcHeight: 2,
+            center: CGPoint(x: 2, y: 2), scaleX: 0.5, scaleY: 0.5,
+            angle: 0, dstWidth: 5, dstHeight: 5
+        )
+        let scaledFirstPixel = (1 * 5 + 1) * 4
+        precondition(Array(scaled[scaledFirstPixel..<(scaledFirstPixel + 4)]) == sourcePixel(0, 0),
+                     "Scaling must be applied by the commit-time rasterizer")
+        let scaledSecondPixel = (1 * 5 + 2) * 4
+        precondition(Array(scaled[scaledSecondPixel..<(scaledSecondPixel + 4)]) == sourcePixel(2, 0),
+                     "Commit-time scaling must use nearest-neighbour sampling")
+
         model.selectTool(.pencil)
         precondition(model.selectionRect == nil && model.transformRect == nil,
                      "Changing from transform to a painting tool must close the selection")

@@ -77,6 +77,70 @@ enum TransformHandle: CaseIterable, Equatable {
     }
 }
 
+/// Oriented transform-box geometry in document space. Coordinates use the
+/// document's y-down convention, so positive angles rotate clockwise visually.
+struct TransformGeometry {
+    var center: CGPoint
+    var size: CGSize
+    var angle: CGFloat
+
+    var halfSize: CGSize {
+        CGSize(width: size.width / 2, height: size.height / 2)
+    }
+
+    private func rotated(_ local: CGPoint, by radians: CGFloat) -> CGPoint {
+        let cosine = cos(radians)
+        let sine = sin(radians)
+        return CGPoint(
+            x: local.x * cosine - local.y * sine,
+            y: local.x * sine + local.y * cosine
+        )
+    }
+
+    private func localPoint(for handle: TransformHandle) -> CGPoint {
+        let half = halfSize
+        switch handle {
+        case .topLeft: return CGPoint(x: -half.width, y: -half.height)
+        case .top: return CGPoint(x: 0, y: -half.height)
+        case .topRight: return CGPoint(x: half.width, y: -half.height)
+        case .right: return CGPoint(x: half.width, y: 0)
+        case .bottomRight: return CGPoint(x: half.width, y: half.height)
+        case .bottom: return CGPoint(x: 0, y: half.height)
+        case .bottomLeft: return CGPoint(x: -half.width, y: half.height)
+        case .left: return CGPoint(x: -half.width, y: 0)
+        }
+    }
+
+    func point(for handle: TransformHandle) -> CGPoint {
+        let point = rotated(localPoint(for: handle), by: angle)
+        return CGPoint(x: center.x + point.x, y: center.y + point.y)
+    }
+
+    var corners: [CGPoint] {
+        [.topLeft, .topRight, .bottomRight, .bottomLeft].map(point(for:))
+    }
+
+    /// The rotation stem extends from the local top edge by the same
+    /// tiny-artwork-friendly distance used by the existing transform UI.
+    var rotationHandlePoint: CGPoint {
+        let distance = max(18, min(36, size.height * 0.3))
+        let point = rotated(CGPoint(x: 0, y: -halfSize.height - distance), by: angle)
+        return CGPoint(x: center.x + point.x, y: center.y + point.y)
+    }
+
+    func contains(_ point: CGPoint) -> Bool {
+        let local = localPoint(point)
+        let half = halfSize
+        return abs(local.x) <= half.width && abs(local.y) <= half.height
+    }
+
+    /// Converts a document-space point into the transform box's local space.
+    func localPoint(_ point: CGPoint) -> CGPoint {
+        let translated = CGPoint(x: point.x - center.x, y: point.y - center.y)
+        return rotated(translated, by: -angle)
+    }
+}
+
 struct LayerInfo: Identifiable {
     let index: Int
     var name: String
