@@ -683,7 +683,9 @@ fn pixel_file_compressor(input: SkillInput) -> Result<SkillOutput, AiError> {
         .and_then(|v| v.as_f64())
         .map(|v| v.clamp(0.05, 1.0) as f32)
         .unwrap_or(1.0);
-    let mut out = image::downscale_nearest(img, scale);
+    // Spend the reduced pixel budget on the asset, not transparent padding.
+    let cropped = image::crop_to_content(img, 0, 0);
+    let mut out = image::downscale_nearest(&cropped, scale);
     if colors > 0 {
         out = image::quantize(&out, colors.clamp(2, 256));
     }
@@ -992,8 +994,28 @@ mod preparation_tests {
         source.data.fill(255);
         let output =
             prepare_generated(source.clone(), &input(serde_json::json!({})), None).unwrap();
-        assert_eq!(output.image.unwrap().data, source.data);
+        assert_eq!(output.source_image.unwrap().data, source.data);
         assert!(output.text.contains("opaque"));
+    }
+
+    #[test]
+    fn transparent_target_crops_subject_before_fitting() {
+        let mut source = RgbaImage::new(16, 16);
+        for y in 6..10 {
+            for x in 5..9 {
+                source.set_pixel(x, y, [220, 90, 40, 255]);
+            }
+        }
+        let output = prepare_generated(
+            source,
+            &input(serde_json::json!({"width": 4, "height": 4, "transparent": true})),
+            None,
+        )
+        .unwrap();
+        let image = output.image.unwrap();
+
+        assert_eq!((image.width, image.height), (4, 4));
+        assert!(image.data.chunks_exact(4).all(|p| p == [220, 90, 40, 255]));
     }
     #[test]
     fn uniform_backdrop_removed_without_erasing_enclosed_same_color() {
@@ -1224,6 +1246,17 @@ fn prepare_matte(source: &RgbaImage) -> RgbaImage {
     }
 }
 
+/// Trim transparent padding only when the requested target would actually
+/// reduce the source. A smaller subject should not be enlarged just because
+/// transparent margins were removed.
+fn trim_for_target(source: &RgbaImage, width: usize, height: usize) -> RgbaImage {
+    if source.width > width || source.height > height {
+        image::crop_to_content(source, 0, 0)
+    } else {
+        source.clone()
+    }
+}
+
 fn prepare_generated(
     source: RgbaImage,
     input: &SkillInput,
@@ -1255,7 +1288,14 @@ fn prepare_generated(
     let prepared = if let Some((cols, rows)) = grid {
         frames = image::slice_grid(&working, cols, rows);
         if let Some((w, h)) = target {
-            frames = frames.iter().map(|f| if transparent { fit_generated(f, w, h) } else { fit_generated_opaque(f, w, h) }).collect();
+            frames = frames.iter().map(|f| {
+                if transparent {
+                    let cropped = trim_for_target(f, w, h);
+                    fit_generated(&cropped, w, h)
+                } else {
+                    fit_generated_opaque(f, w, h)
+                }
+            }).collect();
             let mut sheet = RgbaImage::new(w * cols, h * rows);
             for (i, f) in frames.iter().enumerate() {
                 for y in 0..h {
@@ -1269,7 +1309,12 @@ fn prepare_generated(
             working.clone()
         }
     } else if let Some((w, h)) = target {
-        if transparent { fit_generated(&working, w, h) } else { fit_generated_opaque(&working, w, h) }
+        if transparent {
+            let cropped = trim_for_target(&working, w, h);
+            fit_generated(&cropped, w, h)
+        } else {
+            fit_generated_opaque(&working, w, h)
+        }
     } else {
         working.clone()
     };

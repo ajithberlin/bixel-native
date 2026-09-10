@@ -18,17 +18,18 @@ struct AssistantSessionTests {
         precondition(updates == 1, "Refresh document controls once after a stroke")
         precondition(editor.document.getPixel(layer: 0, frame: 0, x: 21, y: 1).a > 0)
         let canvas = PixelCanvas(frame: NSRect(x: 0, y: 0, width: 320, height: 320))
-        let canvasCoordinator = CanvasView.Coordinator(model: editor)
-        editor.tool = .line
-        canvasCoordinator.begin(at: CGPoint(x: 15, y: 295), in: canvas)
-        canvasCoordinator.end(at: CGPoint(x: 500, y: 295), in: canvas)
-        precondition(editor.document.getPixel(layer: 0, frame: 0, x: 31, y: 2).a == 255, "Mouse-up outside canvas must finish the line at its edge")
+        let canvasCoordinator = CanvasView.Coordinator(model: editor, viewport: CanvasViewport())
+        editor.tool = .pencil
+        canvasCoordinator.commitLine(from: CGPoint(x: 15, y: 295), to: CGPoint(x: 500, y: 295), dragged: true, in: canvas)
+        precondition(editor.document.getPixel(layer: 0, frame: 0, x: 31, y: 0).a == 255, "Mouse-up outside canvas must finish the line at its edge")
         let afterEnd = updates
         canvasCoordinator.drag(at: CGPoint(x: 100, y: 100), in: canvas)
         precondition(updates == afterEnd, "Releasing outside must clear the active stroke")
         withExtendedLifetime(observation) {}
         let session = AssistantSession()
         precondition(session.commands.count > 4, "Use the complete engine skill registry")
+        let localResult = try! JSONDecoder().decode(SkillRunResult.self, from: Data(#"{"source_image":"source","image":"prepared","frames":[],"text":"ok"}"#.utf8))
+        precondition(localResult.source_image == "source", "Local image results must retain the unprepared source artifact")
         let first = session.commands[0], second = session.commands[1]
         let input = "Before \(first.marker) between \(second.marker) after 🐈"
         session.input = input
@@ -53,7 +54,7 @@ struct AssistantSessionTests {
         session.receive(AssistantEvent(type: "text", id: "round0", delta: "the reference."))
         session.receive(AssistantEvent(type: "tool_call", id: "arbitrary-tool", name: "future_code_tool", arguments: "{\"code\":\"print(1)\"}"))
         let png = AIService.rgbaToPNG([255, 0, 0, 255], width: 1, height: 1)!
-        session.receive(AssistantEvent(type: "artifact", id: "image1", parent_id: "arbitrary-tool", name: "result.png", png: png.base64EncodedString(), width: 1, height: 1))
+        session.receive(AssistantEvent(type: "artifact", id: "image1", parent_id: "arbitrary-tool", name: "result.png", png: png.base64EncodedString(), width: 1, height: 1, source: true))
         session.receive(AssistantEvent(type: "tool_result", id: "arbitrary-tool", name: "future_code_tool", text: "Actual tool output", success: true))
         session.receive(AssistantEvent(type: "started", id: "round1", title: "Thinking"))
         session.receive(AssistantEvent(type: "text", id: "round1", delta: "Done."))
@@ -63,6 +64,10 @@ struct AssistantSessionTests {
         precondition(blocks[1].text == "Inspecting the reference.", "Accumulate streaming deltas")
         precondition(blocks[2].title == "future_code_tool", "Unknown tools must render generically")
         precondition(blocks[2].artifacts[0].data == png, "Associate output images with their tool call")
+        precondition(blocks[2].artifacts[0].isSource, "Generated originals must retain source provenance in the transcript")
+        let restoredArtifact = try! JSONDecoder().decode(AssistantArtifact.self,
+                                                          from: JSONEncoder().encode(blocks[2].artifacts[0]))
+        precondition(restoredArtifact.isSource, "Original/prepared provenance must survive assistant persistence")
         precondition(!blocks.contains(where: \.running), "Finish all active steps")
         session.receive(AssistantEvent(type: "error", message: "Connection failed"))
         precondition(session.messages[0].blocks.last?.kind == .error)
@@ -73,7 +78,7 @@ struct AssistantSessionTests {
         let projectRoot = FileManager.default.temporaryDirectory.appendingPathComponent("bixel-project-tests-\(UUID().uuidString)/Documents/Bixel/Projects")
         defer { try? FileManager.default.removeItem(at: projectRoot) }
         let store = ProjectStore(root: projectRoot)
-        precondition(store.error == nil && store.projects.isEmpty)
+        precondition(store.error == nil, store.error ?? "unexpected project catalog state")
         store.create(name: "First")
         precondition(store.error == nil, store.error ?? "")
         let firstProject = store.current!

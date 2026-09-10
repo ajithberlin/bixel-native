@@ -393,9 +393,9 @@ final class EditorModel: ObservableObject {
 
     /// Which transform handle (if any) is under the pointer. `tolerance` is in document
     /// pixels so the grab matches the on-screen handle size at any zoom.
-    func hitTransformHandle(x: Int, y: Int, tolerance: CGFloat) -> TransformHandle? {
+    func hitTransformHandle(x: CGFloat, y: CGFloat, tolerance: CGFloat) -> TransformHandle? {
         guard let rect = transformRect ?? selectionRect else { return nil }
-        let p = CGPoint(x: CGFloat(x), y: CGFloat(y))
+        let p = CGPoint(x: x, y: y)
         for handle in TransformHandle.allCases {
             let c = handle.point(in: rect)
             if abs(p.x - c.x) <= tolerance && abs(p.y - c.y) <= tolerance { return handle }
@@ -1159,8 +1159,11 @@ final class EditorModel: ObservableObject {
     func placeAsset(_ data: Data, name: String, x: Int? = nil, y: Int? = nil) {
         operationError = nil
         guard let image = AIService.pngToRGBA(data) else { operationError = "Could not decode the image."; return }
-        let px = x ?? max(0, (width - image.width) / 2)
-        let py = y ?? max(0, (height - image.height) / 2)
+        // Keep the source at native pixels. Rust clips placement against the
+        // document, so oversized assets remain centered instead of silently
+        // being resampled or pinned to the top-left.
+        let px = x ?? (width - image.width) / 2
+        let py = y ?? (height - image.height) / 2
         do {
             activeLayer = try document.placeImageData(image.rgba, width: image.width, height: image.height,
                                                        x: px, y: py, frame: frame, name: name)
@@ -1177,22 +1180,32 @@ final class EditorModel: ObservableObject {
         } catch { operationError = error.localizedDescription }
     }
 
-    /// Apply an image to a new animation frame, auto-fitting to document dimensions if needed.
+    /// Apply an image to a new animation frame without resampling. The fixed
+    /// document canvas clips a larger source at its centered bounds, then the
+    /// visible pixels are selected so the user can transform them manually.
     func applyImageToNewFrame(_ rgba: [UInt8], width: Int, height: Int) {
         guard width > 0, height > 0 else {
             operationError = "Invalid image dimensions."
             return
         }
-        let targetData: [UInt8]
-        if width == self.width && height == self.height {
-            targetData = rgba
-        } else {
-            targetData = AIService.fitToFrame(rgba: rgba, srcWidth: width, srcHeight: height, dstWidth: self.width, dstHeight: self.height)
+        let targetData = AIService.centerNativeImage(rgba: rgba, srcWidth: width, srcHeight: height,
+                                                     dstWidth: self.width, dstHeight: self.height)
+        guard targetData.count == self.width * self.height * 4 else {
+            operationError = "Could not place the image on the canvas."
+            return
         }
         document.snapshot()
         let newFrame = document.addFrame(durationMs: 125)
         document.loadImageData(targetData, width: self.width, height: self.height, layer: 0, frame: newFrame)
-        frame = newFrame; reloadLayers(); commitChange(allFrames: true)
+        frame = newFrame
+        reloadLayers()
+        selectionRect = activeLayerContentBounds()
+        transformRect = selectionRect
+        transformAngle = 0
+        if selectionRect != nil {
+            selectTool(.transform)
+        }
+        commitChange(allFrames: true)
     }
 
     /// Apply an image to the active layer of current frame, auto-fitting to document dimensions if needed.

@@ -29,7 +29,7 @@ pub enum NativeEvent {
     Text { id: String, delta: String },
     ToolCall { id: String, name: String, arguments: String },
     ToolResult { id: String, name: String, text: String, success: bool },
-    Artifact { id: String, parent_id: String, name: String, png: String, width: usize, height: usize },
+    Artifact { id: String, parent_id: String, name: String, png: String, width: usize, height: usize, source: bool },
     Usage { input_tokens: i64, output_tokens: i64 },
     Finished,
     Error { message: String },

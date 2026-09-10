@@ -114,6 +114,70 @@ struct CanvasView: NSViewRepresentable {
     }
 }
 
+enum CanvasCursorKind: Hashable {
+    case arrow, paint, smudge, eraser, fill, eyedropper, selection
+    case move, resizeHorizontal, resizeVertical, resizeDiagonal, rotate
+    case panOpen, panClosed
+
+    var cursor: NSCursor {
+        switch self {
+        case .arrow: return .arrow
+        case .paint: return Self.symbolCursor("paintbrush.pointed", fallback: .crosshair)
+        case .smudge: return Self.symbolCursor("hand.draw", fallback: .openHand)
+        case .eraser: return Self.symbolCursor("eraser", fallback: .disappearingItem)
+        case .fill: return Self.symbolCursor("paint.bucket", fallback: .pointingHand)
+        case .eyedropper: return Self.symbolCursor("eyedropper", fallback: .crosshair)
+        case .selection: return Self.symbolCursor("lasso", fallback: .crosshair)
+        case .move: return .openHand
+        case .resizeHorizontal: return .resizeLeftRight
+        case .resizeVertical: return .resizeUpDown
+        case .resizeDiagonal: return Self.symbolCursor("arrow.up.left.and.arrow.down.right", fallback: .crosshair)
+        case .rotate: return Self.symbolCursor("rotate.right", fallback: .pointingHand)
+        case .panOpen: return .openHand
+        case .panClosed: return .closedHand
+        }
+    }
+
+    private static func symbolCursor(_ name: String, fallback: NSCursor) -> NSCursor {
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return fallback }
+        image.size = NSSize(width: 24, height: 24)
+        return NSCursor(image: image, hotSpot: CGPoint(x: 3, y: 3))
+    }
+}
+
+/// Pure cursor routing keeps tool/location decisions testable without a live
+/// NSView or mouse event stream.
+enum CanvasCursorPolicy {
+    static func kind(tool: Tool, insideArtboard: Bool,
+                     transformHandle: TransformHandle? = nil,
+                     rotationHandle: Bool = false,
+                     panning: Bool = false,
+                     spaceDown: Bool = false) -> CanvasCursorKind {
+        if spaceDown { return panning ? .panClosed : .panOpen }
+        if tool == .transform {
+            if rotationHandle { return .rotate }
+            if let transformHandle {
+                switch transformHandle {
+                case .top, .bottom: return .resizeVertical
+                case .left, .right: return .resizeHorizontal
+                case .topLeft, .topRight, .bottomRight, .bottomLeft: return .resizeDiagonal
+                }
+            }
+            return insideArtboard ? .move : .arrow
+        }
+        guard insideArtboard else { return .arrow }
+        switch tool {
+        case .pencil: return .paint
+        case .smudge: return .smudge
+        case .eraser: return .eraser
+        case .fill: return .fill
+        case .eyedropper: return .eyedropper
+        case .selection: return .selection
+        case .transform: return .move
+        }
+    }
+}
+
 /// NSView subclass that hosts the Core Animation canvas and routes events.
 final class PixelCanvas: NSView {
     weak var coordinator: CanvasView.Coordinator?
@@ -393,6 +457,7 @@ final class PixelCanvas: NSView {
         }
 
         CATransaction.commit()
+        updateCursor()
     }
 
     /// Eight small squares centred on the corners and edge midpoints of the
@@ -540,16 +605,49 @@ final class PixelCanvas: NSView {
         super.updateTrackingAreas()
         for area in trackingAreas { removeTrackingArea(area) }
         addTrackingArea(NSTrackingArea(rect: bounds,
-                                       options: [.mouseMoved, .activeAlways, .inVisibleRect],
+                                       options: [.mouseMoved, .cursorUpdate, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
     }
 
     override func mouseMoved(with event: NSEvent) {
-        (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
+        updateCursor(at: convert(event.locationInWindow, from: nil))
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
+        updateCursor(at: convert(event.locationInWindow, from: nil))
+    }
+
+    private func updateCursor(at point: CGPoint? = nil) {
+        guard let coordinator else { return }
+        let point = point ?? window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) } ?? .zero
+        let insideArtboard = coordinator.viewport.viewToDoc(
+            point,
+            viewSize: bounds.size,
+            width: coordinator.model.width,
+            height: coordinator.model.height
+        ) != nil
+        var transformHandle: TransformHandle?
+        var rotationHandle = false
+        if coordinator.model.tool == .transform {
+            let documentPoint = coordinator.documentPoint(point, in: self)
+            let tolerance = 8.0 / coordinator.viewport.zoom
+            rotationHandle = coordinator.model.hitRotationHandle(
+                x: documentPoint.x, y: documentPoint.y, tolerance: tolerance
+            )
+            if !rotationHandle {
+                transformHandle = coordinator.model.hitTransformHandle(
+                    x: documentPoint.x, y: documentPoint.y, tolerance: tolerance
+                )
+            }
+        }
+        CanvasCursorPolicy.kind(
+            tool: coordinator.model.tool,
+            insideArtboard: insideArtboard,
+            transformHandle: transformHandle,
+            rotationHandle: rotationHandle,
+            panning: panning,
+            spaceDown: spaceDown
+        ).cursor.set()
     }
 
     // MARK: - Painting / panning gestures
@@ -567,7 +665,7 @@ final class PixelCanvas: NSView {
         if spaceDown {
             panning = true
             lastPanPoint = convert(event.locationInWindow, from: nil)
-            NSCursor.closedHand.set()
+            updateCursor(at: lastPanPoint)
             return
         }
         let point = convert(event.locationInWindow, from: nil)
@@ -605,7 +703,7 @@ final class PixelCanvas: NSView {
                     resizeGesture = false
                     transformStartPoint = point
                     didTransformDrag = false
-                } else if let handle = coordinator.model.hitTransformHandle(x: pixel.x, y: pixel.y, tolerance: tolerance) {
+                } else if let handle = coordinator.model.hitTransformHandle(x: CGFloat(pixel.x), y: CGFloat(pixel.y), tolerance: tolerance) {
                     let uniform = coordinator.model.uniformTransform || event.modifierFlags.contains(.shift)
                     coordinator.model.beginResize(handle: handle, x: pixel.x, y: pixel.y, uniform: uniform)
                     resizeGesture = true
@@ -749,7 +847,7 @@ final class PixelCanvas: NSView {
 
         if panning {
             panning = false
-            (spaceDown ? NSCursor.openHand : NSCursor.crosshair).set()
+            updateCursor(at: convert(event.locationInWindow, from: nil))
             return
         }
         if lineGesture {
@@ -860,7 +958,7 @@ final class PixelCanvas: NSView {
 
         switch event.keyCode {
         case 49: // space — hold to pan
-            if !spaceDown { spaceDown = true; NSCursor.openHand.set() }
+            if !spaceDown { spaceDown = true; updateCursor() }
         default:
             switch event.charactersIgnoringModifiers {
             case "p": model.selectTool(.pencil)
@@ -894,7 +992,7 @@ final class PixelCanvas: NSView {
         if event.keyCode == 49 {
             spaceDown = false
             panning = false
-            NSCursor.crosshair.set()
+            updateCursor()
         } else {
             super.keyUp(with: event)
         }

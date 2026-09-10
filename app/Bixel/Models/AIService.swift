@@ -331,6 +331,41 @@ enum AIService {
         }
         return dst
     }
+
+    /// Places an image at native resolution on a fixed-size canvas. Pixels
+    /// outside the canvas are clipped; no resampling or color changes occur.
+    static func placeNativeImage(rgba: [UInt8], srcWidth: Int, srcHeight: Int,
+                                 dstWidth: Int, dstHeight: Int, x: Int, y: Int) -> [UInt8] {
+        guard srcWidth > 0, srcHeight > 0, dstWidth > 0, dstHeight > 0,
+              rgba.count >= srcWidth * srcHeight * 4 else { return [] }
+        var dst = [UInt8](repeating: 0, count: dstWidth * dstHeight * 4)
+        let srcX = max(0, -x)
+        let srcY = max(0, -y)
+        let dstX = max(0, x)
+        let dstY = max(0, y)
+        let copyWidth = min(srcWidth - srcX, dstWidth - dstX)
+        let copyHeight = min(srcHeight - srcY, dstHeight - dstY)
+        guard copyWidth > 0, copyHeight > 0 else { return dst }
+
+        for row in 0..<copyHeight {
+            let sourceStart = ((srcY + row) * srcWidth + srcX) * 4
+            let destinationStart = ((dstY + row) * dstWidth + dstX) * 4
+            let count = copyWidth * 4
+            dst[destinationStart..<(destinationStart + count)] =
+                rgba[sourceStart..<(sourceStart + count)]
+        }
+        return dst
+    }
+
+    /// Centers an image on the canvas while retaining native pixels. A larger
+    /// source is center-cropped rather than silently reduced.
+    static func centerNativeImage(rgba: [UInt8], srcWidth: Int, srcHeight: Int,
+                                  dstWidth: Int, dstHeight: Int) -> [UInt8] {
+        placeNativeImage(rgba: rgba, srcWidth: srcWidth, srcHeight: srcHeight,
+                         dstWidth: dstWidth, dstHeight: dstHeight,
+                         x: (dstWidth - srcWidth) / 2,
+                         y: (dstHeight - srcHeight) / 2)
+    }
 }
 
 struct SkillInfo: Decodable, Identifiable {
@@ -348,6 +383,7 @@ struct SkillInfo: Decodable, Identifiable {
 
 struct SkillRunResult: Decodable {
     let text: String?
+    let source_image: String?
     let image: String?
     let frames: [String]?
     let error: String?
@@ -367,6 +403,7 @@ struct AssistantEvent: Decodable {
     var png: String?
     var width: Int?
     var height: Int?
+    var source: Bool?
     var input_tokens: Int?
     var output_tokens: Int?
 }

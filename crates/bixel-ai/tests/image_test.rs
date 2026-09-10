@@ -64,6 +64,32 @@ fn compress_to_bits_maps_bit_depth() {
 }
 
 #[test]
+fn file_compressor_crops_transparent_margins_before_downscaling() {
+    let mut img = RgbaImage::new(8, 8);
+    for y in 2..6 {
+        for x in 3..5 {
+            img.set_pixel(x, y, pixel(220, 90, 40, 255));
+        }
+    }
+    let input = bixel_ai::skills::SkillInput {
+        image: Some(img),
+        params: serde_json::json!({"scale": 0.5}),
+        ..Default::default()
+    };
+
+    let output = bixel_ai::skills::Skills::run(
+        None,
+        bixel_ai::skills::SkillKind::PixelFileCompressor,
+        input,
+    )
+    .unwrap();
+    let compressed = output.image.unwrap();
+
+    assert_eq!((compressed.width, compressed.height), (1, 2));
+    assert!(compressed.data.chunks_exact(4).all(|p| p == [220, 90, 40, 255]));
+}
+
+#[test]
 fn remove_background_strips_border_region() {
     // 4x4 image: white border, red 2x2 center.
     let mut img = RgbaImage::new(4, 4);

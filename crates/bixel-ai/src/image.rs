@@ -396,6 +396,20 @@ pub fn crop(img: &RgbaImage, x: usize, y: usize, cw: usize, ch: usize) -> RgbaIm
     out
 }
 
+/// Crop transparent margins while preserving every pixel that has visible
+/// alpha. A fully transparent image is returned unchanged so compression does
+/// not invent a 0×0 asset.
+pub fn crop_to_content(img: &RgbaImage, alpha_threshold: u8, padding: usize) -> RgbaImage {
+    let Some(bounds) = alpha_bounds(img, alpha_threshold) else {
+        return img.clone();
+    };
+    let x = bounds.x.saturating_sub(padding);
+    let y = bounds.y.saturating_sub(padding);
+    let right = (bounds.x + bounds.width + padding).min(img.width);
+    let bottom = (bounds.y + bounds.height + padding).min(img.height);
+    crop(img, x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+}
+
 /// Downscale with nearest-neighbour sampling (no anti-aliasing). A `scale >= 1`
 /// or `scale <= 0` returns the image unchanged.
 pub fn downscale_nearest(img: &RgbaImage, scale: f32) -> RgbaImage {
@@ -463,6 +477,37 @@ pub struct Bounds {
     pub y: usize,
     pub width: usize,
     pub height: usize,
+}
+
+/// Find the smallest rectangle containing pixels whose alpha is above the
+/// supplied threshold.
+pub fn alpha_bounds(img: &RgbaImage, alpha_threshold: u8) -> Option<Bounds> {
+    let mut min_x = img.width;
+    let mut min_y = img.height;
+    let mut max_x = 0usize;
+    let mut max_y = 0usize;
+    let mut found = false;
+    for y in 0..img.height {
+        for x in 0..img.width {
+            if img.pixel(x, y)[3] <= alpha_threshold {
+                continue;
+            }
+            found = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if !found {
+        return None;
+    }
+    Some(Bounds {
+        x: min_x,
+        y: min_y,
+        width: max_x - min_x + 1,
+        height: max_y - min_y + 1,
+    })
 }
 
 /// Find connected components of opaque pixels (4-connectivity), returning their

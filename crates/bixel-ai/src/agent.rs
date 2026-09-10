@@ -392,6 +392,7 @@ where
                                     png: artifact.png,
                                     width: artifact.width,
                                     height: artifact.height,
+                                    source: artifact.source,
                                 }) {
                                     return false;
                                 }

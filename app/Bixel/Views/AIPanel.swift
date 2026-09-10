@@ -423,6 +423,9 @@ private struct AssistantArtifactCard: View {
         artifact.name.lowercased().contains("sheet") || (artifact.width > model.width && artifact.height == model.height && artifact.width % model.width == 0)
     }
 
+    private var provenanceLabel: String { artifact.isSource ? "Original" : "Prepared" }
+    private var addLabel: String { artifact.isSource ? "Add original" : "Add prepared" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let image = NSImage(data: artifact.data) {
@@ -439,6 +442,13 @@ private struct AssistantArtifactCard: View {
                 }
                 Spacer(minLength: 4)
 
+                Text(provenanceLabel)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(artifact.isSource ? StudioTheme.accent : StudioTheme.textSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background((artifact.isSource ? StudioTheme.accentSoft : StudioTheme.panelElevated), in: Capsule())
+
                 Button("View") { showImage = true }.buttonStyle(.plain).font(.system(size: 10))
 
                 if isSpriteSheet {
@@ -451,7 +461,7 @@ private struct AssistantArtifactCard: View {
                     .help("Import all frames from this spritesheet into the animation timeline")
                 }
 
-                Button(applied ? "Added" : "Add frame") {
+                Button(applied ? "Added" : addLabel) {
                     if let decoded = AIService.pngToRGBA(artifact.data) {
                         model.applyImageToNewFrame(decoded.rgba, width: decoded.width, height: decoded.height)
                         applied = true
@@ -460,8 +470,8 @@ private struct AssistantArtifactCard: View {
                 .font(.system(size: 10))
                 .disabled(applied)
                 .help(artifact.width > 0 && (artifact.width != model.width || artifact.height != model.height) ?
-                      "Add as a new frame (auto-fits to \(model.width) × \(model.height))" :
-                      "Add as a new frame to the animation")
+                      "Add at native size; larger images are center-cropped and ready for manual transform" :
+                      "Add as a new frame without changing pixels")
             }
         }.padding(10).background(StudioTheme.panelElevated.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         .sheet(isPresented: $showImage) {

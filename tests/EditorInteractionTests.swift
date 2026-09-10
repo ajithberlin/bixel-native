@@ -43,6 +43,32 @@ struct EditorInteractionTests {
         model.selectTool(.pencil)
         precondition(model.selectionRect == nil && model.transformRect == nil,
                      "Changing from transform to a painting tool must close the selection")
+
+        let nativeSource = [UInt8](repeating: 0, count: 8 * 8 * 4)
+        var markedSource = nativeSource
+        let sourcePixel = (2 * 8 + 2) * 4
+        markedSource[sourcePixel..<(sourcePixel + 4)] = [255, 0, 0, 255]
+        let importModel = EditorModel(width: 4, height: 4)
+        importModel.applyImageToNewFrame(markedSource, width: 8, height: 8)
+        precondition(importModel.frame == 1, "Imported artwork must be placed on a new frame")
+        precondition(importModel.document.getPixel(layer: importModel.activeLayer, frame: 1, x: 0, y: 0).r == 255,
+                     "A larger source must retain native pixels at its centered crop instead of being resampled")
+        precondition(importModel.tool == .transform && importModel.selectionRect != nil,
+                     "Imported artwork must be immediately ready for manual transform")
+
+        let placementModel = EditorModel(width: 4, height: 4)
+        var oversizedSource = [UInt8](repeating: 0, count: 8 * 8 * 4)
+        let oversizedPixel = (2 * 8 + 2) * 4
+        oversizedSource[oversizedPixel..<(oversizedPixel + 4)] = [255, 0, 0, 255]
+        placementModel.placeAsset(AIService.rgbaToPNG(oversizedSource, width: 8, height: 8)!, name: "oversized.png")
+        precondition(placementModel.document.getPixel(layer: placementModel.activeLayer, frame: 0, x: 0, y: 0).r == 255,
+                     "Larger dropped assets must be centered with native pixels instead of clamping their origin")
+
+        precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: true) == .paint)
+        precondition(CanvasCursorPolicy.kind(tool: .eyedropper, insideArtboard: true) == .eyedropper)
+        precondition(CanvasCursorPolicy.kind(tool: .pencil, insideArtboard: false) == .arrow)
+        precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: true, transformHandle: .right) == .resizeHorizontal)
+        precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: true, rotationHandle: true) == .rotate)
         print("Editor interaction tests passed")
     }
 }
