@@ -21,10 +21,13 @@ pub struct AgentCommand {
     pub input_hint: Option<String>,
 }
 
-/// Installed skill commands for `working_dir` (global + project skills).
+/// Installed skill commands for `working_dir` (global + project skills),
+/// excluding skills the user disabled in Settings.
 pub fn list_commands(working_dir: Option<&Path>) -> Vec<AgentCommand> {
+    let disabled = crate::settings::disabled_skills();
     goose::slash_commands::skill_slash_command::list_commands(working_dir)
         .into_iter()
+        .filter(|command| !disabled.contains(&command.name))
         .map(|command| AgentCommand {
             name: command.name,
             description: command.description,
@@ -35,18 +38,50 @@ pub fn list_commands(working_dir: Option<&Path>) -> Vec<AgentCommand> {
 }
 
 /// Expand an invoked `/skill` (with optional args) into the loaded skill
-/// context, using goose's own resolver. `Ok(None)` means no such skill.
+/// context, using goose's own resolver. `Ok(None)` means no such skill (or the
+/// skill is disabled in Settings).
 pub fn resolve_command(
     name: &str,
     args: &str,
     working_dir: Option<&Path>,
 ) -> Result<Option<String>, String> {
+    if crate::settings::is_skill_disabled(name) {
+        return Ok(None);
+    }
     goose::slash_commands::skill_slash_command::resolve_command(name, args, working_dir)
 }
 
-/// goose's markdown catalog of installed skills (used in the system prompt).
+/// goose's markdown catalog of installed skills (used in the system prompt),
+/// with disabled skills filtered out.
 pub fn installed_skills_markdown(working_dir: Option<&Path>) -> String {
-    goose::slash_commands::skill_slash_command::format_installed_skills(working_dir)
+    let disabled = crate::settings::disabled_skills();
+    if disabled.is_empty() {
+        return goose::slash_commands::skill_slash_command::format_installed_skills(working_dir);
+    }
+    let sources = goose::skills::list_installed_skills(working_dir);
+    let skills: Vec<_> = sources
+        .iter()
+        .filter(|skill| {
+            let is_skill = matches!(
+                skill.source_type.to_string().as_str(),
+                "skill" | "builtin skill"
+            );
+            is_skill && !disabled.contains(&skill.name)
+        })
+        .collect();
+    if skills.is_empty() {
+        return "No skills installed.\n".to_string();
+    }
+    let mut output = format!("**Installed skills ({}):**\n\n", skills.len());
+    for skill in skills {
+        let builtin = skill.source_type.to_string() == "builtin skill";
+        let label = if builtin { " *(builtin)*" } else { "" };
+        output.push_str(&format!(
+            "- **{}**{}: {}\n",
+            skill.name, label, skill.description
+        ));
+    }
+    output
 }
 
 #[cfg(test)]

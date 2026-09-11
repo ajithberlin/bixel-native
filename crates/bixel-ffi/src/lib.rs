@@ -1207,6 +1207,79 @@ pub extern "C" fn bixel_ai_resolve_command(
     }
 }
 
+/// JSON array of installed skills (bundled + user + project) with app-level
+/// enablement. `base` may be empty for global skills only. Shape:
+/// `[{ "id", "name", "description", "source", "path", "global", "enabled" }]`.
+#[no_mangle]
+pub extern "C" fn bixel_ai_list_installed_skills(base: *const c_char) -> *mut c_char {
+    bixel_ai::skill_install::ensure_bundled_installed();
+    let base = arg_str(base);
+    let dir = (!base.trim().is_empty()).then(|| std::path::PathBuf::from(base));
+    let skills = bixel_ai::settings::list_skills(dir.as_deref());
+    out_cstr(serde_json::to_string(&skills).unwrap_or_else(|_| "[]".into()))
+}
+
+/// Enable or disable an installed skill. Returns null on success or an owned
+/// error string.
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_skill_enabled(
+    name: *const c_char,
+    enabled: bool,
+) -> *mut c_char {
+    match bixel_ai::settings::set_skill_enabled(&arg_str(name), enabled) {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// JSON array of configured MCP extensions (stdio / streamable_http / builtin /
+/// platform). Credential values never appear — only env variable names.
+#[no_mangle]
+pub extern "C" fn bixel_ai_list_mcp() -> *mut c_char {
+    match bixel_ai::settings::list_mcp() {
+        Ok(extensions) => {
+            out_cstr(serde_json::to_string(&extensions).unwrap_or_else(|_| "[]".into()))
+        }
+        Err(e) => out_cstr(serde_json::json!({ "error": e }).to_string()),
+    }
+}
+
+/// Create or update an MCP extension from a JSON [`McpSpec`]. Returns null on
+/// success or an owned error string.
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_mcp(config_json: *const c_char) -> *mut c_char {
+    let spec: bixel_ai::settings::McpSpec = match serde_json::from_str(&arg_str(config_json)) {
+        Ok(spec) => spec,
+        Err(e) => return out_cstr(format!("invalid MCP config: {e}")),
+    };
+    match bixel_ai::settings::upsert_mcp(spec) {
+        Ok(_) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Remove an MCP extension by config key. Returns null on success or an owned
+/// error string.
+#[no_mangle]
+pub extern "C" fn bixel_ai_remove_mcp(key: *const c_char) -> *mut c_char {
+    match bixel_ai::settings::remove_mcp(&arg_str(key)) {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Toggle an MCP extension. Returns false when no entry has that key.
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_mcp_enabled(key: *const c_char, enabled: bool) -> bool {
+    bixel_ai::settings::set_mcp_enabled(&arg_str(key), enabled).unwrap_or(false)
+}
+
+/// JSON object of app/goose paths for the Settings → About pane.
+#[no_mangle]
+pub extern "C" fn bixel_ai_app_paths() -> *mut c_char {
+    out_cstr(serde_json::to_string(&bixel_ai::settings::app_paths()).unwrap_or_else(|_| "{}".into()))
+}
+
 const AI_SYSTEM_PROMPT: &str =
     "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.";
 

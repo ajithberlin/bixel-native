@@ -33,7 +33,7 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 /// Managed virtualenv holding the skills' Python dependencies.
-fn venv_dir() -> Option<PathBuf> {
+pub fn venv_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join("Library/Application Support/Bixel/skill-venv"))
 }
 

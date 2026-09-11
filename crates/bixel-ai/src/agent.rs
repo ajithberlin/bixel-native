@@ -170,18 +170,30 @@ impl GooseAgent {
     }
 
     /// Enable the developer (file/shell), skills (goose native skills) and bixel
-    /// (provider image tools) extensions and hand the session the cached
-    /// provider with the configured text model.
+    /// (provider image tools) extensions, plus every enabled MCP extension the
+    /// user configured in Settings, and hand the session the cached provider
+    /// with the configured text model.
     fn ensure_extensions_and_provider(&self, session_id: &str) -> Result<(), AiError> {
         let handle = self
             .handle()
             .ok_or_else(|| AiError::Config("AI provider is not connected".into()))?;
         let needs_rebind = self.session_needs_rebind(session_id);
+        // User-configured MCP servers live in goose's extensions config. The
+        // built-in developer/skills/bixel extensions are always added
+        // explicitly, so skip any configured duplicate by key.
+        let mut configured: Vec<ExtensionConfig> = goose::config::extensions::get_enabled_extensions();
+        configured.retain(|ext| !matches!(ext.key().as_str(), "developer" | "skills" | "bixel"));
+        let mut managed_keys = vec![
+            "developer".to_string(),
+            "skills".to_string(),
+            "bixel".to_string(),
+        ];
+        managed_keys.extend(configured.iter().map(|ext| ext.key()));
         let res: Result<(), String> = self.runtime.block_on(async {
             if needs_rebind {
                 // Drop the clients so add_extension re-creates them bound to
                 // this session (fresh empty session slot, no goose assert).
-                for key in ["developer", "skills", "bixel"] {
+                for key in &managed_keys {
                     self.agent
                         .extension_manager
                         .remove_extension_by_key(key)
@@ -233,6 +245,15 @@ impl GooseAgent {
                 )
                 .await
                 .map_err(|e| e.to_string())?;
+
+            // User-configured MCP servers (stdio / streamable HTTP) from
+            // Settings. A failure to start one server must not sink the whole
+            // session, so log and continue.
+            for ext in configured {
+                if let Err(error) = self.agent.add_extension(ext.clone(), session_id).await {
+                    tracing::warn!(extension = %ext.key(), %error, "could not start MCP extension");
+                }
+            }
 
             self.agent
                 .update_provider(

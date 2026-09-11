@@ -140,6 +140,22 @@ The Tilemap Designer's whole `bixel_map_*` FFI family also lives there (map.rs â
 `BixelMap` opaque handle); its Swift model is `Models/TileMapModel.swift` with the
 CALayer canvas and chrome under `Views/TileMap/`.
 
+## Settings
+
+The app-universal Settings window (`app/Bixel/Views/SettingsView.swift`,
+macOS System Settings style) is the single owner of the AI surface: a sidebar
+over **Provider** (the embeddable `ProviderSettingsPane`), **Skills**, **MCP
+Servers**, **General** (`@AppStorage` defaults applied at launch), and **About**.
+Everything AI-related writes through goose's own config under the app-owned
+`GOOSE_PATH_ROOT` via `crates/bixel-ai/src/settings.rs`
+(`bixel_ai_list_mcp` / `bixel_ai_set_mcp` / `bixel_ai_remove_mcp` /
+`bixel_ai_set_mcp_enabled`, `bixel_ai_list_installed_skills` /
+`bixel_ai_set_skill_enabled`, `bixel_ai_app_paths`). Enabled MCP extensions are
+added to each agent session in `agent.rs`; skills have no native enabled flag, so
+`settings.rs` keeps a `BIXEL_DISABLED_SKILLS` allowlist that `commands.rs`
+filters out of the catalog and `/skill` resolver. Credential *values* never
+cross the FFI â€” MCP edits send env/header names only and `upsert_mcp` reuses the
+stored values for empty entries.
 
 ## Commands
 

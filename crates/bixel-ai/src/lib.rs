@@ -41,6 +41,7 @@ pub mod error;
 pub mod image;
 pub mod image_gen;
 pub mod native_stream;
+pub mod settings;
 pub mod skill_install;
 pub mod skill_server;
 pub mod skills;

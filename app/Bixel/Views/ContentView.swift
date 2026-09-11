@@ -37,6 +37,10 @@ struct ContentView: View {
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
 
+    @AppStorage("bixel.openAssistantOnLaunch") private var openAssistantOnLaunch = false
+    @AppStorage("bixel.defaultSnapping") private var defaultSnapping = true
+    @AppStorage("bixel.defaultFrameRate") private var defaultFrameRate = 12.0
+
     private var model: EditorModel { projects.editor }
     private var assistant: AssistantSession { projects.assistant }
     private var aiPanelWidth: CGFloat { assistantExpanded ? 520 : 372 }
@@ -115,6 +119,7 @@ struct ContentView: View {
                     project: project,
                     onFinish: {
                         projects.select(project)
+                        applyEditorDefaults()
                         withAnimation(.easeInOut(duration: 0.22)) {
                             currentScreen = .project
                         }
@@ -180,6 +185,7 @@ struct ContentView: View {
             currentScreen = .home
             showLayers = true
             showAssets = false
+            if openAssistantOnLaunch { showAI = true }
         }
     }
 
@@ -192,11 +198,18 @@ struct ContentView: View {
             }
         } else {
             projects.select(project)
+            applyEditorDefaults()
             withAnimation(.easeInOut(duration: 0.22)) {
                 currentScreen = .project
             }
             postAction?()
         }
+    }
+
+    /// Apply the persisted General-pane defaults to the freshly opened editor.
+    private func applyEditorDefaults() {
+        model.snapping = defaultSnapping
+        model.fps = defaultFrameRate
     }
 
     private func startAIImageGeneration(_ request: AICreationRequest) {

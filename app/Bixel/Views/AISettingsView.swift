@@ -3,8 +3,10 @@ import SwiftUI
 /// Goose-aligned provider settings. A provider owns its model catalog; Codex
 /// exposes one primary model with hosted chat/vision/image capabilities, while
 /// OpenRouter may opt into separate vision/image routing under Advanced.
-struct AISettingsView: View {
-    @Environment(\.dismiss) private var dismiss
+///
+/// The pane is embedded by the app-universal `SettingsView`; `AISettingsView`
+/// is a standalone sheet wrapper kept for the AI panel's setup shortcut.
+struct ProviderSettingsPane: View {
     @State private var status = AIService.connectionStatus()
     @State private var provider = "openrouter"
     @State private var apiKey = ""
@@ -21,49 +23,24 @@ struct AISettingsView: View {
     private static let roles = ["text", "vision", "image"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    providerChooser
-                    providerConfiguration
-                    modelConfiguration
-                    readinessList
-                    if let message {
-                        Text(message)
-                            .font(.system(size: 11))
-                            .foregroundColor(message == "Connected." ? StudioTheme.bixelGreen : .orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                providerChooser
+                providerConfiguration
+                modelConfiguration
+                readinessList
+                if let message {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundColor(message == "Connected." ? StudioTheme.bixelGreen : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(.bottom, 14)
+                footer
             }
-            footer
+            .padding(.bottom, 14)
         }
-        .padding(20)
-        .frame(width: 460, height: 650)
-        .foregroundColor(StudioTheme.textPrimary)
-        .background(StudioTheme.background)
         .onAppear(perform: refresh)
         .onDisappear { if signingIn { AIService.cancelCodexOAuth() } }
-    }
-
-    private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("AI Provider")
-                    .font(.system(size: 17, weight: .semibold, design: .rounded))
-                Text("Choose the provider Goose will use for chat and image skills.")
-                    .font(.system(size: 11))
-                    .foregroundColor(StudioTheme.textSecondary)
-            }
-            Spacer()
-            Button("Done") { dismiss() }
-                .buttonStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundColor(StudioTheme.textSecondary)
-        }
-        .padding(.bottom, 17)
     }
 
     private var providerChooser: some View {
@@ -379,6 +356,37 @@ struct AISettingsView: View {
         }
         applyProviderDefaults(provider)
         loadCatalog()
+    }
+}
+
+/// Standalone sheet wrapper around the provider pane, used by the AI panel's
+/// "connect a provider" shortcut and the home screen's setup prompt.
+struct AISettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("AI Provider")
+                        .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    Text("Choose the provider Goose will use for chat and image skills.")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(StudioTheme.textSecondary)
+            }
+            .padding(.bottom, 17)
+            ProviderSettingsPane()
+        }
+        .padding(20)
+        .frame(width: 460, height: 650)
+        .foregroundColor(StudioTheme.textPrimary)
+        .background(StudioTheme.background)
     }
 }
 

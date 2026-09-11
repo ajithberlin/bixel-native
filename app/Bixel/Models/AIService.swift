@@ -153,6 +153,114 @@ enum AIService {
         return (try? JSONDecoder().decode([SkillInfo].self, from: data)) ?? []
     }
 
+    // MARK: - App settings (skills, MCP, paths)
+
+    /// An installed `SKILL.md` package discovered by goose, with app-level
+    /// enablement. `base` may be empty for global skills only.
+    struct InstalledSkillInfo: Decodable, Identifiable, Hashable {
+        let id: String
+        let name: String
+        let description: String
+        let source: String
+        let path: String
+        let global: Bool
+        let enabled: Bool
+    }
+
+    static func listInstalledSkills(base: String) -> [InstalledSkillInfo] {
+        let ptr = base.withCString { bixel_ai_list_installed_skills($0) }
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([InstalledSkillInfo].self, from: data)) ?? []
+    }
+
+    /// Persist a skill's enabled state. Returns nil on success or an error.
+    static func setSkillEnabled(name: String, enabled: Bool) -> String? {
+        guard let ptr = name.withCString({ bixel_ai_set_skill_enabled($0, enabled) }) else { return nil }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
+    /// A configured goose MCP extension. Credential values are never included.
+    struct MCPExtensionInfo: Decodable, Identifiable, Hashable {
+        let key: String
+        let name: String
+        let type: String
+        let description: String
+        let enabled: Bool
+        let display_name: String?
+        let command: String?
+        let args: [String]
+        let uri: String?
+        let timeout: UInt64?
+        let env_keys: [String]
+        let bundled: Bool
+
+        var id: String { key }
+
+        var transportLabel: String {
+            switch type {
+            case "stdio": return "stdio"
+            case "streamable_http": return "HTTP"
+            case "builtin": return "Built-in"
+            case "platform": return "Platform"
+            default: return type
+            }
+        }
+
+        var summary: String {
+            if let command, !command.isEmpty {
+                return ([command] + args).joined(separator: " ")
+            }
+            if let uri, !uri.isEmpty { return uri }
+            return description
+        }
+    }
+
+    static func listMCP() -> [MCPExtensionInfo] {
+        let ptr = bixel_ai_list_mcp()
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([MCPExtensionInfo].self, from: data)) ?? []
+    }
+
+    /// Create or update an MCP extension. Returns nil on success or an error.
+    static func saveMCP(_ spec: [String: Any]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: spec),
+              let json = String(data: data, encoding: .utf8) else {
+            return "Could not encode the MCP server."
+        }
+        guard let ptr = json.withCString({ bixel_ai_set_mcp($0) }) else { return nil }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
+    static func removeMCP(key: String) -> String? {
+        guard let ptr = key.withCString({ bixel_ai_remove_mcp($0) }) else { return nil }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
+    static func setMCPEnabled(key: String, enabled: Bool) -> Bool {
+        key.withCString { bixel_ai_set_mcp_enabled($0, enabled) }
+    }
+
+    /// App + goose storage locations for the About pane.
+    struct AppPathsInfo: Decodable {
+        let goose_root: String
+        let goose_config: String
+        let secrets: String
+        let skills_dir: String
+        let venv_dir: String
+    }
+
+    static func appPaths() -> AppPathsInfo? {
+        let ptr = bixel_ai_app_paths()
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(AppPathsInfo.self, from: data)
+    }
+
     /// An installed skill slash-command discovered by goose.
     struct AgentCommandInfo: Decodable, Hashable {
         let name: String

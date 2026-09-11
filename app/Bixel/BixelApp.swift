@@ -62,7 +62,7 @@ struct BixelApp: App {
             }
         }
         Settings {
-            AISettingsView()
+            SettingsView()
         }
     }
 
