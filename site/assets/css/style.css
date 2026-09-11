@@ -15,14 +15,16 @@
   --text-tertiary: rgba(255, 255, 255, 0.45);
   --text-muted: rgba(255, 255, 255, 0.3);
 
-  --accent-magenta: #f7235b;
-  --accent-purple: #8a2be2;
-  --accent-cyan: #00e5ff;
-  --accent-green: #00ff88;
+  --accent-slime-vibrant: #22c55e;
+  --accent-slime-neon: #00f59b;
+  --accent-slime-mint: #86efac;
+  --accent-slime-glow: rgba(34, 197, 94, 0.22);
+  --accent-green: #22c55e;
+  --accent-cyan: #00f59b;
   
   --border-hairline: rgba(255, 255, 255, 0.1);
-  --border-focus: rgba(255, 255, 255, 0.25);
-  --border-accent: rgba(247, 35, 91, 0.4);
+  --border-focus: rgba(34, 197, 94, 0.4);
+  --border-accent: rgba(34, 197, 94, 0.4);
 
   --radius-sm: 8px;
   --radius-md: 14px;
@@ -106,14 +108,21 @@ a {
 }
 
 .nav-brand-logo {
-  width: 28px;
-  height: 28px;
-  background: linear-gradient(135deg, #8a2be2 0%, #f7235b 100%);
-  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 16px rgba(247, 35, 91, 0.4);
+}
+
+.brand-slime-img {
+  width: 28px;
+  height: 28px;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.45));
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.brand-group:hover .brand-slime-img {
+  transform: scale(1.18) rotate(-6deg);
 }
 
 .nav-items {
@@ -212,7 +221,7 @@ a {
   justify-content: center;
   text-align: center;
   padding: 160px 24px 80px;
-  background: radial-gradient(circle at 50% 15%, rgba(138, 43, 226, 0.18) 0%, rgba(247, 35, 91, 0.08) 35%, rgba(0, 0, 0, 0) 70%), #000000;
+  background: radial-gradient(circle at 50% 18%, rgba(34, 197, 94, 0.16) 0%, rgba(16, 185, 129, 0.06) 35%, rgba(0, 0, 0, 0) 70%), #000000;
   overflow: hidden;
 }
 
@@ -221,7 +230,7 @@ a {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  color: var(--accent-magenta);
+  color: var(--accent-slime-neon);
   margin-bottom: 20px;
   display: inline-flex;
   align-items: center;
@@ -244,7 +253,7 @@ a {
 }
 
 .gradient-accent {
-  background: linear-gradient(135deg, #f7235b 0%, #ff80a5 50%, #00e5ff 100%);
+  background: linear-gradient(135deg, #00f59b 0%, #22c55e 50%, #86efac 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }
@@ -264,50 +273,63 @@ a {
   justify-content: center;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 48px;
+  margin-bottom: 36px;
 }
 
 /* Quick Start Shell Bar */
 .cli-box {
-  background: rgba(18, 18, 22, 0.85);
-  border: 1px solid var(--border-hairline);
+  background: rgba(14, 22, 16, 0.88);
+  border: 1px solid rgba(34, 197, 94, 0.32);
   padding: 10px 18px;
   border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), 0 0 24px rgba(34, 197, 94, 0.12);
   margin-bottom: 60px;
   backdrop-filter: blur(20px);
+  max-width: 92vw;
 }
 
 .cli-code {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
-  color: var(--accent-green);
+  font-size: 0.84rem;
+  color: #00f59b;
   display: flex;
   align-items: center;
   gap: 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.cli-prompt {
+  color: rgba(255, 255, 255, 0.38);
+  user-select: none;
+  font-weight: 600;
 }
 
 .cli-copy-btn {
-  background: rgba(255, 255, 255, 0.08);
-  border: none;
-  color: var(--text-secondary);
+  background: rgba(34, 197, 94, 0.15);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #34d399;
   cursor: pointer;
-  padding: 6px 12px;
+  padding: 6px 14px;
   border-radius: var(--radius-pill);
-  font-size: 0.78rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   transition: all 0.2s;
+  flex-shrink: 0;
 }
 
 .cli-copy-btn:hover {
-  background: rgba(255, 255, 255, 0.16);
+  background: rgba(34, 197, 94, 0.3);
+  border-color: rgba(34, 197, 94, 0.6);
   color: #ffffff;
+  transform: scale(1.02);
+}
 }
 
 /* Hero Showcase Canvas Window */
@@ -711,44 +733,65 @@ a {
 }
 
 /* ==========================================================================
-   Realtime GitHub Star Pill Button
+   Realtime GitHub Star Pill Button (Refined Procreate / Native Mac Style)
    ========================================================================== */
 .gh-star-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--border-hairline);
-  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  padding: 5px 12px;
   border-radius: var(--radius-pill);
-  font-size: 0.84rem;
-  font-weight: 600;
-  color: var(--text-white);
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #e6edf3;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
+  text-decoration: none;
 }
 
 .gh-star-pill:hover {
   background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.25);
-  transform: scale(1.02);
+  border-color: rgba(34, 197, 94, 0.45);
   color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.gh-star-icon {
+  color: #8b949e;
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.gh-star-pill:hover .gh-star-icon {
+  color: #38ef7d;
+}
+
+.gh-star-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #e6edf3;
 }
 
 .gh-star-divider {
   width: 1px;
   height: 12px;
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.16);
+  margin: 0 1px;
 }
 
 .github-stars-count {
-  color: #ffbd2e;
-  font-size: 0.82rem;
-  font-weight: 700;
-  font-family: var(--font-mono);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  line-height: 1.4;
 }
 
 /* ==========================================================================

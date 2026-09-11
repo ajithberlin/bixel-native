@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="site/assets/images/slime-logo.png" width="96" height="96" alt="Bixel Studio Logo">
+</p>
+
 # Bixel Studio
 
 ![Bixel Studio](assets/bixel-studio-pixel-art.jpg)
@@ -45,10 +49,18 @@
 
 ### Quick Start
 
-Run the start script to set up the project and open it in Xcode:
+Clone the repository and run the automated start script:
 
 ```bash
+git clone https://github.com/ajithberlin/bixel-native.git
+cd bixel-native
 ./scripts/start.sh
+```
+
+Or run the one-liner directly:
+
+```bash
+git clone https://github.com/ajithberlin/bixel-native.git && cd bixel-native && ./scripts/start.sh
 ```
 
 Then press **Cmd + R** in Xcode to run the app.

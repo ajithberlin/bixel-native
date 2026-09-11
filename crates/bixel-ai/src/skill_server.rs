@@ -229,7 +229,7 @@ impl SkillServer {
 
     #[tool(
         name = "editor_command",
-        description = "Apply one or more operations to the live editor (sprite document or tilemap). Use editor_read first. Each op is {\"op\": \"...\", ...}. Destructive ops (delete/remove/clear/replace) require confirm=true after the user approves them. Returns per-op results so failures can be corrected."
+        description = "Apply one or more operations to the live editor (sprite document or tilemap). Use editor_read first. Each op is {\"op\": \"...\", ...}. Destructive ops (remove/resize) are guarded: get the user's approval and pass confirm=true, otherwise the host may deny the batch or show a native confirmation. Returns per-op results so failures can be corrected."
     )]
     pub async fn editor_command(
         &self,

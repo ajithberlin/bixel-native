@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bixel Studio Handbook — Official Documentation</title>
   <meta name="description" content="Official documentation and user guide for Bixel Studio on macOS. Learn pixel art tools, animation timelines, tilemaps, and AI assistant skills.">
+  <link rel="icon" type="image/png" href="../assets/images/favicon.png">
+  <link rel="apple-touch-icon" href="../assets/images/slime-logo.png">
   <link rel="stylesheet" href="../assets/css/style.css">
   <link rel="stylesheet" href="../assets/css/handbook.css">
 </head>
@@ -14,14 +16,7 @@
   <header class="hb-topbar">
     <div class="hb-brand">
       <a href="../index.html" style="display: flex; align-items: center; gap: 10px;">
-        <div class="hb-logo-box">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5">
-            <rect x="3" y="3" width="7" height="7"></rect>
-            <rect x="14" y="3" width="7" height="7"></rect>
-            <rect x="14" y="14" width="7" height="7"></rect>
-            <rect x="3" y="14" width="7" height="7"></rect>
-          </svg>
-        </div>
+        <img src="../assets/images/slime-logo.png" class="hb-logo-img" alt="Bixel Slime" width="28" height="28">
         <span class="hb-brand-title">Bixel Studio</span>
       </a>
       <span class="hb-badge">Handbook</span>
@@ -37,12 +32,12 @@
       </div>
       <a href="../index.html" class="pro-btn pro-btn-tertiary pro-btn-sm">Overview</a>
       <a href="https://github.com/ajithberlin/bixel-native" target="_blank" rel="noopener" class="gh-star-pill" title="Star on GitHub">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        <svg class="gh-star-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z"></path>
         </svg>
-        <span>Star</span>
+        <span class="gh-star-label">Star</span>
         <span class="gh-star-divider"></span>
-        <span class="github-stars-count" style="display: none;">★</span>
+        <span class="github-stars-count">1</span>
       </a>
     </div>
   </header>
@@ -136,23 +131,26 @@
         <span class="hb-chapter-eyebrow">Chapter 02</span>
         <h2 class="hb-chapter-title">Quick Start</h2>
         <p class="hb-lead">
-          Get Bixel Studio up and running on your Mac in minutes using the automated one-line start script.
+          Get Bixel Studio up and running on your Mac in seconds by cloning the repository and running the automated start script.
         </p>
 
         <div class="hb-section">
-          <h3>Running in One Script</h3>
+          <h3>Clone &amp; Start</h3>
           <p>
-            Launch the app directly from your terminal using the automated script located in the repository root:
+            Clone the repository and launch the setup script directly from your terminal:
           </p>
 
-          <div class="hb-code">
-./scripts/start.sh
-          </div>
+          <div class="hb-code">git clone https://github.com/ajithberlin/bixel-native.git
+cd bixel-native
+./scripts/start.sh</div>
+
+          <p>Or run the complete one-liner command:</p>
+          <div class="hb-code" style="color: #00f59b;">git clone https://github.com/ajithberlin/bixel-native.git &amp;&amp; cd bixel-native &amp;&amp; ./scripts/start.sh</div>
 
           <p>This script executes the complete setup sequence automatically:</p>
           <ol style="color: var(--text-secondary); margin-left: 24px; line-height: 1.8;">
             <li>Verifies that the Rust toolchain (cargo) and XcodeGen are installed.</li>
-            <li>Sets up your local development environment file (<span style="font-family: var(--font-mono); color: var(--accent-green);">.env.dev</span>) if missing.</li>
+            <li>Sets up your local development environment file (<span style="font-family: var(--font-mono); color: #34d399;">.env.dev</span>) if missing.</li>
             <li>Generates the Xcode project file (<span style="font-family: var(--font-mono);">Bixel.xcodeproj</span>).</li>
             <li>Opens the project in Xcode, ready to hit <span class="kbd">Cmd + R</span> to run.</li>
           </ol>
@@ -160,8 +158,8 @@
           <div class="hb-callout hb-callout-tip">
             <div class="hb-callout-icon">⚡</div>
             <div>
-              <strong>Terminal Build & Launch:</strong> To build and launch the app without opening the Xcode GUI, simply pass:
-              <br><code style="color: var(--accent-cyan);">./scripts/start.sh --run</code>
+              <strong>Terminal Build &amp; Launch:</strong> To build and launch the app directly without opening the Xcode GUI, run:
+              <br><code style="color: #00f59b;">./scripts/start.sh --run</code>
             </div>
           </div>
         </div>

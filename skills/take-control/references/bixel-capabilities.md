@@ -92,7 +92,10 @@ original source separately from the prepared output.
 
 These operate the editor that is currently open. Always `editor_read` first so
 your plan matches the real document, then apply changes with `editor_command`.
-Destructive ops require the user's approval and `confirm: true`.
+Destructive ops (`remove_*`, `resize`, `map_remove_*`, `map_resize`) are guarded:
+get the user's approval and pass `confirm: true`. Without it the host either
+shows a native confirmation sheet (General → AI Editor Control → Confirm) or
+denies the batch; in Autonomous mode the sheet is skipped.
 
 `editor_read` returns JSON plus a downscaled preview image. Pass
 `scope: "document" | "map" | "all"`, `include_preview`, and `preview_max`.

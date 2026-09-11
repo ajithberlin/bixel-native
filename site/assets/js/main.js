@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const updateStarsUI = (count) => {
     starCountEls.forEach((el) => {
-      el.textContent = `★ ${count}`;
+      el.textContent = count;
       el.style.display = 'inline-flex';
     });
   };

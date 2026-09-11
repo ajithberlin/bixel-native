@@ -7,7 +7,20 @@
 // JSON response. It never lets the agent touch the Rust document handle behind
 // the editor's back.
 
+import AppKit
 import Foundation
+
+/// How the assistant's destructive editor changes are approved.
+enum EditorApprovalMode: String {
+    /// Show a native confirmation sheet for destructive operations.
+    case confirm
+    /// Apply destructive operations without prompting.
+    case autonomous
+
+    static var current: EditorApprovalMode {
+        EditorApprovalMode(rawValue: UserDefaults.standard.string(forKey: "bixel.editorApprovalMode") ?? "") ?? .confirm
+    }
+}
 
 /// Error thrown while applying a single agent operation.
 struct AgentOpError: LocalizedError {
@@ -33,8 +46,9 @@ private func bixelEditorBridgeTrampoline(
         payload = EditorBridge.shared.handle(requestJSON: requestJSON)
         semaphore.signal()
     }
-    // The agent turn runs off the main thread; the editor responds promptly.
-    if semaphore.wait(timeout: .now() + 8) == .timedOut { return false }
+    // The agent turn runs off the main thread; a destructive confirmation can
+    // keep the main thread busy while the user reads the sheet.
+    if semaphore.wait(timeout: .now() + 300) == .timedOut { return false }
     guard let payload else { return false }
     let bytes = Array(payload.utf8) + [0]
     guard UInt(bytes.count) <= capacity else { return false }
@@ -126,6 +140,20 @@ final class EditorBridge {
             return Self.error("invalid_request", "editor_command needs at least one op.")
         }
         let confirm = request["confirm"] as? Bool ?? false
+        let destructive = ops
+            .compactMap { $0["op"] as? String }
+            .filter { Self.destructiveOps.contains($0) }
+        // Destructive ops need approval: either the agent already obtained it
+        // (confirm) or the user approves in the native sheet. Autonomous mode
+        // skips the prompt entirely.
+        if !destructive.isEmpty, !confirm, EditorApprovalMode.current == .confirm {
+            guard Self.confirmDestructive(destructive) else {
+                return Self.error(
+                    "approval_denied",
+                    "The user declined the destructive operation(s): \(destructive.joined(separator: ", "))."
+                )
+            }
+        }
         let workspace = (request["workspace"] as? String)
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
         let results: [[String: Any]]
@@ -135,6 +163,23 @@ final class EditorBridge {
             results = store.editor.applyAgentOps(ops, confirm: confirm, workspace: workspace)
         }
         return Self.ok(["results": results])
+    }
+
+    /// Operations that remove, resize, or otherwise risk existing work.
+    private static let destructiveOps: Set<String> = [
+        "remove_layer", "remove_frame", "remove_tag", "resize",
+        "map_remove_layer", "map_remove_object", "map_remove_tileset", "map_resize",
+    ]
+
+    /// Native confirmation sheet for destructive agent operations.
+    private static func confirmDestructive(_ ops: [String]) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Allow the AI assistant to make destructive changes?"
+        alert.informativeText = "The assistant wants to run: \(ops.joined(separator: ", ")). This can remove or resize existing content. You can undo afterwards."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: Helpers

@@ -709,6 +709,7 @@ struct GeneralSettingsPane: View {
     @AppStorage("bixel.openAssistantOnLaunch") private var openAssistantOnLaunch = false
     @AppStorage("bixel.defaultSnapping") private var defaultSnapping = true
     @AppStorage("bixel.defaultFrameRate") private var defaultFrameRate = 12.0
+    @AppStorage("bixel.editorApprovalMode") private var editorApprovalMode = "confirm"
 
     private let frameRates: [Double] = [4, 8, 12, 24, 30, 60]
 
@@ -733,6 +734,18 @@ struct GeneralSettingsPane: View {
                         }
                         .labelsHidden()
                         .frame(width: 110)
+                        .controlSize(.small)
+                    }
+                }
+
+                SettingsSection(title: "AI Editor Control", systemImage: "lock.shield") {
+                    SettingsRow(title: "Destructive changes", subtitle: "How the assistant approves removing or resizing content.", systemImage: "exclamationmark.shield", showsDivider: false) {
+                        Picker("", selection: $editorApprovalMode) {
+                            Text("Confirm").tag("confirm")
+                            Text("Autonomous").tag("autonomous")
+                        }
+                        .labelsHidden()
+                        .frame(width: 130)
                         .controlSize(.small)
                     }
                 }
