@@ -8,6 +8,7 @@ the cheapest reliable capability instead of defaulting to image generation.
 - [Workspace and context](#workspace-and-context)
 - [Bundled skills](#bundled-skills)
 - [Provider image tools](#provider-image-tools)
+- [Live editor tools](#live-editor-tools)
 - [Shell and scripts](#shell-and-scripts)
 - [MCP servers](#mcp-servers)
 - [Verification recipes](#verification-recipes)
@@ -86,6 +87,36 @@ id.
 Results appear directly in chat. Design simple silhouettes for the intended
 pixel budget. When the user requests a prepared size, keep and present the
 original source separately from the prepared output.
+
+## Live editor tools
+
+These operate the editor that is currently open. Always `editor_read` first so
+your plan matches the real document, then apply changes with `editor_command`.
+Destructive ops require the user's approval and `confirm: true`.
+
+`editor_read` returns JSON plus a downscaled preview image. Pass
+`scope: "document" | "map" | "all"`, `include_preview`, and `preview_max`.
+
+`editor_command` takes an ordered `ops` array. Each op is one undo step; a failed
+op reports its error without aborting the rest.
+
+**Sprite document ops:** `set_pixel`, `set_pixels`, `stroke`, `flood_fill`,
+`add_layer`, `remove_layer`, `rename_layer`, `reorder_layer`,
+`set_layer_visible`, `set_layer_opacity`, `add_frame`, `remove_frame`,
+`reorder_frame`, `set_frame_duration`, `go_to_frame`, `add_tag`, `remove_tag`,
+`resize`, `undo`, `redo`, `export_png`.
+
+**Tilemap ops:** `map_set_tile`, `map_fill`, `map_paint_rect`, `map_paint_line`,
+`map_stamp`, `map_add_layer`, `map_remove_layer`, `map_rename_layer`,
+`map_reorder_layer`, `map_set_layer_visible`, `map_set_layer_opacity`,
+`map_resize`, `map_add_object`, `map_set_object`, `map_remove_object`,
+`map_add_tileset`, `map_remove_tileset`, `map_set_autotile`, `map_autotile`,
+`map_select`, `map_clear_selection`, `map_undo`, `map_redo`, `map_export_tiled`,
+`map_export_csv`, `map_export_png`.
+
+Conventions: colors are `#RRGGBB`/`#RRGGBBAA`; coordinates are integers with the
+origin at the top-left; image inputs (`export_png.path`, `map_add_tileset.image`,
+export paths) are workspace-relative and may not escape the workspace.
 
 ## Shell and scripts
 

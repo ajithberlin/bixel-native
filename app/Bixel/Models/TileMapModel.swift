@@ -928,13 +928,293 @@ final class TileMapModel: ObservableObject {
         return state
     }
 
-    /// Apply validated agent operations to the tilemap. Reads are supported;
-    /// map mutations land in the next update.
+    /// Apply validated agent operations to the tilemap. Each op is one undo
+    /// step; the layer panel and canvas refresh once at the end.
     func applyAgentOps(_ ops: [[String: Any]], confirm: Bool, workspace: URL?) -> [[String: Any]] {
-        ops.map { op in
-            ["op": op["op"] as? String ?? "", "ok": false,
-             "error": "map editing is not enabled yet"]
+        var results: [[String: Any]] = []
+        for op in ops {
+            let name = op["op"] as? String ?? ""
+            do {
+                var result = try applyAgentOp(name, op, workspace: workspace)
+                result["op"] = name
+                result["ok"] = true
+                results.append(result)
+            } catch {
+                results.append(["op": name, "ok": false, "error": error.localizedDescription])
+            }
         }
+        reloadLayers()
+        registerTilesets()
+        commitChange()
+        return results
+    }
+
+    private func applyAgentOp(_ name: String, _ op: [String: Any], workspace: URL?) throws -> [String: Any] {
+        func int(_ key: String) throws -> Int {
+            guard let value = op[key] as? Int else { throw AgentOpError("'\(name)' requires an integer '\(key)'") }
+            return value
+        }
+        func string(_ key: String) throws -> String {
+            guard let value = op[key] as? String else { throw AgentOpError("'\(name)' requires a string '\(key)'") }
+            return value
+        }
+        func bool(_ key: String) throws -> Bool {
+            guard let value = op[key] as? Bool else { throw AgentOpError("'\(name)' requires a boolean '\(key)'") }
+            return value
+        }
+        func double(_ key: String) throws -> Double {
+            if let value = op[key] as? Double { return value }
+            if let value = op[key] as? Int { return Double(value) }
+            throw AgentOpError("'\(name)' requires a number '\(key)'")
+        }
+        func uint32(_ key: String) throws -> UInt32 {
+            guard let value = op[key] as? Int, value >= 0 else { throw AgentOpError("'\(name)' requires a non-negative integer '\(key)'") }
+            return UInt32(value)
+        }
+        func layer() throws -> Int {
+            let index = try int("layer")
+            try validateAgentLayer(index)
+            return index
+        }
+
+        switch name {
+        case "map_set_tile":
+            let target = try layer()
+            guard map.setTile(layer: target, x: try int("x"), y: try int("y"), gid: try uint32("tile")) else {
+                throw AgentOpError("tile is outside the map")
+            }
+            return [:]
+
+        case "map_fill":
+            let count = map.fill(layer: try layer(), x: try int("x"), y: try int("y"), gid: try uint32("tile"))
+            return ["cells": count]
+
+        case "map_paint_rect":
+            let count = map.paintRect(layer: try layer(), x0: try int("x0"), y0: try int("y0"),
+                                      x1: try int("x1"), y1: try int("y1"), gid: try uint32("tile"))
+            return ["cells": count]
+
+        case "map_paint_line":
+            let count = map.paintLine(layer: try layer(), x0: try int("x0"), y0: try int("y0"),
+                                      x1: try int("x1"), y1: try int("y1"), gid: try uint32("tile"))
+            return ["cells": count]
+
+        case "map_stamp":
+            let target = try layer()
+            guard let rows = op["tiles"] as? [[Any]], !rows.isEmpty else {
+                throw AgentOpError("'map_stamp' requires a 'tiles' matrix")
+            }
+            let height = rows.count
+            let width = rows[0].count
+            guard width > 0, rows.allSatisfy({ $0.count == width }) else {
+                throw AgentOpError("'map_stamp' rows must all share one width")
+            }
+            var tiles = [UInt32]()
+            tiles.reserveCapacity(width * height)
+            for row in rows {
+                for cell in row {
+                    guard let value = cell as? Int, value >= 0 else { throw AgentOpError("'map_stamp' tiles must be non-negative integers") }
+                    tiles.append(UInt32(value))
+                }
+            }
+            let pattern = MapTilePattern(width: width, height: height, tiles: tiles)
+            let count = map.stamp(layer: target, x: try int("x"), y: try int("y"),
+                                  pattern: pattern, skipEmpty: op["skip_empty"] as? Bool ?? true)
+            return ["cells": count]
+
+        case "map_add_layer":
+            map.snapshot()
+            let objectLayer = (op["layer_type"] as? String) == "object"
+            let index = objectLayer ? map.addObjectLayer(op["name"] as? String) : map.addLayer(op["name"] as? String)
+            activeLayer = index
+            return ["index": index]
+
+        case "map_remove_layer":
+            let index = try int("index")
+            guard map.layerCount > 1 else { throw AgentOpError("cannot remove the last layer") }
+            try validateAgentLayer(index)
+            map.snapshot()
+            map.removeLayer(index)
+            activeLayer = min(activeLayer, map.layerCount - 1)
+            selectedObjectID = nil
+            return [:]
+
+        case "map_rename_layer":
+            let index = try int("index")
+            try validateAgentLayer(index)
+            map.snapshot()
+            map.renameLayer(index, name: try string("name"))
+            return [:]
+
+        case "map_reorder_layer":
+            let from = try int("from"), to = try int("to")
+            try validateAgentLayer(from)
+            try validateAgentLayer(to)
+            map.snapshot()
+            map.reorderLayer(from: from, to: to)
+            activeLayer = to
+            return [:]
+
+        case "map_set_layer_visible":
+            let index = try int("index")
+            try validateAgentLayer(index)
+            map.snapshot()
+            map.setLayerVisible(index, try bool("visible"))
+            return [:]
+
+        case "map_set_layer_opacity":
+            let index = try int("index")
+            try validateAgentLayer(index)
+            let value = try double("opacity")
+            map.snapshot()
+            map.setLayerOpacity(index, min(1, max(0, value)))
+            return [:]
+
+        case "map_resize":
+            let w = try int("width"), h = try int("height")
+            guard w >= 1, h >= 1 else { throw AgentOpError("map_resize needs positive width and height") }
+            map.snapshot()
+            map.resize(width: w, height: h)
+            return ["columns": map.columns, "rows": map.rows]
+
+        case "map_add_object":
+            let target = try layer()
+            map.snapshot()
+            let id = map.addObject(layer: target, name: op["name"] as? String ?? "",
+                                   kind: op["kind"] as? String ?? "rect",
+                                   x: try double("x"), y: try double("y"),
+                                   w: op["width"] as? Double ?? 0, h: op["height"] as? Double ?? 0)
+            return ["object_id": Int(id)]
+
+        case "map_set_object":
+            let target = try layer()
+            map.snapshot()
+            map.setObject(layer: target, objectID: try int("object_id"),
+                          name: op["name"] as? String ?? "", kind: op["kind"] as? String ?? "rect",
+                          x: try double("x"), y: try double("y"),
+                          w: op["width"] as? Double ?? 0, h: op["height"] as? Double ?? 0)
+            return [:]
+
+        case "map_remove_object":
+            let target = try layer()
+            map.snapshot()
+            map.removeObject(layer: target, objectID: try int("object_id"))
+            if selectedObjectID == (op["object_id"] as? Int) { selectedObjectID = nil }
+            return [:]
+
+        case "map_add_tileset":
+            guard let workspace else { throw AgentOpError("map_add_tileset requires a workspace") }
+            let path = try string("image")
+            guard let url = EditorBridge.resolve(path, in: workspace) else {
+                throw AgentOpError("tileset image '\(path)' escapes the workspace")
+            }
+            guard let data = try? Data(contentsOf: url), let decoded = AIService.pngToRGBA(data) else {
+                throw AgentOpError("could not read tileset image '\(path)'")
+            }
+            map.snapshot()
+            let index = try map.addTileset(name: op["name"] as? String ?? "Tileset", image: path,
+                                           rgba: decoded.rgba, imageWidth: decoded.width, imageHeight: decoded.height,
+                                           tileWidth: try int("tile_width"), tileHeight: try int("tile_height"),
+                                           margin: op["margin"] as? Int ?? 0, spacing: op["spacing"] as? Int ?? 0)
+            return ["index": index]
+
+        case "map_remove_tileset":
+            map.snapshot()
+            map.removeTileset(try int("index"))
+            return [:]
+
+        case "map_set_autotile":
+            map.snapshot()
+            map.setAutotile(tileset: try int("tileset"), mask: try int("mask"),
+                            local: (op["local"] as? Int).map { Int32($0) })
+            return [:]
+
+        case "map_autotile":
+            let count = map.autotile(layer: try layer(), tileset: try int("tileset"),
+                                     x: try int("x"), y: try int("y"), w: try int("w"), h: try int("h"))
+            return ["cells": count]
+
+        case "map_select":
+            let x = try int("x"), y = try int("y"), w = try int("width"), h = try int("height")
+            guard w > 0, h > 0 else { throw AgentOpError("map_select needs a positive width and height") }
+            selection = MapCellRect(x: x, y: y, width: w, height: h)
+            return [:]
+
+        case "map_clear_selection":
+            selection = nil
+            return [:]
+
+        case "map_undo":
+            return ["changed": map.undo()]
+        case "map_redo":
+            return ["changed": map.redo()]
+
+        case "map_export_tiled":
+            guard let workspace else { throw AgentOpError("map_export_tiled requires a workspace") }
+            let path = try string("path")
+            guard let url = EditorBridge.resolve(path, in: workspace) else {
+                throw AgentOpError("export path '\(path)' escapes the workspace")
+            }
+            let text = map.toJSON()
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+            return ["path": path]
+
+        case "map_export_csv":
+            guard let workspace else { throw AgentOpError("map_export_csv requires a workspace") }
+            let path = try string("path")
+            guard let directory = EditorBridge.resolve(path, in: workspace) else {
+                throw AgentOpError("export path '\(path)' escapes the workspace")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var written = 0
+            for info in map.layersInfo() where info.type == "tile" {
+                let safe = info.name.replacingOccurrences(of: "/", with: "_")
+                let url = directory.appendingPathComponent("\(safe).csv")
+                try Data(map.layerCSV(layer: info.index).utf8).write(to: url)
+                written += 1
+            }
+            return ["path": path, "layers": written]
+
+        case "map_export_png":
+            guard let workspace else { throw AgentOpError("map_export_png requires a workspace") }
+            let path = try string("path")
+            guard let url = EditorBridge.resolve(path, in: workspace) else {
+                throw AgentOpError("export path '\(path)' escapes the workspace")
+            }
+            let scale = max(1, op["scale"] as? Int ?? 1)
+            let base = map.compositeRGBA()
+            let pixels = scale == 1 ? base : TileMapModel.scalePixels(base, width: map.pixelWidth, height: map.pixelHeight, scale: scale)
+            guard let data = AIService.rgbaToPNG(pixels, width: map.pixelWidth * scale, height: map.pixelHeight * scale) else {
+                throw AgentOpError("could not encode the PNG")
+            }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+            return ["path": path, "bytes": data.count]
+
+        default:
+            throw AgentOpError("unknown op '\(name)'")
+        }
+    }
+
+    private func validateAgentLayer(_ index: Int) throws {
+        guard index >= 0, index < map.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+    }
+
+    private static func scalePixels(_ pixels: [UInt8], width: Int, height: Int, scale: Int) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: width * scale * height * scale * 4)
+        for y in 0..<height * scale {
+            let srcRow = y / scale
+            for x in 0..<width * scale {
+                let src = (srcRow * width + x / scale) * 4
+                let dst = (y * width * scale + x) * 4
+                out[dst] = pixels[src]
+                out[dst + 1] = pixels[src + 1]
+                out[dst + 2] = pixels[src + 2]
+                out[dst + 3] = pixels[src + 3]
+            }
+        }
+        return out
     }
 }
 

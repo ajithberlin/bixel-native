@@ -42,13 +42,20 @@ you do have:
 - **Image tools** — `image_gen`, `generate_art`, `pixel_image_gen`,
   `spritesheet`, `next_frame`. These call the connected provider's image model.
   Use them only to create or transform artwork.
+- **Live editor tools** — `editor_read` returns the current sprite document or
+  tilemap state (dimensions, layers, frames, tags, tilesets, selection) plus a
+  downscaled preview image; `editor_command` applies validated operations to it
+  (pixels, strokes, fills, layers, frames, tags, tiles, objects, undo/redo,
+  export). Call `editor_read` before mutating, and prefer these structured ops
+  over drawing pixel-by-pixel.
 - **The shell tool** — run skill scripts and small deterministic scripts inside
   the workspace, within the sandbox described in `references/security.md`.
 - **MCP servers** — extra tools the user enabled in Settings.
 
-The user is the hands for the editor: generated assets are applied by the user
-via the library or a canvas drop. Never claim you changed the editor, drew on
-the canvas, or ran code unless a tool result proves it.
+Generated *assets* are still applied by the user via the library or a canvas
+drop, but the editor itself can be operated directly with the editor tools.
+Never claim you changed the editor, drew on the canvas, or ran code unless a
+tool result proves it.
 
 ## Execution lifecycle
 
