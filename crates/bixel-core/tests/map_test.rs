@@ -439,3 +439,73 @@ fn oversized_dimensions_are_rejected_on_load() {
     );
     assert!(TileMap::from_tiled_json(&json).is_err());
 }
+
+/// A `w × h` solid RGBA image.
+fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8) -> Vec<u8> {
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    for i in (0..px.len()).step_by(4) {
+        px[i] = r;
+        px[i + 1] = g;
+        px[i + 2] = b;
+        px[i + 3] = 255;
+    }
+    px
+}
+
+#[test]
+fn image_layer_composites_and_is_overridable() {
+    let mut map = TileMap::new(4, 4, 16, 16); // 64×64 px
+    let img = solid_image(16, 16, 0, 0, 255); // blue 16×16 at origin
+    let idx = map.add_image_layer(Some("bg"), "assets/bg.png", 16, 16, 0.0, 0.0);
+    assert!(map.set_image_layer_pixels(idx, &img));
+    assert!(map.layers[idx].is_image());
+
+    // The image shows through at (0,0) but is clipped to the map.
+    let out = map.composite();
+    let p = |x: usize, y: usize| (y * 64 + x) * 4;
+    assert_eq!((out[p(0, 0)], out[p(0, 0) + 2]), (0, 255));
+    // Outside the image bounds the composite is transparent.
+    assert_eq!(out[p(20, 0) + 3], 0);
+
+    // A tile layer added above overrides the image.
+    let (sheet, w, h) = two_tile_sheet();
+    let ts = map
+        .add_tileset("t", "assets/t.png", w, h, 16, 16, 0, 0)
+        .unwrap();
+    map.set_tileset_pixels(ts, &sheet);
+    let top = map.add_tile_layer(Some("top"));
+    map.set_tile(top, 0, 0, 1); // red tile at (0,0)
+    let out = map.composite();
+    assert_eq!((out[p(0, 0)], out[p(0, 0) + 2]), (255, 0));
+}
+
+#[test]
+fn image_layer_round_trips_through_tiled_json() {
+    let mut map = TileMap::new(2, 2, 16, 16);
+    let img = solid_image(8, 8, 10, 20, 30);
+    let idx = map.add_image_layer(Some("Backdrop"), "assets/bg.png", 8, 8, 0.0, 0.0);
+    map.set_image_layer_pixels(idx, &img);
+    map.layers[idx].set_opacity(0.5);
+
+    let json = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&json).unwrap();
+    let layer = value["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["type"] == "imagelayer")
+        .expect("imagelayer present");
+    assert_eq!(layer["type"], "imagelayer");
+    assert_eq!(layer["image"], "assets/bg.png");
+    assert_eq!(layer["imagewidth"], 8);
+    assert_eq!(layer["imageheight"], 8);
+
+    let restored = TileMap::from_tiled_json(&json).unwrap();
+    let image_index = restored.layers.iter().position(|l| l.is_image()).unwrap();
+    let layer = restored.image_layer(image_index).unwrap();
+    assert_eq!(layer.image, "assets/bg.png");
+    assert_eq!((layer.image_width, layer.image_height), (8, 8));
+    assert!((layer.opacity - 0.5).abs() < 1e-6);
+    // Pixels are not serialized; the host uploads them after load.
+    assert!(layer.pixels.is_empty());
+}

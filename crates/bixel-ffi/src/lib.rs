@@ -1875,6 +1875,65 @@ pub unsafe extern "C" fn bixel_map_add_object_layer(ptr: *mut BixelMap, name: *c
     unsafe { map(ptr) }.lock().unwrap().add_object_layer(name) as u32
 }
 
+/// Add an image layer at pixel offset `(x, y)`. When `rgba` is non-null it must
+/// hold `img_w * img_h * 4` bytes; otherwise upload them later with
+/// `bixel_map_set_image_layer_pixels`.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_add_image_layer(
+    ptr: *mut BixelMap,
+    name: *const c_char,
+    image: *const c_char,
+    x: f64,
+    y: f64,
+    img_w: u32,
+    img_h: u32,
+    rgba: *const u8,
+    len: usize,
+) -> i32 {
+    let mut map = unsafe { map(ptr) }.lock().unwrap();
+    let name = arg_str(name);
+    let image = arg_str(image);
+    let name = if name.is_empty() { None } else { Some(name.as_str()) };
+    let index = map.add_image_layer(name, &image, img_w, img_h, x, y);
+    if !rgba.is_null() && len > 0 {
+        let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
+        map.set_image_layer_pixels(index, pixels);
+    }
+    index as i32
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_image_layer_pixels(
+    ptr: *mut BixelMap,
+    index: u32,
+    rgba: *const u8,
+    len: usize,
+) -> bool {
+    if rgba.is_null() {
+        return false;
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
+    unsafe { map(ptr) }.lock().unwrap().set_image_layer_pixels(index as usize, pixels)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_image_layer_pixels(
+    ptr: *const BixelMap,
+    index: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> bool {
+    if out.is_null() {
+        return false;
+    }
+    let mut buf = vec![0u8; out_len];
+    let ok = unsafe { map_ref(ptr) }.lock().unwrap().image_layer_pixels(index as usize, &mut buf);
+    if ok {
+        unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    }
+    ok
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_remove_layer(ptr: *mut BixelMap, index: u32) -> bool {
     unsafe { map(ptr) }.lock().unwrap().remove_layer(index as usize)
@@ -1923,7 +1982,11 @@ pub unsafe extern "C" fn bixel_map_layers_json(ptr: *const BixelMap) -> *mut c_c
                 "name": layer.name(),
                 "visible": layer.visible(),
                 "opacity": layer.opacity(),
-                "type": if layer.is_objects() { "object" } else { "tile" },
+                "type": match layer {
+                    MapLayer::Objects(_) => "object",
+                    MapLayer::Image(_) => "image",
+                    MapLayer::Tile(_) => "tile",
+                },
             });
             match layer {
                 MapLayer::Tile(data) => {
@@ -1932,6 +1995,11 @@ pub unsafe extern "C" fn bixel_map_layers_json(ptr: *const BixelMap) -> *mut c_c
                 }
                 MapLayer::Objects(data) => {
                     base["objectCount"] = serde_json::json!(data.objects.len());
+                }
+                MapLayer::Image(data) => {
+                    base["image"] = serde_json::json!(data.image);
+                    base["imageWidth"] = serde_json::json!(data.image_width);
+                    base["imageHeight"] = serde_json::json!(data.image_height);
                 }
             }
             base

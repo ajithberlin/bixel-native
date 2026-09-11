@@ -213,11 +213,34 @@ pub struct TileLayerData {
     pub extra: Map<String, Value>,
 }
 
-/// Layers are a tagged union so object layers slot in without a schema break.
+/// A single image composited over the map (Tiled `imagelayer`). Pixels are
+/// stored in-engine like tileset pixels: the file stays a relative-path
+/// reference and the host uploads the decoded RGBA after load.
+#[derive(Debug, Clone, Default)]
+pub struct ImageLayerData {
+    pub id: u32,
+    pub name: String,
+    pub visible: bool,
+    pub opacity: f32,
+    /// Relative image path (`assets/…`), as Tiled stores it.
+    pub image: String,
+    pub image_width: u32,
+    pub image_height: u32,
+    /// Pixel offset from the map origin (Tiled `x`/`y`).
+    pub x: f64,
+    pub y: f64,
+    /// RGBA pixels (`image_width*image_height*4`). Not serialized.
+    pub pixels: Arc<Vec<u8>>,
+    pub properties: Vec<Property>,
+    pub extra: Map<String, Value>,
+}
+
+/// Layers are a tagged union so object/image layers slot in without a schema break.
 #[derive(Debug, Clone)]
 pub enum MapLayer {
     Tile(TileLayerData),
     Objects(ObjectLayer),
+    Image(ImageLayerData),
 }
 
 impl MapLayer {
@@ -225,36 +248,42 @@ impl MapLayer {
         match self {
             MapLayer::Tile(l) => l.id,
             MapLayer::Objects(l) => l.id,
+            MapLayer::Image(l) => l.id,
         }
     }
     pub fn name(&self) -> &str {
         match self {
             MapLayer::Tile(l) => &l.name,
             MapLayer::Objects(l) => &l.name,
+            MapLayer::Image(l) => &l.name,
         }
     }
     pub fn name_mut(&mut self) -> &mut String {
         match self {
             MapLayer::Tile(l) => &mut l.name,
             MapLayer::Objects(l) => &mut l.name,
+            MapLayer::Image(l) => &mut l.name,
         }
     }
     pub fn visible(&self) -> bool {
         match self {
             MapLayer::Tile(l) => l.visible,
             MapLayer::Objects(l) => l.visible,
+            MapLayer::Image(l) => l.visible,
         }
     }
     pub fn set_visible(&mut self, v: bool) {
         match self {
             MapLayer::Tile(l) => l.visible = v,
             MapLayer::Objects(l) => l.visible = v,
+            MapLayer::Image(l) => l.visible = v,
         }
     }
     pub fn opacity(&self) -> f32 {
         match self {
             MapLayer::Tile(l) => l.opacity,
             MapLayer::Objects(l) => l.opacity,
+            MapLayer::Image(l) => l.opacity,
         }
     }
     pub fn set_opacity(&mut self, v: f32) {
@@ -262,16 +291,21 @@ impl MapLayer {
         match self {
             MapLayer::Tile(l) => l.opacity = v,
             MapLayer::Objects(l) => l.opacity = v,
+            MapLayer::Image(l) => l.opacity = v,
         }
     }
     pub fn properties_mut(&mut self) -> &mut Vec<Property> {
         match self {
             MapLayer::Tile(l) => &mut l.properties,
             MapLayer::Objects(l) => &mut l.properties,
+            MapLayer::Image(l) => &mut l.properties,
         }
     }
     pub fn is_objects(&self) -> bool {
         matches!(self, MapLayer::Objects(_))
+    }
+    pub fn is_image(&self) -> bool {
+        matches!(self, MapLayer::Image(_))
     }
 }
 
@@ -529,6 +563,78 @@ impl TileMap {
             Some(MapLayer::Objects(data)) => Some(data),
             _ => None,
         }
+    }
+
+    /// Add an image layer at pixel offset `(x, y)`. Pixels are uploaded after
+    /// creation via [`TileMap::set_image_layer_pixels`].
+    pub fn add_image_layer(
+        &mut self,
+        name: Option<&str>,
+        image: &str,
+        image_width: u32,
+        image_height: u32,
+        x: f64,
+        y: f64,
+    ) -> usize {
+        let name = match name {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => format!("Image Layer {}", self.layers.len() + 1),
+        };
+        let data = ImageLayerData {
+            id: self.next_layer_id,
+            name,
+            visible: true,
+            opacity: 1.0,
+            image: image.to_string(),
+            image_width,
+            image_height,
+            x,
+            y,
+            pixels: Arc::new(Vec::new()),
+            properties: Vec::new(),
+            extra: Map::new(),
+        };
+        self.next_layer_id += 1;
+        self.layers.push(MapLayer::Image(data));
+        self.layers.len() - 1
+    }
+
+    pub fn image_layer_mut(&mut self, index: usize) -> Option<&mut ImageLayerData> {
+        match self.layers.get_mut(index) {
+            Some(MapLayer::Image(data)) => Some(data),
+            _ => None,
+        }
+    }
+
+    pub fn image_layer(&self, index: usize) -> Option<&ImageLayerData> {
+        match self.layers.get(index) {
+            Some(MapLayer::Image(data)) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Store an image layer's RGBA pixels used for compositing.
+    pub fn set_image_layer_pixels(&mut self, index: usize, rgba: &[u8]) -> bool {
+        let Some(data) = self.image_layer_mut(index) else {
+            return false;
+        };
+        let expected = data.image_width as usize * data.image_height as usize * 4;
+        if expected == 0 || rgba.len() != expected {
+            return false;
+        }
+        data.pixels = Arc::new(rgba.to_vec());
+        true
+    }
+
+    pub fn image_layer_pixels(&self, index: usize, out: &mut [u8]) -> bool {
+        let Some(data) = self.image_layer(index) else {
+            return false;
+        };
+        if out.len() < data.pixels.len() {
+            return false;
+        }
+        out[..data.pixels.len()].copy_from_slice(&data.pixels[..]);
+        !data.pixels.is_empty()
     }
 
     // ------------------------------------------------------------- tilesets
@@ -1044,6 +1150,7 @@ impl TileMap {
         self.layers.get(layer).map(|l| match l {
             MapLayer::Tile(data) => data.properties.as_slice(),
             MapLayer::Objects(data) => data.properties.as_slice(),
+            MapLayer::Image(data) => data.properties.as_slice(),
         })
     }
 
@@ -1097,32 +1204,48 @@ impl TileMap {
         let mut out = vec![0u8; map_px_w * map_px_h * 4];
         let mut tile_buf = vec![0u8; tw * th * 4];
         for layer in &self.layers {
-            let MapLayer::Tile(data) = layer else {
-                continue;
-            };
-            if !data.visible || data.opacity <= 0.0 {
-                continue;
-            }
-            let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
-            for (i, gid) in data.layer.data.iter().enumerate() {
-                if gid & GID_MASK == 0 {
-                    continue;
+            match layer {
+                MapLayer::Tile(data) => {
+                    if !data.visible || data.opacity <= 0.0 {
+                        continue;
+                    }
+                    let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
+                    for (i, gid) in data.layer.data.iter().enumerate() {
+                        if gid & GID_MASK == 0 {
+                            continue;
+                        }
+                        let Some((ts_idx, local, flags)) = self.gid_lookup(*gid) else {
+                            continue;
+                        };
+                        let Some(ts) = self.tilesets.get(ts_idx) else {
+                            continue;
+                        };
+                        if !ts.tile_rgba(local, &mut tile_buf) {
+                            continue;
+                        }
+                        let cx = i % self.width;
+                        let cy = i / self.width;
+                        blit_tile(
+                            &mut out, map_px_w, cx, cy, tw, th, flags, alpha,
+                            &tile_buf,
+                        );
+                    }
                 }
-                let Some((ts_idx, local, flags)) = self.gid_lookup(*gid) else {
-                    continue;
-                };
-                let Some(ts) = self.tilesets.get(ts_idx) else {
-                    continue;
-                };
-                if !ts.tile_rgba(local, &mut tile_buf) {
-                    continue;
+                MapLayer::Image(data) => {
+                    if !data.visible || data.opacity <= 0.0 {
+                        continue;
+                    }
+                    let (iw, ih) = (data.image_width as usize, data.image_height as usize);
+                    if iw == 0 || ih == 0 || data.pixels.len() < iw * ih * 4 {
+                        continue;
+                    }
+                    let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
+                    blit_image(
+                        &mut out, map_px_w, map_px_h, data.x, data.y, iw, ih, alpha,
+                        &data.pixels,
+                    );
                 }
-                let cx = i % self.width;
-                let cy = i / self.width;
-                blit_tile(
-                    &mut out, map_px_w, cx, cy, tw, th, flags, alpha,
-                    &tile_buf,
-                );
+                MapLayer::Objects(_) => {}
             }
         }
         out
@@ -1354,9 +1477,36 @@ impl TileMap {
                     ]);
                     layers.push(MapLayer::Objects(data));
                 }
+                "imagelayer" => {
+                    let image = raw.get("image").and_then(Value::as_str).unwrap_or("").to_string();
+                    let image_width = raw.get("imagewidth").and_then(Value::as_u64).unwrap_or(0) as u32;
+                    let image_height = raw.get("imageheight").and_then(Value::as_u64).unwrap_or(0) as u32;
+                    let id = if id >= next_layer_id { id } else { next_layer_id };
+                    if id >= next_layer_id {
+                        next_layer_id = id + 1;
+                    }
+                    let extra = preserve(&raw, &[
+                        "id", "name", "type", "image", "imagewidth", "imageheight",
+                        "x", "y", "visible", "opacity", "properties",
+                    ]);
+                    layers.push(MapLayer::Image(ImageLayerData {
+                        id,
+                        name,
+                        visible,
+                        opacity,
+                        image,
+                        image_width,
+                        image_height,
+                        x: raw.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+                        y: raw.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+                        pixels: Arc::new(Vec::new()),
+                        properties: props_from_json(raw.get("properties")),
+                        extra,
+                    }));
+                }
                 other => {
                     return Err(format!(
-                        "Layer \"{name}\" has unsupported type {other:?}. Only tile and object layers are supported."
+                        "Layer \"{name}\" has unsupported type {other:?}. Only tile, object and image layers are supported."
                     ))
                 }
             }
@@ -1468,6 +1618,29 @@ fn layer_json(layer: &MapLayer) -> Value {
                 "opacity": data.opacity,
                 "objects": Value::Array(data.objects.iter().map(object_json).collect()),
             }));
+            if !data.properties.is_empty() {
+                obj.insert("properties".into(), properties_json(&data.properties));
+            }
+            Value::Object(obj)
+        }
+        MapLayer::Image(data) => {
+            let mut obj = data.extra.clone();
+            merge_json(&mut obj, json!({
+                "id": data.id,
+                "name": data.name,
+                "type": "imagelayer",
+                "image": data.image,
+                "x": data.x,
+                "y": data.y,
+                "visible": data.visible,
+                "opacity": data.opacity,
+            }));
+            if data.image_width > 0 {
+                obj.insert("imagewidth".into(), json!(data.image_width));
+            }
+            if data.image_height > 0 {
+                obj.insert("imageheight".into(), json!(data.image_height));
+            }
             if !data.properties.is_empty() {
                 obj.insert("properties".into(), properties_json(&data.properties));
             }
@@ -1589,23 +1762,68 @@ fn blit_tile(
             let dx = x0 + x;
             let dy = y0 + y;
             let dst = (dy * map_px_w + dx) * 4;
-            let da = out[dst + 3] as u32;
-            let oa = a + da * (255 - a) / 255;
-            if da == 0 {
-                out[dst] = tile_buf[src];
-                out[dst + 1] = tile_buf[src + 1];
-                out[dst + 2] = tile_buf[src + 2];
-                out[dst + 3] = a as u8;
-                continue;
-            }
-            for c in 0..3 {
-                let s = tile_buf[src + c] as u32;
-                let d = out[dst + c] as u32;
-                out[dst + c] = ((s * a + d * da * (255 - a) / 255) / oa) as u8;
-            }
-            out[dst + 3] = oa as u8;
+            blend_pixel(out, dst, tile_buf[src], tile_buf[src + 1], tile_buf[src + 2], a);
         }
     }
+}
+
+/// Source-over composite one RGBA image onto the map at pixel offset `(ox, oy)`,
+/// clipped to the map bounds and scaled by `layer_alpha` (0..=255).
+fn blit_image(
+    out: &mut [u8],
+    map_px_w: usize,
+    map_px_h: usize,
+    ox: f64,
+    oy: f64,
+    img_w: usize,
+    img_h: usize,
+    layer_alpha: u32,
+    src: &[u8],
+) {
+    let ox = ox.round() as i64;
+    let oy = oy.round() as i64;
+    for y in 0..img_h {
+        let dy = oy + y as i64;
+        if dy < 0 || dy >= map_px_h as i64 {
+            continue;
+        }
+        for x in 0..img_w {
+            let dx = ox + x as i64;
+            if dx < 0 || dx >= map_px_w as i64 {
+                continue;
+            }
+            let s = (y * img_w + x) * 4;
+            let sa = src[s + 3] as u32;
+            if sa == 0 {
+                continue;
+            }
+            let a = sa * layer_alpha / 255;
+            if a == 0 {
+                continue;
+            }
+            let dst = (dy as usize * map_px_w + dx as usize) * 4;
+            blend_pixel(out, dst, src[s], src[s + 1], src[s + 2], a);
+        }
+    }
+}
+
+/// Source-over blend a single pixel (`a` is the already-scaled source alpha).
+fn blend_pixel(out: &mut [u8], dst: usize, sr: u8, sg: u8, sb: u8, a: u32) {
+    let da = out[dst + 3] as u32;
+    let oa = a + da * (255 - a) / 255;
+    if da == 0 {
+        out[dst] = sr;
+        out[dst + 1] = sg;
+        out[dst + 2] = sb;
+        out[dst + 3] = a as u8;
+        return;
+    }
+    for (c, s) in [sr, sg, sb].into_iter().enumerate() {
+        let s = s as u32;
+        let d = out[dst + c] as u32;
+        out[dst + c] = ((s * a + d * da * (255 - a) / 255) / oa) as u8;
+    }
+    out[dst + 3] = oa as u8;
 }
 
 #[cfg(test)]

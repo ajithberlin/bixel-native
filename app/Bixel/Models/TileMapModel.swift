@@ -109,12 +109,10 @@ final class TileMapModel: ObservableObject {
     private var tilesetImages: [Int: CGImage] = [:]
     private var tilesetAutotileCache: [Int: [Int32?]] = [:]
 
-    /// A reference/backdrop image shown under the tiles (visual only — never
-    /// written to the Tiled map data). Dropped from the asset sidebar or picked
-    /// from the toolbar.
-    @Published var referenceImage: CGImage?
-    @Published var referenceOpacity: Double = 0.55
-    @Published var referenceName: String?
+    /// Host hook to persist a dropped/picked image into the project's assets and
+    /// return its workspace-relative path, so image layers survive save/reload.
+    /// Wired by ProjectStore; nil falls back to an in-memory-only layer.
+    var persistAssetData: ((Data, String) -> String?)?
 
     /// Object editing state (phase 2): the object under the pointer, if any.
     @Published var selectedObjectID: Int?
@@ -189,9 +187,8 @@ final class TileMapModel: ObservableObject {
     }
 
     var canPaint: Bool {
-        guard map.layerCount > 0, activeLayer < map.layerCount else { return false }
-        if isObjectActive { return false }
-        return activeLayer < layers.count
+        guard map.layerCount > 0, activeLayer < layers.count else { return false }
+        return layers[activeLayer].type == "tile"
     }
 
     func addLayer() {
@@ -330,17 +327,45 @@ final class TileMapModel: ObservableObject {
         tilesetImages[index]
     }
 
-    // MARK: - Reference image (visual backdrop, not map data)
+    // MARK: - Image layers
 
-    func setReferenceImage(_ image: CGImage?, name: String? = nil) {
-        referenceImage = image
-        referenceName = image == nil ? nil : name
-        canvasChanged.send()
+    /// Add a decoded RGBA image as a real map layer: it appears in the layers
+    /// panel, is composited by the engine, saved with the map and can be
+    /// reordered/hidden/deleted or covered by tile layers above it.
+    @discardableResult
+    func addImageLayer(rgba: [UInt8], width: Int, height: Int, name: String, imagePath: String) -> Bool {
+        guard width > 0, height > 0, rgba.count == width * height * 4 else { return false }
+        map.snapshot()
+        let index = map.addImageLayer(name: name, image: imagePath, rgba: rgba,
+                                      imageWidth: width, imageHeight: height)
+        guard index >= 0 else { return false }
+        // New image layers start at the bottom so tile layers drawn afterwards
+        // (or already present) cover them — an image layer is a backdrop by
+        // default, but stays fully reorderable in the layers panel.
+        if index > 0 { map.reorderLayer(from: index, to: 0) }
+        activeLayer = 0
+        reloadLayers()
+        commitChange()
+        return true
     }
 
-    func setReferenceOpacity(_ value: Double) {
-        referenceOpacity = min(max(0, value), 1)
-        canvasChanged.send()
+    /// Decode dropped/picked image data and add it as an image layer, persisting
+    /// the bytes into the project assets when a host hook is installed.
+    @discardableResult
+    func addImageLayer(data: Data, name: String) -> Bool {
+        guard let image = AIService.pngToRGBA(data) else {
+            operationError = "Could not decode that image."
+            return false
+        }
+        let path = persistAssetData?(data, name) ?? ""
+        return addImageLayer(rgba: image.rgba, width: image.width, height: image.height,
+                             name: name, imagePath: path)
+    }
+
+    /// Push decoded image-layer pixels into the engine after a project reload.
+    func uploadImageLayer(_ index: Int, rgba: [UInt8]) {
+        _ = map.setImageLayerPixels(index, rgba: rgba)
+        objectWillChange.send()
     }
 
     func removeTileset(_ index: Int) {

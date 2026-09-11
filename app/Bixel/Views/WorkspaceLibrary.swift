@@ -274,15 +274,15 @@ private struct AssetPreview: View {
                 Button {
                     store.placeImageOnMap(asset)
                 } label: {
-                    Label("Place on canvas", systemImage: "photo.badge.plus")
+                    Label("Add as layer", systemImage: "photo.badge.plus")
                         .font(.system(size: 11, weight: .semibold))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(store.assistant.busy)
-                .help("Place this image on the map as a reference under the tiles")
-                Text("Shows as a reference under the tiles — not saved into the map.")
+                .help("Add this image to the map as a layer")
+                Text("Added as an image layer — editable in the layers panel.")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
             } else {

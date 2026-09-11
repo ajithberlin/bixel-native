@@ -410,6 +410,9 @@ final class ProjectStore: ObservableObject {
         mapEditor?.onDocumentChanged = nil
         mapEditor = model
         model.onDocumentChanged = { [weak self] in self?.saveDocument() }
+        model.persistAssetData = { [weak self] data, name in
+            self?.persistImageAsset(data: data, name: name)
+        }
         model.registerTilesets()
         editor.onDocumentChanged = nil
         if mapEditor == nil {
@@ -418,7 +421,8 @@ final class ProjectStore: ObservableObject {
     }
 
     /// Decode and upload every tileset PNG referenced by a freshly parsed map so
-    /// compositing works and the palette shows real thumbnails.
+    /// compositing works and the palette shows real thumbnails. Also restores
+    /// image-layer pixels from their referenced asset files.
     func loadMapTilesetImages(_ model: TileMapModel, base: URL) {
         model.registerTilesets()
         for info in model.map.tilesetsInfo() where !info.image.isEmpty {
@@ -429,6 +433,18 @@ final class ProjectStore: ObservableObject {
                       image.width == info.imageWidth, image.height == info.imageHeight,
                       let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else { continue }
                 model.uploadTileset(info.index, cgImage: cg, rgba: image.rgba)
+            } catch {
+                continue
+            }
+        }
+        for layer in model.layers where layer.type == "image" {
+            guard let path = layer.image, !path.isEmpty,
+                  let w = layer.imageWidth, let h = layer.imageHeight, w > 0, h > 0 else { continue }
+            do {
+                guard let data = try ProjectStorage.readBytes(base: base, path: path) else { continue }
+                guard let image = AIService.pngToRGBA(data),
+                      image.width == w, image.height == h else { continue }
+                model.uploadImageLayer(layer.index, rgba: image.rgba)
             } catch {
                 continue
             }
@@ -601,17 +617,17 @@ final class ProjectStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
-    /// Place an image from the library onto the active map canvas as a visual
-    /// reference/backdrop (not part of the map data).
+    /// Place an image from the library onto the active map as a real image
+    /// layer (composited, saved with the map and editable in the layers panel).
     func placeImageOnMap(_ asset: ProjectAssetFile) {
         guard isMapActive, let map = mapEditor else { return }
         do {
             let data = try assetData(asset)
-            guard let image = AIService.pngToRGBA(data),
-                  let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else {
+            guard let image = AIService.pngToRGBA(data) else {
                 throw StorageError.message("Could not decode that image.")
             }
-            map.setReferenceImage(cg, name: asset.name)
+            map.addImageLayer(rgba: image.rgba, width: image.width, height: image.height,
+                              name: asset.name, imagePath: asset.path)
         } catch { self.error = error.localizedDescription }
     }
 

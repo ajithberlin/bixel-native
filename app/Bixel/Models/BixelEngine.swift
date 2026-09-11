@@ -667,7 +667,7 @@ struct MapTilesetInfo: Codable {
     var tileCount: Int
 }
 
-/// One row for the map layers panel (tile or object layer).
+/// One row for the map layers panel (tile, object or image layer).
 struct MapLayerRow: Codable, Identifiable {
     var index: Int
     var id: Int
@@ -678,6 +678,9 @@ struct MapLayerRow: Codable, Identifiable {
     var width: Int?
     var height: Int?
     var objectCount: Int?
+    var image: String?
+    var imageWidth: Int?
+    var imageHeight: Int?
 }
 
 /// One map object on an object layer (rect or point, in tile-pixels).
@@ -834,6 +837,37 @@ final class TileMap: @unchecked Sendable {
     @discardableResult
     func addObjectLayer(_ name: String? = nil) -> Int {
         Int(bixel_map_add_object_layer(handle, name))
+    }
+
+    /// Add an image layer at pixel offset `(x, y)` and upload its RGBA pixels.
+    @discardableResult
+    func addImageLayer(name: String?, image: String, rgba: [UInt8],
+                       imageWidth: Int, imageHeight: Int,
+                       x: Double = 0, y: Double = 0) -> Int {
+        rgba.withUnsafeBufferPointer { raw in
+            Int(bixel_map_add_image_layer(handle, name, image, x, y,
+                                          UInt32(imageWidth), UInt32(imageHeight),
+                                          raw.baseAddress, UInt(raw.count)))
+        }
+    }
+
+    /// Upload (or refresh) an image layer's pixels after a project reload.
+    @discardableResult
+    func setImageLayerPixels(_ index: Int, rgba: [UInt8]) -> Bool {
+        rgba.withUnsafeBufferPointer { raw in
+            bixel_map_set_image_layer_pixels(handle, UInt32(index), raw.baseAddress, UInt(raw.count))
+        }
+    }
+
+    /// Read an image layer's RGBA pixels back out of the engine.
+    func imageLayerPixels(index: Int) -> [UInt8] {
+        guard let row = layersInfo().first(where: { $0.index == index }),
+              let w = row.imageWidth, let h = row.imageHeight, w > 0, h > 0 else { return [] }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buf.withUnsafeMutableBufferPointer {
+            bixel_map_image_layer_pixels(handle, UInt32(index), $0.baseAddress, UInt($0.count))
+        }
+        return ok ? buf : []
     }
 
     func removeLayer(_ index: Int) {

@@ -15,7 +15,6 @@ import Combine
 struct MapLeftDock: View {
     @ObservedObject var model: TileMapModel
     @State private var showProperties = false
-    @State private var showReference = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -96,17 +95,14 @@ struct MapLeftDock: View {
             .buttonStyle(.plain)
             .help("Map properties")
 
-            Button { showReference = true } label: {
-                Image(systemName: model.referenceImage == nil ? "photo.badge.plus" : "photo.fill")
+            Button { pickImageLayer() } label: {
+                Image(systemName: "photo.badge.plus")
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(model.referenceImage == nil ? Color.white.opacity(0.85) : StudioTheme.accent)
+                    .foregroundColor(Color.white.opacity(0.85))
                     .frame(width: 34, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Reference image (drag one from Assets, or pick a file)")
-            .popover(isPresented: $showReference, arrowEdge: .trailing) {
-                ReferenceImageControls(model: model)
-            }
+            .help("Add an image as a layer (drag one from Assets, or pick a file)")
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 6)
@@ -123,81 +119,15 @@ struct MapLeftDock: View {
                 .frame(width: 320, height: 380)
         }
     }
-}
 
-// MARK: - Reference image controls
-
-/// Popover for importing/clearing the visual reference image and its opacity.
-private struct ReferenceImageControls: View {
-    @ObservedObject var model: TileMapModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Reference image")
-                .font(.system(size: 13, weight: .semibold))
-
-            if let name = model.referenceName, model.referenceImage != nil {
-                Text(name)
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            } else {
-                Text(model.referenceImage == nil
-                     ? "Drop an image from the Assets panel, or pick a file. It shows under the tiles and is not saved into the map."
-                     : "Imported reference")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Button {
-                pickReferenceImage()
-            } label: {
-                Label(model.referenceImage == nil ? "Choose image…" : "Replace image…", systemImage: "folder")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .help("Choose a reference image from disk")
-
-            if model.referenceImage != nil {
-                HStack {
-                    Image(systemName: "circle.lefthalf.filled")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                    Slider(value: Binding(
-                        get: { model.referenceOpacity },
-                        set: { model.setReferenceOpacity($0) }
-                    ), in: 0.05...1)
-                    Text("\(Int(model.referenceOpacity * 100))%")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundColor(.secondary)
-                        .frame(width: 34, alignment: .trailing)
-                }
-                Button(role: .destructive) {
-                    model.setReferenceImage(nil)
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                        .frame(maxWidth: .infinity)
-                }
-                .controlSize(.small)
-                .help("Remove the reference image")
-            }
-        }
-        .padding(14)
-        .frame(width: 260)
-    }
-
-    private func pickReferenceImage() {
+    private func pickImageLayer() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url,
-                  let data = try? Data(contentsOf: url),
-                  let image = AIService.pngToRGBA(data),
-                  let cg = makeCGImage(pixels: image.rgba, width: image.width, height: image.height) else { return }
-            model.setReferenceImage(cg, name: url.lastPathComponent)
+                  let data = try? Data(contentsOf: url) else { return }
+            _ = model.addImageLayer(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
     }
 }
@@ -1110,7 +1040,7 @@ struct MapLayersPanel: View {
 
     private func row(_ layer: MapLayerRow) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: layer.type == "tile" ? "square.grid.3x3" : "mappin")
+            Image(systemName: iconName(for: layer))
                 .font(.system(size: 11))
                 .foregroundColor(layer.index == model.activeLayer ? .white : Color.white.opacity(0.5))
                 .frame(width: 20)
@@ -1144,12 +1074,16 @@ struct MapLayersPanel: View {
                     Text("\(count) object\(count == 1 ? "" : "s")")
                         .font(.system(size: 9))
                         .foregroundColor(Color.white.opacity(0.45))
+                } else if layer.type == "image", let w = layer.imageWidth, let h = layer.imageHeight {
+                    Text("Image \(w)×\(h)")
+                        .font(.system(size: 9))
+                        .foregroundColor(Color.white.opacity(0.45))
                 }
             }
 
             Spacer(minLength: 4)
 
-            if layer.type == "tile" {
+            if layer.type == "tile" || layer.type == "image" {
                 Button {
                     model.setLayerOpacity(layer.index, 1.0)
                 } label: {
@@ -1205,6 +1139,14 @@ struct MapLayersPanel: View {
                 model.deleteLayer()
             }
             .disabled(model.layers.count <= 1)
+        }
+    }
+
+    private func iconName(for layer: MapLayerRow) -> String {
+        switch layer.type {
+        case "object": return "mappin"
+        case "image": return "photo"
+        default: return "square.grid.3x3"
         }
     }
 
