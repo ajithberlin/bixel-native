@@ -317,13 +317,15 @@ fn spec(kind: SkillKind) -> SkillSpec {
         NextFrame => spec_gen(
             kind,
             "Predict next frame",
-            "Create the next frame of an animation from the current frame.",
+            "Create the next animation frame from the current frame. The current \
+             frame is sent as an image-to-image reference so the pose, palette, \
+             background, and canvas stay consistent with the sequence.",
             "animation",
             ModelRole::Image,
             serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "description": "What happens next" }
+                    "action": { "type": "string", "description": "The motion to advance, e.g. 'walk forward one step' or 'swing the sword'. Keep it a small increment." }
                 }
             }),
         ),
@@ -705,12 +707,32 @@ fn spritesheet(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutpu
     prepare_generated(sheet, &input, Some((cols, rows)))
 }
 
-fn next_frame(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
-    let current = require_image(&input)?;
+fn next_frame(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOutput, AiError> {
+    let current = require_image(&input)?.clone();
+    if !input.params.is_object() {
+        input.params = serde_json::json!({});
+    }
+    // The next frame has to line up with the frame it came from, so pin the
+    // output to the source dimensions unless the caller asked for a target.
+    if input.params.get("width").is_none() && input.params.get("height").is_none() {
+        input.params["width"] = serde_json::json!(current.width);
+        input.params["height"] = serde_json::json!(current.height);
+    }
+    // Match the source's alpha policy: transparent sprite frames stay
+    // transparent, opaque scenes stay opaque so no matte is invented.
+    if input.params.get("transparent").is_none() {
+        let has_alpha = current.data.chunks_exact(4).any(|p| p[3] < 255);
+        input.params["transparent"] = serde_json::Value::Bool(has_alpha);
+    }
     generation_target(&input, None)?;
     let prompt = format!("{} {}", build_next_frame_prompt(&input), generation_guidance(&input));
-    let frame = gen.generate_image(&prompt, Some(current))?;
-    prepare_generated(frame, &input, None)
+    let frame = gen.generate_image(&prompt, Some(&current))?;
+    let mut output = prepare_generated(frame, &input, None)?;
+    output.text = format!(
+        "Predicted the next frame from the {} × {} source frame.",
+        current.width, current.height
+    );
+    Ok(output)
 }
 
 fn pixel_image_gen(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
@@ -1092,10 +1114,21 @@ fn build_spritesheet_prompt(input: &SkillInput, cols: usize, rows: usize) -> Str
 }
 
 fn build_next_frame_prompt(input: &SkillInput) -> String {
-    let action = input.params.get("action").and_then(|v| v.as_str()).unwrap_or("continue the motion");
+    let action = input
+        .params
+        .get("action")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("continue the motion");
     format!(
-        "This is one frame of a pixel-art animation. Generate the NEXT frame, keeping the same \
-         palette, character, and style, where the action is: {action}. Return only the next frame.",
+        "You are given the CURRENT frame of a 2D pixel-art animation. Produce exactly ONE image: the NEXT frame in the sequence.\n\
+         Hard requirements:\n\
+         - Same canvas size, camera, framing, palette, outline weight, and pixel density as the input frame.\n\
+         - Keep every non-moving part identical to the input: background, props, lighting, outlines, and the character's still limbs.\n\
+         - Advance only the motion: {action}. Move by a small, plausible increment (about one sixth to one third of the full action) so consecutive frames read smoothly as an animation — not a large pose change.\n\
+         - Preserve the input's transparent regions exactly. Never paint a checkerboard or backdrop, and add no text, border, shadow, or watermark.\n\
+         - Do not zoom, crop, re-frame, recolor, or restyle the scene. Output only the single next frame."
     )
 }
 

@@ -1337,11 +1337,26 @@ pub unsafe extern "C" fn bixel_ai_next_frame(
     let Ok(current) = bixel_ai::image::decode_png(bytes) else {
         return std::ptr::null_mut();
     };
-    let prompt = arg_str(prompt);
-    match gen.generate_image(&prompt, Some(&current)) {
-        Ok(img) => match bixel_ai::image::encode_png(&img) {
-            Ok(png) => unsafe { return_bytes(png, out_len) },
-            Err(_) => std::ptr::null_mut(),
+    // Route through the skill so the image-to-image prompt, source-size pinning,
+    // and alpha policy stay identical to the `next_frame` tool path.
+    let action = arg_str(prompt);
+    let input = bixel_ai::skills::SkillInput {
+        prompt: String::new(),
+        image: Some(current),
+        images: vec![],
+        params: serde_json::json!({ "action": action }),
+    };
+    match bixel_ai::skills::Skills::run(
+        Some(gen.as_ref()),
+        bixel_ai::skills::SkillKind::NextFrame,
+        input,
+    ) {
+        Ok(output) => match output.image.or(output.source_image) {
+            Some(img) => match bixel_ai::image::encode_png(&img) {
+                Ok(png) => unsafe { return_bytes(png, out_len) },
+                Err(_) => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
         },
         Err(_) => std::ptr::null_mut(),
     }

@@ -89,6 +89,27 @@ fn image_gen_skill_uses_the_configured_image_backend() {
 }
 
 #[test]
+fn next_frame_conditions_on_source_and_matches_its_size() {
+    let generator = RecordingGenerator::default();
+    let prompt = generator.prompt.clone();
+    let mut current = RgbaImage::new(4, 6);
+    current.set_pixel(1, 1, [200, 30, 30, 255]);
+    let input = SkillInput {
+        image: Some(current),
+        params: serde_json::json!({ "action": "swing the sword" }),
+        ..Default::default()
+    };
+    let output = Skills::run(Some(&generator), SkillKind::NextFrame, input).unwrap();
+    assert!(*generator.reference_seen.lock().unwrap(), "must send the current frame as the edit reference");
+    let text = prompt.lock().unwrap().clone();
+    assert!(text.contains("swing the sword"));
+    assert!(text.contains("NEXT frame"));
+    // The stub returns 8x8, so this also proves the output is fitted back to the source frame.
+    let image = output.image.unwrap();
+    assert_eq!((image.width, image.height), (4, 6));
+}
+
+#[test]
 fn compress_skill_runs_locally() {
     let mut img = RgbaImage::new(4, 4);
     for y in 0..4 {

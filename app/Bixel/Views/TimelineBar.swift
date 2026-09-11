@@ -5,11 +5,16 @@ import SwiftUI
 
 struct TimelineBar: View {
     @ObservedObject var model: EditorModel
+    var onPredictNextFrame: (String) -> Void
     @State private var dropTarget: Int?
+    @State private var showPredict = false
+    @State private var predictText = ""
 
     private var dragPrefix: String {
         "bixel-frame:\(ObjectIdentifier(model.document)):\(model.frameCount):"
     }
+
+    private let stripAnimation = Animation.spring(response: 0.34, dampingFraction: 0.82)
 
     var body: some View {
         VStack(spacing: 6) {
@@ -42,7 +47,9 @@ struct TimelineBar: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                Button("Add Frame") { model.pause(); model.addFrame() }
+                Button("Add Frame") {
+                    withAnimation(stripAnimation) { model.pause(); model.addFrame() }
+                }
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundColor(StudioTheme.textSecondary)
@@ -64,15 +71,15 @@ struct TimelineBar: View {
         GeometryReader { geo in
             let cellWidth: CGFloat = 40
             let spacing: CGFloat = 5
-            let count = CGFloat(model.frameCount)
-            let contentWidth = count * cellWidth + max(0, count - 1) * spacing
+            let cells = CGFloat(model.frameCount + 1)
+            let contentWidth = cells * cellWidth + max(0, cells - 1) * spacing
             // Centre the strip when it fits; when it overflows the padding drops
             // to zero and the row scrolls horizontally instead.
             let pad = max(0, (geo.size.width - contentWidth) / 2)
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    LazyHStack(spacing: spacing) {
-                        ForEach(0..<model.frameCount, id: \.self) { index in
+                    HStack(spacing: spacing) {
+                        ForEach(Array(model.frameIDs.enumerated()), id: \.element) { index, id in
                             FrameCell(
                                 selected: index == model.frame,
                                 targeted: dropTarget == index,
@@ -80,7 +87,7 @@ struct TimelineBar: View {
                                 width: model.width,
                                 height: model.height
                             )
-                            .id(index)
+                            .id(id)
                             .onTapGesture { model.pause(); model.goTo(index) }
                             .contextMenu { frameMenu(for: index) }
                             .draggable(dragPrefix + String(index))
@@ -91,7 +98,7 @@ struct TimelineBar: View {
                                       let source = Int(value.dropFirst(dragPrefix.count)),
                                       source >= 0, source < model.frameCount,
                                       source != index else { return false }
-                                model.reorderFrame(from: source, to: index)
+                                withAnimation(stripAnimation) { model.reorderFrame(from: source, to: index) }
                                 return true
                             } isTargeted: { targeted in
                                 if targeted { dropTarget = index }
@@ -100,21 +107,80 @@ struct TimelineBar: View {
                             .accessibilityLabel("Frame \(index + 1), \(model.frameDuration(index)) milliseconds")
                             .accessibilityAddTraits(index == model.frame ? [.isSelected] : [])
                             .accessibilityAction(named: "Move earlier") {
-                                model.reorderFrame(from: index, to: index - 1)
+                                withAnimation(stripAnimation) { model.reorderFrame(from: index, to: index - 1) }
                             }
                             .accessibilityAction(named: "Move later") {
-                                model.reorderFrame(from: index, to: index + 1)
+                                withAnimation(stripAnimation) { model.reorderFrame(from: index, to: index + 1) }
                             }
                             .help("Frame \(index + 1) · \(model.frameDuration(index)) ms — drag to arrange; right-click for options")
                         }
+                        aiFrameCell
                     }
                     .padding(.horizontal, pad)
+                    .animation(stripAnimation, value: model.frameIDs)
                 }
                 .onChange(of: model.frame) { index in
-                    withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(index, anchor: .center) }
+                    guard model.frameIDs.indices.contains(index) else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        proxy.scrollTo(model.frameIDs[index], anchor: .center)
+                    }
                 }
             }
         }
+    }
+
+    /// A trailing "AI" tile: type the motion and the current frame is sent to the
+    /// assistant to predict the next frame.
+    private var aiFrameCell: some View {
+        Button {
+            predictText = ""
+            showPredict = true
+        } label: {
+            VStack(spacing: 3) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(StudioTheme.accentSoft)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .strokeBorder(StudioTheme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(StudioTheme.accent)
+                }
+                .frame(width: 40, height: 40)
+                Capsule().fill(Color.clear).frame(height: 3)
+            }
+            .frame(width: 40, height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Predict the next frame with AI")
+        .accessibilityLabel("Predict the next frame with AI")
+        .popover(isPresented: $showPredict, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Predict next frame")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Describe the motion. The current frame is sent as the reference so the style and canvas stay consistent.")
+                    .font(.system(size: 10))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                TextField("e.g. walk forward one step", text: $predictText)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(submitPredict)
+                HStack {
+                    Spacer()
+                    Button("Predict", action: submitPredict)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(14)
+            .frame(width: 260)
+        }
+    }
+
+    private func submitPredict() {
+        let action = predictText.trimmingCharacters(in: .whitespacesAndNewlines)
+        showPredict = false
+        onPredictNextFrame(action.isEmpty ? "continue the motion" : action)
     }
 
     @ViewBuilder
@@ -124,11 +190,15 @@ struct TimelineBar: View {
                 Button("\(ms) ms") { model.setFrameDuration(index, ms: ms) }
             }
         }
-        Button("Duplicate") { model.pause(); model.goTo(index); model.duplicateFrame() }
+        Button("Duplicate") {
+            withAnimation(stripAnimation) { model.pause(); model.goTo(index); model.duplicateFrame() }
+        }
         Button("Delete", role: .destructive) {
-            model.pause()
-            model.goTo(index)
-            model.removeFrame()
+            withAnimation(stripAnimation) {
+                model.pause()
+                model.goTo(index)
+                model.removeFrame()
+            }
         }
         .disabled(model.frameCount <= 1)
     }
@@ -150,6 +220,8 @@ private struct FrameCell: View {
                 .overlay(RoundedRectangle(cornerRadius: 3)
                     .strokeBorder(targeted ? StudioTheme.accent : StudioTheme.hairlineStrong,
                                   lineWidth: targeted ? 2 : 1))
+                .scaleEffect(targeted ? 1.08 : 1)
+                .animation(.easeOut(duration: 0.12), value: targeted)
             Capsule()
                 .fill(selected ? StudioTheme.accent : Color.clear)
                 .frame(height: 3)

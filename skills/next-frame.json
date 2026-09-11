@@ -1,13 +1,13 @@
 {
   "id": "next_frame",
   "name": "Predict next frame",
-  "description": "Create the next frame of an animation from the current frame, preserving style and palette.",
+  "description": "Create the next animation frame from the current frame. The current frame is sent as an image-to-image reference so the pose, palette, background, and canvas stay consistent with the sequence.",
   "category": "animation",
   "model": "image",
   "params_schema": {
     "type": "object",
     "properties": {
-      "action": { "type": "string", "description": "What happens next" }
+      "action": { "type": "string", "description": "The motion to advance, e.g. 'walk forward one step'. Keep it a small increment." }
     }
   }
 }

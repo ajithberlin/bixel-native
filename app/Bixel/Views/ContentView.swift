@@ -41,6 +41,15 @@ struct ContentView: View {
     private var assistant: AssistantSession { projects.assistant }
     private var aiPanelWidth: CGFloat { assistantExpanded ? 520 : 372 }
 
+    /// Open the assistant with the current frame attached and ask it to predict
+    /// the next animation frame for `action`.
+    private func predictNextFrame(_ action: String) {
+        assistant.attachCanvas(model)
+        assistant.input = "[[skill:next_frame]] \(action)"
+        withAnimation(.easeInOut(duration: 0.2)) { showAI = true }
+        assistant.send(model: model)
+    }
+
     var body: some View {
         ZStack {
             if currentScreen == .home {
@@ -460,7 +469,7 @@ struct ContentView: View {
     private var spriteBottomChrome: some View {
         VStack(spacing: 8) {
             if showTimeline && projects.activeDocument?.supportsAnimationAssist == true {
-                TimelineBar(model: model)
+                TimelineBar(model: model, onPredictNextFrame: predictNextFrame)
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))

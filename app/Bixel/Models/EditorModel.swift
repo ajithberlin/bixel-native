@@ -172,13 +172,13 @@ struct FloatingImageImport {
 }
 
 struct LayerInfo: Identifiable {
+    let id: UUID
     let index: Int
     var name: String
     var visible: Bool
     var opacity: Double
     var blendMode: String = "Normal"
     var subtitle: String? = nil
-    var id: Int { index }
 
     var blendLetter: String {
         switch blendMode.lowercased() {
@@ -220,6 +220,10 @@ final class EditorModel: ObservableObject {
     @Published var playing: Bool = false
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
+    /// Stable identities for timeline frames so reordering animates as a move
+    /// (index-keyed identities would just swap content in place).
+    @Published private(set) var frameIDs: [UUID] = []
+    private var layerIDs: [UUID] = []
     @Published var selectionRect: CGRect?
     @Published var transformRect: CGRect?
     /// Transient clockwise rotation preview in radians. The Rust transform
@@ -303,6 +307,7 @@ final class EditorModel: ObservableObject {
     }
 
     private func commitChange(allFrames: Bool = false) {
+        if allFrames { ensureFrameIDs() }
         pixelsChanged(allFrames: allFrames)
         if allFrames {
             thumbCache.removeAll()
@@ -325,15 +330,40 @@ final class EditorModel: ObservableObject {
         self.document = document
         self.timeline = Timeline(document: document)
         reloadLayers()
+        ensureFrameIDs()
     }
 
     // MARK: - Layer list
 
+    /// Keep the parallel identity arrays aligned with the document. Lengths only
+    /// change on add/delete/undo; explicit reorders permute the ids themselves.
+    private func ensureFrameIDs() {
+        let count = document.frameCount
+        if frameIDs.count == count { return }
+        if frameIDs.count < count {
+            frameIDs.append(contentsOf: (frameIDs.count..<count).map { _ in UUID() })
+        } else {
+            frameIDs.removeLast(frameIDs.count - count)
+        }
+    }
+
+    private func ensureLayerIDs() {
+        let count = document.layerCount
+        if layerIDs.count == count { return }
+        if layerIDs.count < count {
+            layerIDs.append(contentsOf: (layerIDs.count..<count).map { _ in UUID() })
+        } else {
+            layerIDs.removeLast(layerIDs.count - count)
+        }
+    }
+
     func reloadLayers() {
+        ensureLayerIDs()
         let prev = Dictionary(uniqueKeysWithValues: layers.map { ($0.index, ($0.blendMode, $0.subtitle)) })
         layers = (0..<document.layerCount).map { i in
             let existing = prev[i]
             return LayerInfo(
+                id: layerIDs[i],
                 index: i,
                 name: document.layerName(i),
                 visible: document.isLayerVisible(i),
@@ -724,7 +754,9 @@ final class EditorModel: ObservableObject {
     func deleteLayer() {
         guard document.layerCount > 1 else { return }
         document.snapshot()
+        let removed = activeLayer
         document.removeLayer(activeLayer)
+        if layerIDs.indices.contains(removed) { layerIDs.remove(at: removed) }
         activeLayer = max(0, activeLayer - 1)
         reloadLayers()
         commitChange(allFrames: true)
@@ -759,6 +791,10 @@ final class EditorModel: ObservableObject {
               from < document.layerCount, to < document.layerCount else { return }
         document.snapshot()
         document.reorderLayer(from: from, to: to)
+        if layerIDs.indices.contains(from), layerIDs.indices.contains(to) {
+            let id = layerIDs.remove(at: from)
+            layerIDs.insert(id, at: to)
+        }
         activeLayer = to
         reloadLayers()
         commitChange(allFrames: true)
@@ -1165,6 +1201,10 @@ final class EditorModel: ObservableObject {
         pause()
         document.snapshot()
         document.reorderFrame(from: from, to: to)
+        if frameIDs.indices.contains(from), frameIDs.indices.contains(to) {
+            let id = frameIDs.remove(at: from)
+            frameIDs.insert(id, at: to)
+        }
         // Keep the selected artwork selected as its position changes.
         let selected: Int
         if frame == from { selected = to }
@@ -1178,7 +1218,9 @@ final class EditorModel: ObservableObject {
     func removeFrame() {
         guard document.frameCount > 1 else { return }
         document.snapshot()
+        let removed = frame
         document.removeFrame(frame)
+        if frameIDs.indices.contains(removed) { frameIDs.remove(at: removed) }
         frame = min(frame, document.frameCount - 1)
         commitChange(allFrames: true)
     }

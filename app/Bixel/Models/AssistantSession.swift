@@ -243,6 +243,9 @@ final class AssistantSession: ObservableObject {
         let directTool: AssistantCommand? = {
             if selected.count == 1, selected[0].id == "image_gen" { return selected[0] }
             if naturalImageRequest { return imageCommand }
+            // next_frame is deterministic in its conditioning: the current frame
+            // is the image input, so run it directly instead of via the agent.
+            if selected.count == 1, selected[0].id == "next_frame", imageReady { return selected[0] }
             if selected.count == 1, selected[0].local, !textReady { return selected[0] }
             return nil
         }()
@@ -290,7 +293,16 @@ final class AssistantSession: ObservableObject {
         let artifactWorkspaceURL = self.workspaceURL
         let request: [String: Any] = ["prompt": prompt, "system": system, "base": artifactWorkspaceURL.path,
             "images": files.filter(\.isImage).map { ["name": $0.name, "data": $0.data.base64EncodedString()] }]
-        let canvasPNG = directTool?.local == true ? AIService.rgbaToPNG(model.compositeCurrentFrame(), width: model.width, height: model.height) : nil
+        let canvasPNG = (directTool?.local == true || directTool?.id == "next_frame")
+            ? AIService.rgbaToPNG(model.compositeCurrentFrame(), width: model.width, height: model.height)
+            : nil
+        // Resolve the next_frame motion on the main actor before hopping off it.
+        let nextFrameAction: String = {
+            let action = readable(text)
+                .replacingOccurrences(of: "/next_frame", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return action.isEmpty ? "continue the motion" : action
+        }()
         onPersist?()
         queue.async {
             do {
@@ -306,8 +318,16 @@ final class AssistantSession: ObservableObject {
             if let command = directTool {
                 receive(AssistantEvent(type: "tool_call", id: "local", name: command.id, arguments: "{}"))
                 let imagePrompt = command.id == "image_gen" ? (skillPrompt.isEmpty ? "Create one finished image." : skillPrompt) : ""
-                let result = AIService.runSkill(id: command.id, prompt: imagePrompt,
-                                                png: files.first(where: \.isImage)?.data ?? canvasPNG)
+                var skillParams: [String: Any] = [:]
+                var inputPNG = files.first(where: \.isImage)?.data ?? canvasPNG
+                if command.id == "next_frame" {
+                    skillParams["action"] = nextFrameAction
+                    // Always condition on the live canvas so the new frame lines
+                    // up with the frame the user is looking at.
+                    inputPNG = canvasPNG ?? inputPNG
+                }
+                let result = AIService.runSkill(id: command.id, params: skillParams, prompt: imagePrompt,
+                                                png: inputPNG)
                 if let result {
                     var outputs: [(png: String, source: Bool, meta: [SheetFrameMeta]?, atlas: String?)] = []
                     if let source = result.source_image { outputs.append((source, true, nil, nil)) }

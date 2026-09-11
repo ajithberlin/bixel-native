@@ -22,7 +22,7 @@ struct LayersPopover: View {
                     .foregroundColor(Color.white.opacity(0.92))
                 Spacer()
                 Button {
-                    model.addLayer()
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.addLayer() }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .medium))
@@ -50,9 +50,22 @@ struct LayersPopover: View {
                             onSelect: { model.activeLayer = layer.index },
                             onToggle: { model.toggleLayerVisibility(layer.index) },
                             onRename: { model.renameLayer(layer.index, name: $0) },
-                            onDelete: { model.activeLayer = layer.index; model.deleteLayer() },
-                            onDuplicate: { model.duplicateLayer(layer.index) },
-                            onMoveHere: { model.moveLayer(from: $0, to: layer.index) },
+                            onDelete: {
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                    model.activeLayer = layer.index
+                                    model.deleteLayer()
+                                }
+                            },
+                            onDuplicate: {
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                    model.duplicateLayer(layer.index)
+                                }
+                            },
+                            onMoveHere: { from in
+                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                    model.moveLayer(from: from, to: layer.index)
+                                }
+                            },
                             onSetBlendMode: { mode in model.setLayerBlendMode(layer.index, mode) },
                             onSetOpacity: { val in model.setLayerOpacity(layer.index, val) }
                         )
