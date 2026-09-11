@@ -55,6 +55,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            AppSettingsOpener()
+
             if currentScreen == .home {
                 HomePageView(
                     store: projects,
@@ -213,7 +215,7 @@ struct ContentView: View {
     private func startAIImageGeneration(_ request: AICreationRequest) {
         guard !aiCreationInProgress else { return }
         guard AIService.imageGenerationIsReady(AIService.connectionStatus()) else {
-            AppSettings.open()
+            AppSettings.requestOpen()
             return
         }
         guard !projects.assistant.busy else {

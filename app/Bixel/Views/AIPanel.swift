@@ -67,10 +67,7 @@ struct AIPanel: View {
                     .overlay(Label("Drop files to attach", systemImage: "paperclip")).padding(8).allowsHitTesting(false)
             }
         }
-        .onAppear {
-            // No provider set up yet — jump straight into the app Settings window.
-            if !session.status.connected { AppSettings.open() }
-        }
+        .background(AppSettingsOpener(openOnAppear: !session.status.connected))
     }
 
     private func roleDot(_ role: String) -> Color {
@@ -215,7 +212,7 @@ struct AIPanel: View {
                         Text("Configured in AI settings. Image attachments are described by the vision model when that role is ready.")
                             .font(.system(size: 11)).foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Button("Open AI settings…") { AppSettings.open() }
+                        AppSettingsButton { Text("Open AI settings…") }
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(StudioTheme.accent)
                     }.padding(18).frame(width: 280)
                 }

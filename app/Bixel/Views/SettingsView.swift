@@ -10,15 +10,98 @@
 import SwiftUI
 import AppKit
 
+enum AppSettingsRoute: Equatable {
+    case swiftUI
+    case legacySelector(String)
+}
+
 /// Opens the app-universal Settings window from anywhere (AI panel, canvas,
 /// image-generation prompts) instead of presenting a separate provider sheet.
 enum AppSettings {
+    static let openRequest = Notification.Name("BixelOpenAppSettings")
+
+    static func route(for version: OperatingSystemVersion) -> AppSettingsRoute {
+        if version.majorVersion >= 14 { return .swiftUI }
+        if version.majorVersion >= 13 { return .legacySelector("showSettingsWindow:") }
+        return .legacySelector("showPreferencesWindow:")
+    }
+
+    static func requestOpen() {
+        NotificationCenter.default.post(name: openRequest, object: nil)
+    }
+
     @discardableResult
-    static func open() -> Bool {
-        for name in ["showSettingsWindow:", "showPreferencesWindow:"] {
-            if NSApp.sendAction(Selector((name)), to: nil, from: nil) { return true }
+    static func openLegacy() -> Bool {
+        guard case .legacySelector(let name) = route(for: ProcessInfo.processInfo.operatingSystemVersion) else {
+            return false
         }
-        return false
+        return NSApp.sendAction(Selector(name), to: nil, from: nil)
+    }
+}
+
+/// Uses SwiftUI's supported Settings presentation on macOS 14+, with the
+/// scene action selectors retained for older macOS releases.
+struct AppSettingsButton<Label: View>: View {
+    private let label: Label
+
+    init(@ViewBuilder label: () -> Label) {
+        self.label = label()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if #available(macOS 14.0, *) {
+            SettingsLink { label }
+        } else {
+            Button(action: { _ = AppSettings.openLegacy() }) { label }
+        }
+    }
+}
+
+/// A zero-size bridge for non-View callbacks that need to open the Settings
+/// scene, such as the assistant's initial connection prompt.
+struct AppSettingsOpener: View {
+    var openOnAppear = false
+
+    var body: some View {
+        Group {
+            if #available(macOS 14.0, *) {
+                ModernAppSettingsOpener(openOnAppear: openOnAppear)
+            } else {
+                LegacyAppSettingsOpener(openOnAppear: openOnAppear)
+            }
+        }
+        .frame(width: 0, height: 0)
+    }
+}
+
+@available(macOS 14.0, *)
+private struct ModernAppSettingsOpener: View {
+    @Environment(\.openSettings) private var openSettings
+    let openOnAppear: Bool
+
+    var body: some View {
+        Color.clear
+            .onAppear {
+                if openOnAppear { openSettings() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AppSettings.openRequest)) { _ in
+                openSettings()
+            }
+    }
+}
+
+private struct LegacyAppSettingsOpener: View {
+    let openOnAppear: Bool
+
+    var body: some View {
+        Color.clear
+            .onAppear {
+                if openOnAppear { _ = AppSettings.openLegacy() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AppSettings.openRequest)) { _ in
+                _ = AppSettings.openLegacy()
+            }
     }
 }
 
