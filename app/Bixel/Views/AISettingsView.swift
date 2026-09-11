@@ -4,8 +4,8 @@ import SwiftUI
 /// exposes one primary model with hosted chat/vision/image capabilities, while
 /// OpenRouter may opt into separate vision/image routing under Advanced.
 ///
-/// The pane is embedded by the app-universal `SettingsView`; `AISettingsView`
-/// is a standalone sheet wrapper kept for the AI panel's setup shortcut.
+/// `ProviderSettingsPane` is embedded as the Provider pane of the app-universal
+/// `SettingsView`; callers open that window via `AppSettings.open()`.
 struct ProviderSettingsPane: View {
     @State private var status = AIService.connectionStatus()
     @State private var provider = "openrouter"
@@ -356,37 +356,6 @@ struct ProviderSettingsPane: View {
         }
         applyProviderDefaults(provider)
         loadCatalog()
-    }
-}
-
-/// Standalone sheet wrapper around the provider pane, used by the AI panel's
-/// "connect a provider" shortcut and the home screen's setup prompt.
-struct AISettingsView: View {
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("AI Provider")
-                        .font(.system(size: 17, weight: .semibold, design: .rounded))
-                    Text("Choose the provider Goose will use for chat and image skills.")
-                        .font(.system(size: 11))
-                        .foregroundColor(StudioTheme.textSecondary)
-                }
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundColor(StudioTheme.textSecondary)
-            }
-            .padding(.bottom, 17)
-            ProviderSettingsPane()
-        }
-        .padding(20)
-        .frame(width: 460, height: 650)
-        .foregroundColor(StudioTheme.textPrimary)
-        .background(StudioTheme.background)
     }
 }
 

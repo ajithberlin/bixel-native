@@ -25,7 +25,6 @@ struct ContentView: View {
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
-    @State private var showAISettings = false
     @State private var loadingProject: StudioProject? = nil
     @State private var showLoadingAd = false
     @State private var pendingPostAction: (() -> Void)? = nil
@@ -162,7 +161,6 @@ struct ContentView: View {
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .sheet(isPresented: $showPaywall) { PaywallContainerView() }
         .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
-        .sheet(isPresented: $showAISettings) { AISettingsView() }
         .sheet(item: $generatedImageDraft, onDismiss: handleGeneratedImageReviewDismissed) { draft in
             AIGeneratedImageReviewView(
                 draft: draft,
@@ -215,7 +213,7 @@ struct ContentView: View {
     private func startAIImageGeneration(_ request: AICreationRequest) {
         guard !aiCreationInProgress else { return }
         guard AIService.imageGenerationIsReady(AIService.connectionStatus()) else {
-            showAISettings = true
+            AppSettings.open()
             return
         }
         guard !projects.assistant.busy else {

@@ -10,6 +10,18 @@
 import SwiftUI
 import AppKit
 
+/// Opens the app-universal Settings window from anywhere (AI panel, canvas,
+/// image-generation prompts) instead of presenting a separate provider sheet.
+enum AppSettings {
+    @discardableResult
+    static func open() -> Bool {
+        for name in ["showSettingsWindow:", "showPreferencesWindow:"] {
+            if NSApp.sendAction(Selector((name)), to: nil, from: nil) { return true }
+        }
+        return false
+    }
+}
+
 enum SettingsPane: String, CaseIterable, Identifiable {
     case provider
     case skills
@@ -123,6 +135,7 @@ private struct SettingsRow<Content: View>: View {
     var subtitle: String? = nil
     var systemImage: String? = nil
     var tint: Color = StudioTheme.textSecondary
+    var showsDivider: Bool = true
     @ViewBuilder var trailing: Content
 
     var body: some View {
@@ -150,7 +163,9 @@ private struct SettingsRow<Content: View>: View {
         }
         .padding(.vertical, 9)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(StudioTheme.hairline).frame(height: 1)
+            if showsDivider {
+                Rectangle().fill(StudioTheme.hairline).frame(height: 1)
+            }
         }
     }
 }
@@ -203,8 +218,8 @@ struct SkillsSettingsPane: View {
                             .foregroundColor(StudioTheme.textDisabled)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(skills) { skill in
-                            skillRow(skill)
+                        ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
+                            skillRow(skill, showsDivider: index < skills.count - 1)
                         }
                     }
                 }
@@ -232,12 +247,13 @@ struct SkillsSettingsPane: View {
         .onAppear(perform: load)
     }
 
-    private func skillRow(_ skill: AIService.InstalledSkillInfo) -> some View {
+    private func skillRow(_ skill: AIService.InstalledSkillInfo, showsDivider: Bool) -> some View {
         SettingsRow(
             title: skill.name,
             subtitle: skill.description,
             systemImage: "doc.text",
-            tint: skill.enabled ? StudioTheme.bixelGreen : StudioTheme.textDisabled
+            tint: skill.enabled ? StudioTheme.bixelGreen : StudioTheme.textDisabled,
+            showsDivider: showsDivider
         ) {
             HStack(spacing: 8) {
                 if skill.source == "builtin skill" {
@@ -320,8 +336,8 @@ struct MCPSettingsPane: View {
                             .foregroundColor(StudioTheme.textDisabled)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(servers) { server in
-                            serverRow(server)
+                        ForEach(Array(servers.enumerated()), id: \.element.id) { index, server in
+                            serverRow(server, showsDivider: index < servers.count - 1)
                         }
                     }
                 }
@@ -353,12 +369,13 @@ struct MCPSettingsPane: View {
         }
     }
 
-    private func serverRow(_ server: AIService.MCPExtensionInfo) -> some View {
+    private func serverRow(_ server: AIService.MCPExtensionInfo, showsDivider: Bool) -> some View {
         SettingsRow(
             title: server.display_name ?? server.name,
             subtitle: server.summary,
             systemImage: server.type == "streamable_http" ? "network" : "terminal",
-            tint: server.enabled ? StudioTheme.bixelGreen : StudioTheme.textDisabled
+            tint: server.enabled ? StudioTheme.bixelGreen : StudioTheme.textDisabled,
+            showsDivider: showsDivider
         ) {
             HStack(spacing: 8) {
                 SettingsBadge(text: server.transportLabel,
@@ -618,7 +635,7 @@ struct GeneralSettingsPane: View {
                 paneHeader("General", subtitle: "Studio-wide defaults, saved for this Mac and applied the next time the app launches.")
 
                 SettingsSection(title: "Assistant", systemImage: "sparkles") {
-                    SettingsRow(title: "Open assistant on launch", subtitle: "Show the AI panel when a project opens.", systemImage: "sidebar.right") {
+                    SettingsRow(title: "Open assistant on launch", subtitle: "Show the AI panel when a project opens.", systemImage: "sidebar.right", showsDivider: false) {
                         Toggle("", isOn: $openAssistantOnLaunch).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                     }
                 }
@@ -627,7 +644,7 @@ struct GeneralSettingsPane: View {
                     SettingsRow(title: "Snapping", subtitle: "Snap transforms and selections to whole pixels.", systemImage: "dot.squareshape.split.2x2") {
                         Toggle("", isOn: $defaultSnapping).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                     }
-                    SettingsRow(title: "Default frame rate", subtitle: "Animation playback speed for new workspaces.", systemImage: "timer") {
+                    SettingsRow(title: "Default frame rate", subtitle: "Animation playback speed for new workspaces.", systemImage: "timer", showsDivider: false) {
                         Picker("", selection: $defaultFrameRate) {
                             ForEach(frameRates, id: \.self) { Text("\(Int($0)) FPS").tag($0) }
                         }
@@ -682,7 +699,7 @@ struct AboutSettingsPane: View {
                 SettingsSection(title: "Build", systemImage: "hammer") {
                     aboutRow("Version", "\(version) (\(build))")
                     aboutRow("AI engine", AIService.available() ? "Goose agent · connected" : "Goose agent · idle")
-                    aboutRow("Platform", "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)")
+                    aboutRow("Platform", "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)", showsDivider: false)
                 }
 
                 SettingsSection(title: "Storage", systemImage: "internaldrive",
@@ -691,12 +708,7 @@ struct AboutSettingsPane: View {
                     pathRow("Config file", paths?.goose_config)
                     pathRow("Skills folder", paths?.skills_dir)
                     pathRow("Python venv", paths?.venv_dir)
-                    aboutRow("Secrets", paths?.secrets ?? "goose secret store")
-                }
-
-                SettingsSection(title: "Links", systemImage: "link") {
-                    linkRow("Project repository", "https://github.com/ajithberlin/bixel-native", icon: "chevron.left.forwardslash.chevron.right")
-                    linkRow("OpenCode", "https://opencode.ai", icon: "globe")
+                    aboutRow("Secrets", paths?.secrets ?? "goose secret store", showsDivider: false)
                 }
 
                 HStack {
@@ -733,8 +745,8 @@ struct AboutSettingsPane: View {
         }
     }
 
-    private func aboutRow(_ title: String, _ value: String) -> some View {
-        SettingsRow(title: title, subtitle: value) { EmptyView() }
+    private func aboutRow(_ title: String, _ value: String, showsDivider: Bool = true) -> some View {
+        SettingsRow(title: title, subtitle: value, showsDivider: showsDivider) { EmptyView() }
     }
 
     private func pathRow(_ title: String, _ value: String?) -> some View {
@@ -749,18 +761,6 @@ struct AboutSettingsPane: View {
             .buttonStyle(.plain)
             .foregroundColor(StudioTheme.textSecondary)
             .disabled(value?.isEmpty != false)
-        }
-    }
-
-    private func linkRow(_ title: String, _ url: String, icon: String) -> some View {
-        SettingsRow(title: title, subtitle: url, systemImage: icon) {
-            Button {
-                if let url = URL(string: url) { NSWorkspace.shared.open(url) }
-            } label: {
-                Image(systemName: "arrow.up.right.square").font(.system(size: 11))
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(StudioTheme.textSecondary)
         }
     }
 }

@@ -9,7 +9,6 @@ struct AIPanel: View {
     var onExpand: () -> Void
     @State private var showHistory = false
     @State private var showModel = false
-    @State private var showSettings = false
     @State private var showCommands = false
     @State private var dropTarget = false
     @State private var archived: AssistantConversation?
@@ -68,12 +67,9 @@ struct AIPanel: View {
                     .overlay(Label("Drop files to attach", systemImage: "paperclip")).padding(8).allowsHitTesting(false)
             }
         }
-        .sheet(isPresented: $showSettings) {
-            AISettingsView()
-        }
         .onAppear {
-            // No provider set up yet — jump straight into the setup sheet.
-            if !session.status.connected { showSettings = true }
+            // No provider set up yet — jump straight into the app Settings window.
+            if !session.status.connected { AppSettings.open() }
         }
     }
 
@@ -219,7 +215,7 @@ struct AIPanel: View {
                         Text("Configured in AI settings. Image attachments are described by the vision model when that role is ready.")
                             .font(.system(size: 11)).foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        Button("Open AI settings…") { showSettings = true }
+                        Button("Open AI settings…") { AppSettings.open() }
                             .buttonStyle(.plain).font(.system(size: 12)).foregroundColor(StudioTheme.accent)
                     }.padding(18).frame(width: 280)
                 }
