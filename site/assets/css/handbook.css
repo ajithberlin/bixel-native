@@ -1,0 +1,396 @@
+/* ==========================================================================
+   Bixel Studio — Procreate Handbook Stylesheet
+   Directly inspired by help.procreate.com/procreate/handbook
+   ========================================================================== */
+
+.handbook-body {
+  background-color: #000000;
+  color: var(--text-white);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ==========================================================================
+   Top Header Bar & Ribbon
+   ========================================================================== */
+.hb-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 68px;
+  background: rgba(10, 10, 14, 0.85);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border-bottom: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 32px;
+  z-index: 1000;
+}
+
+.hb-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.hb-logo-box {
+  width: 30px;
+  height: 30px;
+  background: linear-gradient(135deg, #8a2be2 0%, #f7235b 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 16px rgba(247, 35, 91, 0.35);
+}
+
+.hb-brand-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.hb-badge {
+  font-size: 0.72rem;
+  background: rgba(247, 35, 91, 0.15);
+  color: var(--accent-magenta);
+  border: 1px solid rgba(247, 35, 91, 0.3);
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.hb-actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.hb-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.hb-search-input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-pill);
+  padding: 8px 16px 8px 38px;
+  color: var(--text-white);
+  font-size: 0.88rem;
+  width: 260px;
+  outline: none;
+  transition: all 0.25s ease;
+}
+
+.hb-search-input:focus {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent-magenta);
+  width: 320px;
+  box-shadow: 0 0 20px rgba(247, 35, 91, 0.25);
+}
+
+.hb-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Handbook Layout Structure
+   ========================================================================== */
+.hb-layout {
+  display: flex;
+  margin-top: 68px;
+  min-height: calc(100vh - 68px);
+}
+
+/* Sticky Left Sidebar */
+.hb-sidebar {
+  width: 310px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 68px;
+  height: calc(100vh - 68px);
+  overflow-y: auto;
+  border-right: 1px solid var(--border-hairline);
+  background: #09090c;
+  padding: 32px 18px 80px;
+}
+
+.hb-sidebar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.hb-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.sidebar-group {
+  margin-bottom: 24px;
+}
+
+.sidebar-group-title {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--text-tertiary);
+  font-weight: 700;
+  padding: 8px 12px;
+  display: block;
+}
+
+.sidebar-menu {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-item-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.sidebar-item-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-white);
+}
+
+.sidebar-item-link.active {
+  background: rgba(247, 35, 91, 0.12);
+  color: #ffffff;
+  font-weight: 600;
+  border-left: 3px solid var(--accent-magenta);
+  padding-left: 11px;
+}
+
+.sidebar-item-icon {
+  font-size: 1rem;
+  opacity: 0.9;
+}
+
+/* Main Documentation Column */
+.hb-main {
+  flex: 1;
+  max-width: 880px;
+  padding: 56px 64px 140px;
+  margin: 0 auto;
+}
+
+.hb-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+  margin-bottom: 24px;
+}
+
+.hb-breadcrumbs a:hover {
+  color: var(--text-white);
+}
+
+.hb-chapter {
+  margin-bottom: 100px;
+  scroll-margin-top: 100px;
+}
+
+.hb-chapter-eyebrow {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-cyan);
+  margin-bottom: 12px;
+  display: inline-block;
+}
+
+.hb-chapter-title {
+  font-size: clamp(2.4rem, 4.5vw, 3.4rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 20px;
+}
+
+.hb-lead {
+  font-size: 1.18rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 36px;
+  border-bottom: 1px solid var(--border-hairline);
+  padding-bottom: 28px;
+  font-weight: 400;
+}
+
+.hb-section h3 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 36px 0 16px;
+}
+
+.hb-section p {
+  color: #d1d1dc;
+  font-size: 1.02rem;
+  line-height: 1.8;
+  margin-bottom: 20px;
+}
+
+/* ==========================================================================
+   Callout Alert Boxes (Procreate Clean Left-Bar Style)
+   ========================================================================== */
+.hb-callout {
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  margin: 32px 0;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  font-size: 0.95rem;
+  line-height: 1.65;
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-hairline);
+}
+
+.hb-callout-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.hb-callout-note {
+  border-left: 4px solid var(--accent-cyan);
+  background: rgba(0, 229, 255, 0.05);
+}
+
+.hb-callout-tip {
+  border-left: 4px solid var(--accent-green);
+  background: rgba(0, 255, 136, 0.05);
+}
+
+.hb-callout-important {
+  border-left: 4px solid var(--accent-magenta);
+  background: rgba(247, 35, 91, 0.05);
+}
+
+/* Keyboard Shortcut Badge */
+.kbd {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #181820;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+/* Code Snippet Box */
+.hb-code {
+  background: #0f0f14;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--accent-green);
+  overflow-x: auto;
+  margin: 22px 0;
+}
+
+/* Handbook Screenshot Frame */
+.hb-screenshot-card {
+  margin: 36px 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-hairline);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+.hb-screenshot-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.hb-screenshot-caption {
+  padding: 12px 20px;
+  font-size: 0.84rem;
+  color: var(--text-tertiary);
+  background: #0d0d12;
+  border-top: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hb-screenshot-caption code {
+  color: var(--accent-magenta);
+  font-size: 0.78rem;
+}
+
+/* Clean Tables */
+.hb-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 30px 0;
+  font-size: 0.92rem;
+}
+
+.hb-table th {
+  text-align: left;
+  padding: 14px 18px;
+  background: #111116;
+  color: var(--text-white);
+  border-bottom: 2px solid var(--border-hairline);
+  font-weight: 700;
+}
+
+.hb-table td {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-hairline);
+  color: #c4c4d4;
+}
+
+.hb-table tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ==========================================================================
+   Responsive Handbook
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .hb-sidebar {
+    display: none;
+  }
+  .hb-main {
+    padding: 36px 24px 100px;
+  }
+  .hb-search-input {
+    width: 180px;
+  }
+  .hb-search-input:focus {
+    width: 220px;
+  }
+}

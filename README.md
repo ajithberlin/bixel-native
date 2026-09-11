@@ -57,3 +57,10 @@ Then press **Cmd + R** in Xcode to run the app.
 > ```bash
 > ./scripts/start.sh --run
 > ```
+
+---
+
+## 📖 Documentation & Handbook
+
+Explore the complete [Bixel Studio Handbook](site/handbook/index.html) for detailed guides on the interface, drawing tools, keyboard shortcuts, animation timeline, tilemap designer, and AI assistant skills.
+

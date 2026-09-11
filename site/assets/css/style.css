@@ -1,0 +1,825 @@
+/* ==========================================================================
+   Bixel Studio — Procreate Ultra-Modern Design System
+   Inspired directly by procreate.com (OLED pitch black, Bento tiles, Apple typography)
+   ========================================================================== */
+
+:root {
+  --bg-black: #000000;
+  --bg-surface-1: #0d0d0f;
+  --bg-surface-2: #141418;
+  --bg-surface-3: #1a1a22;
+  --bg-glass: rgba(18, 18, 24, 0.65);
+  
+  --text-white: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.72);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --text-muted: rgba(255, 255, 255, 0.3);
+
+  --accent-magenta: #f7235b;
+  --accent-purple: #8a2be2;
+  --accent-cyan: #00e5ff;
+  --accent-green: #00ff88;
+  
+  --border-hairline: rgba(255, 255, 255, 0.1);
+  --border-focus: rgba(255, 255, 255, 0.25);
+  --border-accent: rgba(247, 35, 91, 0.4);
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 9999px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background-color: var(--bg-black);
+  color: var(--text-white);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-black);
+  color: var(--text-white);
+  overflow-x: hidden;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+
+/* ==========================================================================
+   Navigation: Floating Glass Pill (Procreate Style)
+   ========================================================================== */
+.site-nav-wrapper {
+  position: fixed;
+  top: 20px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  z-index: 1000;
+  padding: 0 24px;
+  pointer-events: none;
+}
+
+.site-nav {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 32px;
+  background: rgba(16, 16, 20, 0.75);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid var(--border-hairline);
+  padding: 8px 12px 8px 20px;
+  border-radius: var(--radius-pill);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  max-width: 980px;
+  width: 100%;
+  transition: all 0.3s ease;
+}
+
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+
+.nav-brand-logo {
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #8a2be2 0%, #f7235b 100%);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 16px rgba(247, 35, 91, 0.4);
+}
+
+.nav-items {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  list-style: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.nav-items a:hover {
+  color: var(--text-white);
+}
+
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ==========================================================================
+   Buttons (Procreate Style: Clean, Pill, Tactile)
+   ========================================================================== */
+.pro-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 22px;
+  border-radius: var(--radius-pill);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.pro-btn-primary {
+  background: #ffffff;
+  color: #000000;
+  box-shadow: 0 4px 20px rgba(255, 255, 255, 0.2);
+}
+
+.pro-btn-primary:hover {
+  transform: scale(1.03);
+  box-shadow: 0 6px 28px rgba(255, 255, 255, 0.35);
+}
+
+.pro-btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-white);
+  border: 1px solid var(--border-hairline);
+  backdrop-filter: blur(12px);
+}
+
+.pro-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: scale(1.02);
+}
+
+.pro-btn-tertiary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.pro-btn-tertiary:hover {
+  color: var(--text-white);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.pro-btn-sm {
+  padding: 6px 16px;
+  font-size: 0.82rem;
+}
+
+.pro-btn-lg {
+  padding: 14px 34px;
+  font-size: 1.05rem;
+}
+
+/* ==========================================================================
+   Hero Section (Cinematic Art Studio Presence)
+   ========================================================================== */
+.hero-container {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 160px 24px 80px;
+  background: radial-gradient(circle at 50% 15%, rgba(138, 43, 226, 0.18) 0%, rgba(247, 35, 91, 0.08) 35%, rgba(0, 0, 0, 0) 70%), #000000;
+  overflow: hidden;
+}
+
+.text-subheading {
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--accent-magenta);
+  margin-bottom: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hero-heading {
+  font-size: clamp(3.2rem, 7.5vw, 6.4rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  margin-bottom: 24px;
+  max-width: 1000px;
+}
+
+.gradient-title {
+  background: linear-gradient(135deg, #ffffff 30%, rgba(255, 255, 255, 0.6) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, #f7235b 0%, #ff80a5 50%, #00e5ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.hero-description {
+  font-size: clamp(1.1rem, 2vw, 1.35rem);
+  color: var(--text-secondary);
+  max-width: 680px;
+  margin: 0 auto 40px;
+  line-height: 1.65;
+  font-weight: 400;
+}
+
+.hero-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 48px;
+}
+
+/* Quick Start Shell Bar */
+.cli-box {
+  background: rgba(18, 18, 22, 0.85);
+  border: 1px solid var(--border-hairline);
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  margin-bottom: 60px;
+  backdrop-filter: blur(20px);
+}
+
+.cli-code {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--accent-green);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cli-copy-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.cli-copy-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+/* Hero Showcase Canvas Window */
+.hero-showcase-frame {
+  width: 100%;
+  max-width: 1140px;
+  margin: 0 auto;
+  border-radius: var(--radius-xl);
+  background: var(--bg-surface-1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 40px 120px rgba(0, 0, 0, 0.95), 0 0 80px rgba(138, 43, 226, 0.25);
+  overflow: hidden;
+  position: relative;
+}
+
+.showcase-window-bar {
+  height: 46px;
+  background: #111116;
+  border-bottom: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  position: relative;
+}
+
+.window-dots {
+  display: flex;
+  gap: 7px;
+}
+
+.w-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+.w-dot-red { background: #ff5f56; }
+.w-dot-yellow { background: #ffbd2e; }
+.w-dot-green { background: #27c93f; }
+
+.window-center-label {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.82rem;
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.hero-showcase-img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ==========================================================================
+   Bento Product Tiles Grid (The Procreate Signature Layout)
+   ========================================================================== */
+.bento-section {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 80px 24px 120px;
+}
+
+.bento-header {
+  text-align: center;
+  margin-bottom: 70px;
+}
+
+.section-headline {
+  font-size: clamp(2.4rem, 5vw, 3.8rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+.section-subhead {
+  font-size: 1.15rem;
+  color: var(--text-secondary);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 28px;
+  margin-bottom: 28px;
+}
+
+.bento-tile {
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+
+.bento-tile:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.7), 0 0 40px rgba(138, 43, 226, 0.15);
+}
+
+.bento-tile-copy {
+  padding: 44px 44px 24px;
+}
+
+.tile-tag {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-magenta);
+  margin-bottom: 10px;
+  display: block;
+}
+
+.tile-title {
+  font-size: clamp(1.8rem, 2.5vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  margin-bottom: 14px;
+}
+
+.tile-text {
+  font-size: 1.02rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.tile-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+/* Edge-to-edge media at the bottom of the tile (Procreate hallmark) */
+.bento-tile-media {
+  width: 100%;
+  margin-top: 10px;
+  overflow: hidden;
+  position: relative;
+  background: #09090c;
+}
+
+.bento-tile-media img {
+  width: 100%;
+  height: auto;
+  display: block;
+  transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.bento-tile:hover .bento-tile-media img {
+  transform: scale(1.03);
+}
+
+/* Full Width Tile */
+.bento-tile-full {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  align-items: center;
+}
+
+.bento-tile-full .bento-tile-copy {
+  padding: 60px 48px;
+}
+
+.bento-tile-full .bento-tile-media {
+  margin-top: 0;
+  height: 100%;
+}
+
+.bento-tile-full .bento-tile-media img {
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 3-Column Feature Cards */
+.triple-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-top: 28px;
+}
+
+.feature-card {
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-lg);
+  padding: 36px 30px;
+  transition: all 0.3s ease;
+}
+
+.feature-card:hover {
+  background: var(--bg-surface-2);
+  border-color: rgba(255, 255, 255, 0.2);
+  transform: translateY(-3px);
+}
+
+.feature-icon-badge {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  margin-bottom: 20px;
+}
+
+.feature-card h4 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+
+.feature-card p {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+/* ==========================================================================
+   Pure CSS Screenshot Slot Placeholder
+   ========================================================================== */
+.screenshot-slot {
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.slot-placeholder {
+  display: flex;
+  flex-direction: column;
+  min-height: 360px;
+  background: linear-gradient(135deg, #101015 0%, #060608 100%);
+  position: relative;
+}
+
+.slot-header {
+  height: 40px;
+  background: #14141a;
+  border-bottom: 1px solid var(--border-hairline);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 8px;
+}
+
+.slot-dots {
+  display: flex;
+  gap: 6px;
+}
+
+.slot-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.slot-dot-red { background: #ff5f56; }
+.slot-dot-yellow { background: #ffbd2e; }
+.slot-dot-green { background: #27c93f; }
+
+.slot-title {
+  font-size: 0.8rem;
+  color: var(--text-tertiary);
+  margin-left: 8px;
+  font-family: var(--font-sans);
+}
+
+.slot-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 36px 20px;
+  text-align: center;
+}
+
+.slot-icon {
+  width: 50px;
+  height: 50px;
+  border-radius: 14px;
+  background: rgba(247, 35, 91, 0.12);
+  border: 1px dashed rgba(247, 35, 91, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+  color: var(--accent-magenta);
+}
+
+.slot-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 6px;
+}
+
+.slot-hint {
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.slot-badge {
+  margin-top: 14px;
+  display: inline-block;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-hairline);
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: var(--accent-cyan);
+}
+
+/* ==========================================================================
+   Bottom Action Banner & Footer
+   ========================================================================== */
+.footer-cta {
+  background: radial-gradient(circle at 50% 100%, rgba(247, 35, 91, 0.12) 0%, rgba(0, 0, 0, 0) 70%), #000000;
+  border-top: 1px solid var(--border-hairline);
+  padding: 120px 24px;
+  text-align: center;
+}
+
+.footer-cta h2 {
+  font-size: clamp(2.6rem, 5vw, 4.2rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-bottom: 16px;
+}
+
+.site-footer {
+  border-top: 1px solid var(--border-hairline);
+  padding: 50px 40px;
+  max-width: 1240px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  color: var(--text-tertiary);
+  font-size: 0.88rem;
+}
+
+.footer-nav {
+  display: flex;
+  gap: 28px;
+}
+
+.footer-nav a:hover {
+  color: var(--text-white);
+}
+
+/* ==========================================================================
+   Responsive Breakpoints
+   ========================================================================== */
+@media (max-width: 1024px) {
+  .bento-grid {
+    grid-template-columns: 1fr;
+  }
+  .bento-tile-full {
+    grid-template-columns: 1fr;
+  }
+  .triple-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .nav-items {
+    display: none;
+  }
+  .site-nav {
+    padding: 8px 16px;
+  }
+  .bento-tile-copy {
+    padding: 32px 24px 16px;
+  }
+  .hero-heading {
+    font-size: 2.8rem;
+  }
+}
+
+/* ==========================================================================
+   Realtime GitHub Star Pill Button
+   ========================================================================== */
+.gh-star-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-hairline);
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text-white);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.gh-star-pill:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: scale(1.02);
+  color: #ffffff;
+}
+
+.gh-star-divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.github-stars-count {
+  color: #ffbd2e;
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ==========================================================================
+   Legal & Policy Pages (Privacy & Terms)
+   ========================================================================== */
+.legal-page-header {
+  padding: 160px 24px 50px;
+  text-align: center;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.legal-title {
+  font-size: clamp(2.6rem, 5vw, 4rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin-top: 12px;
+  margin-bottom: 14px;
+}
+
+.legal-updated {
+  font-size: 0.9rem;
+  color: var(--text-tertiary);
+}
+
+.legal-container {
+  max-width: 860px;
+  margin: 0 auto 120px;
+  padding: 0 24px;
+}
+
+.legal-card {
+  background: var(--bg-surface-1);
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-xl);
+  padding: 56px 48px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+}
+
+.legal-section {
+  margin-bottom: 44px;
+}
+
+.legal-section:last-child {
+  margin-bottom: 0;
+}
+
+.legal-section h3 {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 16px;
+  color: #ffffff;
+}
+
+.legal-section p,
+.legal-section li {
+  color: var(--text-secondary);
+  font-size: 0.98rem;
+  line-height: 1.75;
+  margin-bottom: 14px;
+}
+
+.legal-section ul {
+  margin-left: 24px;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 600px) {
+  .legal-card {
+    padding: 36px 24px;
+  }
+}
+

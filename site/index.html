@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bixel Studio — The 2D Game Asset & Pixel Art Studio for macOS</title>
+  <meta name="description" content="Bixel Studio is the native macOS 2D game-asset studio. Precision sprite editing, multi-frame animation timelines, tilemaps, and an intelligent AI assistant.">
+  <link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+  <!-- Floating Glass Pill Navigation (Procreate Style) -->
+  <div class="site-nav-wrapper">
+    <nav class="site-nav">
+      <a href="#" class="nav-brand">
+        <div class="nav-brand-logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="7"></rect>
+            <rect x="14" y="3" width="7" height="7"></rect>
+            <rect x="14" y="14" width="7" height="7"></rect>
+            <rect x="3" y="14" width="7" height="7"></rect>
+          </svg>
+        </div>
+        <span>Bixel Studio</span>
+      </a>
+
+      <ul class="nav-items">
+        <li><a href="#features">Studio</a></li>
+        <li><a href="#animation">Animation</a></li>
+        <li><a href="#tilemaps">Tilemaps</a></li>
+        <li><a href="#ai">AI Assistant</a></li>
+        <li><a href="handbook/index.html">Handbook</a></li>
+      </ul>
+
+      <div class="nav-actions">
+        <a href="https://github.com/ajithberlin/bixel-native" target="_blank" rel="noopener" class="gh-star-pill" title="Star on GitHub">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          <span>Star</span>
+          <span class="gh-star-divider"></span>
+          <span class="github-stars-count" style="display: none;">★</span>
+        </a>
+        <a href="handbook/index.html" class="pro-btn pro-btn-primary pro-btn-sm">Open Handbook</a>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Hero Section -->
+  <header class="hero-container">
+    <div class="text-subheading">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+      Crafted Natively for Mac & Apple Silicon
+    </div>
+
+    <h1 class="hero-heading">
+      <span class="gradient-title">Pixel art,</span><br>
+      <span class="gradient-accent">amplified.</span>
+    </h1>
+
+    <p class="hero-description">
+      Bixel Studio is the high-performance 2D game-asset studio for macOS. Precision sprite editing, multi-frame animation timelines, and tilemaps meet MetalKit acceleration and an intelligent AI assistant.
+    </p>
+
+    <div class="hero-buttons">
+      <a href="handbook/index.html#quick-start" class="pro-btn pro-btn-primary pro-btn-lg">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+        Quick Start Guide
+      </a>
+      <a href="handbook/index.html" class="pro-btn pro-btn-secondary pro-btn-lg">
+        Explore Handbook
+      </a>
+    </div>
+
+    <!-- Quick Start Command Strip -->
+    <div class="cli-box">
+      <div class="cli-code">
+        <span style="color: var(--text-tertiary);">$</span>
+        <span id="terminal-code-text">./scripts/start.sh</span>
+      </div>
+      <button class="cli-copy-btn" id="copy-cmd-btn" title="Copy start command">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+        Copy
+      </button>
+    </div>
+
+    <!-- Showcase Hero Window -->
+    <div class="hero-showcase-frame">
+      <div class="showcase-window-bar">
+        <div class="window-dots">
+          <div class="w-dot w-dot-red"></div>
+          <div class="w-dot w-dot-yellow"></div>
+          <div class="w-dot w-dot-green"></div>
+        </div>
+        <div class="window-center-label">Bixel Studio — Canvas & Workspace</div>
+      </div>
+      <img src="assets/images/bixel-studio-hero.jpg" alt="Bixel Studio Workspace" class="hero-showcase-img">
+    </div>
+  </header>
+
+  <!-- Bento Product Tiles Section (Procreate Homepage Style) -->
+  <section class="bento-section" id="features">
+    <div class="bento-header">
+      <span class="text-subheading">CREATIVE ENGINE</span>
+      <h2 class="section-headline">Designed for the craft.</h2>
+      <p class="section-subhead">Every tool, palette, and gesture engineered for tactile speed and pure creative flow.</p>
+    </div>
+
+    <div class="bento-grid">
+
+      <!-- Bento Tile 1: Pixel Canvas -->
+      <div class="bento-tile">
+        <div class="bento-tile-copy">
+          <span class="tile-tag">Sprite & Cel Engine</span>
+          <h3 class="tile-title">Complete art studio.</h3>
+          <p class="tile-text">
+            Non-destructive layers, blend modes, and classic retro palettes (DB32, PICO-8, Game Boy). Every brush stroke composites in an ultra-fast Rust core with zero latency.
+          </p>
+          <div class="tile-actions">
+            <a href="handbook/index.html#tools" class="pro-btn pro-btn-tertiary pro-btn-sm">Learn more &rarr;</a>
+          </div>
+        </div>
+        <div class="bento-tile-media">
+          <div class="screenshot-slot" data-slot="interface-overview">
+            <img src="assets/screenshots/interface-overview.png" alt="Bixel Studio Canvas Interface">
+            <div class="slot-placeholder">
+              <div class="slot-header">
+                <div class="slot-dots">
+                  <span class="slot-dot slot-dot-red"></span>
+                  <span class="slot-dot slot-dot-yellow"></span>
+                  <span class="slot-dot slot-dot-green"></span>
+                </div>
+                <span class="slot-title">Bixel Studio — Main Canvas</span>
+              </div>
+              <div class="slot-body">
+                <div class="slot-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                </div>
+                <div class="slot-name">Main Canvas & Workspace</div>
+                <div class="slot-hint">Attach app screenshot to display live view</div>
+                <span class="slot-badge">interface-overview.png</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bento Tile 2: Animation Timeline -->
+      <div class="bento-tile" id="animation">
+        <div class="bento-tile-copy">
+          <span class="tile-tag">Animation Assist</span>
+          <h3 class="tile-title">Animate in real-time.</h3>
+          <p class="tile-text">
+            Multi-frame timeline with variable durations, colored onion skinning, and tag looping. Bring 2D characters and combat motions to life at silky 60fps.
+          </p>
+          <div class="tile-actions">
+            <a href="handbook/index.html#animation" class="pro-btn pro-btn-tertiary pro-btn-sm">Learn more &rarr;</a>
+          </div>
+        </div>
+        <div class="bento-tile-media">
+          <img src="assets/images/spritesheet-showcase.jpg" alt="Bixel Studio Spritesheet Animation">
+        </div>
+      </div>
+
+      <!-- Bento Tile 3: Full Width Tilemap -->
+      <div class="bento-tile bento-tile-full" id="tilemaps">
+        <div class="bento-tile-copy">
+          <span class="tile-tag">World Building</span>
+          <h3 class="tile-title">Build entire game worlds.</h3>
+          <p class="tile-text">
+            Grid-based tilemap design with multi-layer editing, autotiling, pattern stamping, and minimap inspection. Fully compatible with Tiled JSON format for instant import into Godot, Unity, or custom engines.
+          </p>
+          <div class="tile-actions">
+            <a href="handbook/index.html#tilemaps" class="pro-btn pro-btn-primary pro-btn-sm">Explore Tilemap Designer</a>
+          </div>
+        </div>
+        <div class="bento-tile-media">
+          <img src="assets/images/tilemap-showcase.jpg" alt="Bixel Studio Tilemap Designer">
+        </div>
+      </div>
+
+      <!-- Bento Tile 4: AI Co-Pilot -->
+      <div class="bento-tile" id="ai">
+        <div class="bento-tile-copy">
+          <span class="tile-tag">AI Co-Pilot</span>
+          <h3 class="tile-title">Intelligent asset co-pilot.</h3>
+          <p class="tile-text">
+            Embedded AI engine powered by OpenRouter and ChatGPT Codex. Generate character concepts, spritesheets, extrapolate next animation frames, and quantize retro colors.
+          </p>
+          <div class="tile-actions">
+            <a href="handbook/index.html#ai-assistant" class="pro-btn pro-btn-tertiary pro-btn-sm">Learn more &rarr;</a>
+          </div>
+        </div>
+        <div class="bento-tile-media">
+          <img src="assets/images/ai-assistant-showcase.jpg" alt="Bixel Studio AI Assistant">
+        </div>
+      </div>
+
+      <!-- Bento Tile 5: Color Disc & Palettes -->
+      <div class="bento-tile">
+        <div class="bento-tile-copy">
+          <span class="tile-tag">Color Harmony</span>
+          <h3 class="tile-title">Intuitive color disc.</h3>
+          <p class="tile-text">
+            Procreate-style color disc with smooth hue ring, saturation square, and preset retro swatches. Pick, save, and export palettes with zero friction.
+          </p>
+          <div class="tile-actions">
+            <a href="handbook/index.html#palettes" class="pro-btn pro-btn-tertiary pro-btn-sm">Learn more &rarr;</a>
+          </div>
+        </div>
+        <div class="bento-tile-media">
+          <div class="screenshot-slot" data-slot="color-palette">
+            <img src="assets/screenshots/color-palette.png" alt="Color Disc & Palette Presets">
+            <div class="slot-placeholder">
+              <div class="slot-header">
+                <div class="slot-dots">
+                  <span class="slot-dot slot-dot-red"></span>
+                  <span class="slot-dot slot-dot-yellow"></span>
+                  <span class="slot-dot slot-dot-green"></span>
+                </div>
+                <span class="slot-title">Bixel Studio — Color Disc</span>
+              </div>
+              <div class="slot-body">
+                <div class="slot-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="4"></circle></svg>
+                </div>
+                <div class="slot-name">Color Disc & Presets</div>
+                <div class="slot-hint">Attach app screenshot to display live view</div>
+                <span class="slot-badge">color-palette.png</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 3-Column Engineering Highlights -->
+    <div class="triple-grid">
+      <div class="feature-card">
+        <div class="feature-icon-badge">⚡</div>
+        <h4>MetalKit Acceleration</h4>
+        <p>Smooth 60fps pan, zoom, and brush blits. Composite whole frames directly into Metal GPU textures without per-pixel FFI overhead.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon-badge">🦀</div>
+        <h4>Pure Rust Core</h4>
+        <p>Memory-safe domain engine. Undo/redo history, blend math, and path jailing run in high-performance headless Rust.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon-badge">🎮</div>
+        <h4>Game Engine Ready</h4>
+        <p>Export packed spritesheet texture atlases, JSON manifests, and Tiled maps directly into Godot, Unity, or Defold.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bottom CTA Strip -->
+  <section class="footer-cta">
+    <div class="text-subheading" style="justify-content: center;">START CREATING TODAY</div>
+    <h2>Art is for everyone.<br><span class="gradient-accent">Game dev is for you.</span></h2>
+    <p style="color: var(--text-secondary); max-width: 520px; margin: 0 auto 36px; font-size: 1.1rem;">
+      Dive into the interactive documentation handbook or launch the macOS app in a single command.
+    </p>
+    <div style="display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+      <a href="handbook/index.html" class="pro-btn pro-btn-primary pro-btn-lg">Read Bixel Handbook</a>
+      <a href="https://github.com/ajithberlin/bixel-native" target="_blank" rel="noopener" class="pro-btn pro-btn-secondary pro-btn-lg">View on GitHub</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="site-footer">
+    <div>
+      <strong>Bixel Studio</strong> &copy; 2026. Native 2D Game Asset Studio for macOS.
+    </div>
+    <div class="footer-nav">
+      <a href="handbook/index.html">Handbook</a>
+      <a href="privacy.html">Privacy Policy</a>
+      <a href="terms.html">Terms of Service</a>
+      <a href="https://github.com/ajithberlin/bixel-native" target="_blank" rel="noopener">GitHub</a>
+      <a href="assets/screenshots/README.md">Screenshot Guide</a>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js"></script>
+</body>
+</html>
