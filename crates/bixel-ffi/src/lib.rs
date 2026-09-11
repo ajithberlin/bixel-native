@@ -1176,6 +1176,37 @@ pub extern "C" fn bixel_ai_list_skills() -> *mut c_char {
     out_cstr(json)
 }
 
+/// JSON array of installed skill slash-commands for `base` (the project or
+/// conversation workspace; may be null/empty for global skills only). Shape:
+/// `[{ "name", "description", "source", "input_hint" }]`.
+#[no_mangle]
+pub extern "C" fn bixel_ai_list_commands(base: *const c_char) -> *mut c_char {
+    bixel_ai::skill_install::ensure_bundled_installed();
+    let base = arg_str(base);
+    let dir = (!base.trim().is_empty()).then(|| std::path::PathBuf::from(base));
+    let commands = bixel_ai::commands::list_commands(dir.as_deref());
+    out_cstr(serde_json::to_string(&commands).unwrap_or_else(|_| "[]".into()))
+}
+
+/// Expand an invoked `/skill` into the loaded skill context via goose's own
+/// resolver. Returns an empty string when `name` is not an installed skill.
+#[no_mangle]
+pub extern "C" fn bixel_ai_resolve_command(
+    name: *const c_char,
+    args: *const c_char,
+    base: *const c_char,
+) -> *mut c_char {
+    bixel_ai::skill_install::ensure_bundled_installed();
+    let name = arg_str(name);
+    let args = arg_str(args);
+    let base = arg_str(base);
+    let dir = (!base.trim().is_empty()).then(|| std::path::PathBuf::from(base));
+    match bixel_ai::commands::resolve_command(&name, &args, dir.as_deref()) {
+        Ok(Some(content)) => out_cstr(content),
+        _ => out_cstr(String::new()),
+    }
+}
+
 const AI_SYSTEM_PROMPT: &str =
     "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.";
 

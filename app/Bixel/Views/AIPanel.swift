@@ -10,7 +10,6 @@ struct AIPanel: View {
     @State private var showHistory = false
     @State private var showModel = false
     @State private var showSettings = false
-    @State private var showFormatting = false
     @State private var showCommands = false
     @State private var dropTarget = false
     @State private var archived: AssistantConversation?
@@ -172,16 +171,6 @@ struct AIPanel: View {
                     }.padding(.top, 3)
                 }
             }
-            if showFormatting {
-                HStack(spacing: 8) {
-                    formatButton("Bold", "bold", "**", "**")
-                    formatButton("Italic", "italic", "_", "_")
-                    formatButton("Code", "chevron.left.forwardslash.chevron.right", "\n```\n", "\n```\n")
-                    formatButton("List", "list.bullet", "\n- ", "")
-                    Spacer()
-                    Text("Markdown").font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary)
-                }
-            }
             AssistantTextInput(text: $session.input, commands: session.commands, onQuery: { value in
                 DispatchQueue.main.async {
                     if session.query != value { session.query = value; commandIndex = 0 }
@@ -202,7 +191,6 @@ struct AIPanel: View {
                 iconButton("Add skills", "shippingbox") { showCommands.toggle() }
                     .foregroundColor(commandMenuVisible ? StudioTheme.accent : StudioTheme.textSecondary)
                 Rectangle().fill(StudioTheme.hairlineStrong).frame(width: 1, height: 16)
-                iconButton("Text formatting", "textformat") { showFormatting.toggle() }
                 Spacer(minLength: 0)
                 Button { showModel.toggle() } label: {
                     HStack(spacing: 5) {
@@ -292,9 +280,6 @@ struct AIPanel: View {
         else { send() }
     }
     private func send() { showHistory = false; session.send(model: model) }
-    private func formatButton(_ title: String, _ icon: String, _ prefix: String, _ suffix: String) -> some View {
-        iconButton(title, icon) { NotificationCenter.default.post(name: .assistantFormat, object: nil, userInfo: ["prefix": prefix, "suffix": suffix]) }
-    }
     private func iconButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: icon).font(.system(size: 13)).frame(width: 24, height: 27).contentShape(Rectangle()) }
             .buttonStyle(.plain).help(title).accessibilityLabel(title)

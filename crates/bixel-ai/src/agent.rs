@@ -45,16 +45,9 @@ impl GooseAgent {
         skill_server::register();
 
         // Stage the bundled agent skills into goose's global skills directory so
-        // its native `skills` extension can discover them, then install their
-        // Python dependencies in the background (first run only).
-        if let Err(error) = crate::skill_install::install_bundled() {
-            tracing::warn!(%error, "could not install bundled agent skills");
-        }
-        std::thread::spawn(|| {
-            if let Err(error) = crate::skill_install::ensure_python_deps() {
-                tracing::warn!(%error, "could not install skill python dependencies");
-            }
-        });
+        // its native `skills` extension can discover them (idempotent; also
+        // triggered when the host lists commands).
+        crate::skill_install::ensure_bundled_installed();
 
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| AiError::Provider(format!("failed to start runtime: {e}")))?;
@@ -160,47 +153,41 @@ impl GooseAgent {
         Ok(id)
     }
 
-    /// Record `session_id` as the bound session, returning true when the
-    /// in-process extension clients must be re-created for it. Goose's
-    /// extension manager dedupes clients by name and its in-process MCP client
-    /// panics ("requests from different sessions") when a second session
-    /// reuses one, so any session change forces a rebind.
-    fn mark_bound_session(&self, session_id: &str) -> bool {
-        let mut bound = self.bound_session.lock().unwrap();
-        if bound.as_deref() == Some(session_id) {
-            false
-        } else {
-            *bound = Some(session_id.to_string());
-            true
-        }
+    /// True when the in-process extension clients must be re-created for
+    /// `session_id`. Goose's extension manager dedupes clients by name and its
+    /// in-process MCP client panics ("requests from different sessions") when a
+    /// second session reuses one, so any session change forces a rebind.
+    fn session_needs_rebind(&self, session_id: &str) -> bool {
+        self.bound_session.lock().unwrap().as_deref() != Some(session_id)
     }
 
-    /// Enable the developer (file/shell) and bixel (pixel-art skills) extensions
-    /// and hand the session the cached provider with the configured text model.
+    /// Record `session_id` as bound. Only call after the extensions were
+    /// successfully (re)created: marking a session whose rebind failed would
+    /// leave stale clients bound to a different session and panic on the next
+    /// tool call.
+    fn set_bound_session(&self, session_id: &str) {
+        *self.bound_session.lock().unwrap() = Some(session_id.to_string());
+    }
+
+    /// Enable the developer (file/shell), skills (goose native skills) and bixel
+    /// (provider image tools) extensions and hand the session the cached
+    /// provider with the configured text model.
     fn ensure_extensions_and_provider(&self, session_id: &str) -> Result<(), AiError> {
         let handle = self
             .handle()
             .ok_or_else(|| AiError::Config("AI provider is not connected".into()))?;
-        let rebind = self.mark_bound_session(session_id);
+        let needs_rebind = self.session_needs_rebind(session_id);
         let res: Result<(), String> = self.runtime.block_on(async {
-            if rebind {
-                // Drop both clients so add_extension re-creates them bound to
+            if needs_rebind {
+                // Drop the clients so add_extension re-creates them bound to
                 // this session (fresh empty session slot, no goose assert).
-                self.agent
-                    .extension_manager
-                    .remove_extension_by_key("developer")
-                    .await
-                    .map_err(|e| e.to_string())?;
-                self.agent
-                    .extension_manager
-                    .remove_extension_by_key("bixel")
-                    .await
-                    .map_err(|e| e.to_string())?;
-                self.agent
-                    .extension_manager
-                    .remove_extension_by_key("skills")
-                    .await
-                    .map_err(|e| e.to_string())?;
+                for key in ["developer", "skills", "bixel"] {
+                    self.agent
+                        .extension_manager
+                        .remove_extension_by_key(key)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
             }
             self.agent
                 .add_extension(
@@ -258,7 +245,13 @@ impl GooseAgent {
 
             Ok(())
         });
-        res.map_err(AiError::Provider)
+        match res {
+            Ok(()) => {
+                self.set_bound_session(session_id);
+                Ok(())
+            }
+            Err(error) => Err(AiError::Provider(error)),
+        }
     }
 
     /// Drive one full agent turn, emitting [`NativeEvent`]s as they arrive.
@@ -280,11 +273,22 @@ impl GooseAgent {
             *runtime.workspace.lock().unwrap() = Some(base.to_path_buf());
         }
 
-        // Honor the host-provided studio prompt as an additive system instruction.
-        if !request.system.trim().is_empty() {
+        // Honor the host-provided studio prompt as an additive system
+        // instruction. The legacy `Agent::reply` path (unlike goose's state
+        // machine) does not inject goose's skill catalog, so append it here
+        // using goose's own formatter.
+        let mut system_prompt = request.system.clone();
+        let skills = crate::commands::installed_skills_markdown(Some(base));
+        if !skills.trim().is_empty() {
+            if !system_prompt.trim().is_empty() {
+                system_prompt.push_str("\n\n");
+            }
+            system_prompt.push_str(&skills);
+        }
+        if !system_prompt.trim().is_empty() {
             self.runtime.block_on(
                 self.agent
-                    .extend_system_prompt("bixel".to_string(), request.system.clone()),
+                    .extend_system_prompt("bixel".to_string(), system_prompt),
             );
         }
 
@@ -461,19 +465,12 @@ where
     }
 }
 
-/// Derive a display name from a (possibly extension-prefixed) tool name,
-/// preferring the `skill` argument when the tool is `run_skill`.
+/// Derive a display name from a (possibly extension-prefixed) tool name.
 fn tool_display_name(
     raw: &str,
-    arguments: &Option<serde_json::Map<String, serde_json::Value>>,
+    _arguments: &Option<serde_json::Map<String, serde_json::Value>>,
 ) -> String {
-    let base = raw.rsplit("__").next().unwrap_or(raw).to_string();
-    if let Some(args) = arguments {
-        if let Some(skill) = args.get("skill").and_then(|v| v.as_str()) {
-            return skill.to_string();
-        }
-    }
-    base
+    raw.rsplit("__").next().unwrap_or(raw).to_string()
 }
 
 #[cfg(test)]
@@ -498,12 +495,14 @@ mod workspace_tests {
     fn session_switch_marks_extensions_for_rebind() {
         let agent = GooseAgent::new().unwrap();
         // First bind of a session always rebinds (clients start unbound).
-        assert!(agent.mark_bound_session("session-a"));
+        assert!(agent.session_needs_rebind("session-a"));
+        agent.set_bound_session("session-a");
         // Re-marking the same session is a no-op.
-        assert!(!agent.mark_bound_session("session-a"));
+        assert!(!agent.session_needs_rebind("session-a"));
         // A different conversation's session forces a rebind — otherwise
         // goose's McpClient panics ("requests from different sessions").
-        assert!(agent.mark_bound_session("session-b"));
-        assert!(!agent.mark_bound_session("session-b"));
+        assert!(agent.session_needs_rebind("session-b"));
+        agent.set_bound_session("session-b");
+        assert!(!agent.session_needs_rebind("session-b"));
     }
 }

@@ -153,6 +153,43 @@ enum AIService {
         return (try? JSONDecoder().decode([SkillInfo].self, from: data)) ?? []
     }
 
+    /// An installed skill slash-command discovered by goose.
+    struct AgentCommandInfo: Decodable, Hashable {
+        let name: String
+        let description: String
+        let source: String
+        let inputHint: String?
+
+        private enum CodingKeys: String, CodingKey {
+            case name, description, source
+            case inputHint = "input_hint"
+        }
+    }
+
+    /// Installed skill commands for `base` (project/conversation workspace).
+    static func listAgentCommands(base: String) -> [AgentCommandInfo] {
+        let ptr = base.withCString { bixel_ai_list_commands($0) }
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([AgentCommandInfo].self, from: data)) ?? []
+    }
+
+    /// Expand an invoked `/skill` into its loaded SKILL.md context, via goose's
+    /// own resolver. Returns nil when it is not an installed skill.
+    static func resolveCommand(name: String, args: String = "", base: String) -> String? {
+        let ptr = name.withCString { namePtr in
+            args.withCString { argsPtr in
+                base.withCString { basePtr in
+                    bixel_ai_resolve_command(namePtr, argsPtr, basePtr)
+                }
+            }
+        }
+        defer { bixel_string_free(ptr) }
+        guard let ptr else { return nil }
+        let text = String(cString: ptr)
+        return text.isEmpty ? nil : text
+    }
+
     /// Run any registered skill by id. `prompt` is forwarded to model-backed
     /// skills through the same JSON boundary as `params`; `png` is optional
     /// reference input. Returns decoded output or nil on failure.

@@ -168,8 +168,9 @@ animation packing, asset prep, spritesheet import, and `skill-creator` (which
 writes new skills back into `~/.agents/skills`). Their Python dependencies are
 auto-installed once into a managed virtualenv.
 
-Model skills require the image role to be ready. The AI panel (sparkles button)
-exposes the image skills; the agent discovers the installed agent skills itself.
+Model skills require the image role to be ready. The AI panel's `/` picker lists
+both the image skills and goose's installed skill commands; invoking one expands
+its `SKILL.md` into the prompt via goose's own resolver.
 
 ## Build & run
 

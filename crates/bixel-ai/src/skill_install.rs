@@ -53,6 +53,25 @@ fn has_skill_manifest(dir: &Dir<'_>) -> bool {
         .any(|file| file.path().file_name().is_some_and(|name| name == "SKILL.md"))
 }
 
+/// Copy the bundled skills into `~/.agents/skills` exactly once per process and
+/// kick off the (background) Python dependency install. Safe to call from any
+/// entry point — app startup, agent construction, or command listing — so the
+/// skills exist before goose first discovers them.
+pub fn ensure_bundled_installed() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if let Err(error) = install_bundled() {
+            tracing::warn!(%error, "could not install bundled agent skills");
+        }
+        std::thread::spawn(|| {
+            if let Err(error) = ensure_python_deps() {
+                tracing::warn!(%error, "could not install skill python dependencies");
+            }
+        });
+    });
+}
+
 /// Copy every bundled skill into `~/.agents/skills`, writing only files whose
 /// contents changed. Returns the number of skills synced. Filesystem-only and
 /// fast, so it is safe to call synchronously at startup.

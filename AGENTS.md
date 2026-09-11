@@ -109,10 +109,20 @@ Two skill layers cooperate:
   the agent to run skill scripts with that venv interpreter explicitly.
 - **`bixel` tool extension.** goose has no image-generation API, so the
   provider-backed image skills stay in Rust (`skills.rs`) and are exposed as an
-  in-process `rmcp` builtin extension (`skill_server.rs` → `run_skill`):
-  `image_gen`, `generate_art`, `pixel_image_gen`, `spritesheet`, `next_frame`.
-  They call the OpenRouter/Codex image backends (`image_gen.rs`,
-  `codex_image.rs`).
+  in-process `rmcp` builtin extension (`skill_server.rs`) under **individually
+  named tools** — `image_gen`, `generate_art`, `pixel_image_gen`, `spritesheet`,
+  `next_frame` — not a generic `run_skill`, so the model never confuses them
+  with `load_skill`. They call the OpenRouter/Codex image backends
+  (`image_gen.rs`, `codex_image.rs`).
+
+The legacy `Agent::reply` path does not inject the discovered-skill catalog into
+the system prompt (only goose's state machine does), so `agent.rs` appends
+goose's own `slash_commands::skill_slash_command::format_installed_skills`
+listing each turn. `commands.rs` re-exports goose's slash-command API
+(`list_commands`, `resolve_command`) over the FFI (`bixel_ai_list_commands`,
+`bixel_ai_resolve_command`); the AI panel shows those commands and expands an
+explicitly invoked `/skill` into its loaded `SKILL.md` context via goose's own
+resolver.
 
 The top-level `skills/*.json` files are documentation mirrors of the Rust image
 skill specs (not read at runtime); the `skills/pixel-*/skill.json` files are the

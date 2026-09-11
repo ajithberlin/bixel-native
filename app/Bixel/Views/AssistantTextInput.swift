@@ -3,7 +3,6 @@ import AppKit
 
 extension Notification.Name {
     static let assistantFocus = Notification.Name("BixelAssistantFocus")
-    static let assistantFormat = Notification.Name("BixelAssistantFormat")
     static let assistantInsertCommand = Notification.Name("BixelAssistantInsertCommand")
 }
 
@@ -83,7 +82,6 @@ struct AssistantTextInput: NSViewRepresentable {
         var slashRange: NSRange?
         init(_ parent: AssistantTextInput) {
             self.parent = parent; super.init()
-            NotificationCenter.default.addObserver(self, selector: #selector(format(_:)), name: .assistantFormat, object: nil)
             NotificationCenter.default.addObserver(self, selector: #selector(focus), name: .assistantFocus, object: nil)
             NotificationCenter.default.addObserver(self, selector: #selector(insertCommand(_:)), name: .assistantInsertCommand, object: nil)
         }
@@ -133,15 +131,6 @@ struct AssistantTextInput: NSViewRepresentable {
             replacement.append(NSAttributedString(string: " ", attributes: Self.attributes))
             editor.insertText(replacement, replacementRange: range)
             slashRange = nil; parent.onQuery(nil); focus()
-        }
-        @objc func format(_ notification: Notification) {
-            guard let editor, let prefix = notification.userInfo?["prefix"] as? String,
-                  let suffix = notification.userInfo?["suffix"] as? String else { return }
-            let range = editor.selectedRange()
-            let selected = Self.serialize(editor.attributedString().attributedSubstring(from: range))
-            let content = selected.isEmpty && !suffix.isEmpty ? "text" : selected
-            editor.insertText(render(prefix + content + suffix), replacementRange: range)
-            focus()
         }
     }
 }

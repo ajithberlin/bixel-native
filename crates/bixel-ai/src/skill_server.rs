@@ -1,11 +1,13 @@
-//! In-process MCP extension exposing the Bixel pixel-art skills as goose tools.
+//! In-process MCP extension exposing the provider-backed image tools as goose
+//! tools.
 //!
 //! goose's builtin-extension mechanism spawns an `rmcp` server over a duplex
-//! stream in-process; this module implements that server. A single `run_skill`
-//! tool dispatches to [`crate::skills::Skills`] so the model can invoke any
-//! registered skill by id. Produced images are written to the host workspace and
-//! mirrored to an artifact mailbox that [`crate::agent::GooseAgent`] drains to
-//! emit base64 artifacts back across the FFI boundary.
+//! stream in-process; this module implements that server. Each image skill is
+//! its own named tool (`image_gen`, `generate_art`, `pixel_image_gen`,
+//! `spritesheet`, `next_frame`) dispatching to [`crate::skills::Skills`].
+//! Produced images are written to the host workspace and mirrored to an
+//! artifact mailbox that [`crate::agent::GooseAgent`] drains to emit base64
+//! artifacts back across the FFI boundary.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -80,18 +82,16 @@ fn spawn(r: tokio::io::DuplexStream, w: tokio::io::DuplexStream) {
     });
 }
 
-/// Arguments for the single skill tool.
+/// Arguments for the provider-backed image tools.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RunSkillParams {
-    /// Skill id (image_gen, generate_art, spritesheet, next_frame, pixel_image_gen).
-    pub skill: String,
-    /// Text prompt for model-backed skills.
+pub struct ImageSkillParams {
+    /// Text prompt describing the image / edit / motion.
     #[serde(default)]
     pub prompt: String,
     /// Input image: a base64 data URL or a filename in the workspace.
     #[serde(default)]
     pub image: Option<String>,
-    /// Generation params: width and height (1..4096) explicitly requested output pixels; omit both to keep source dimensions. Sheets use frame_width/frame_height plus cols/rows instead. transparent defaults true for sprites; set false for opaque backgrounds or terrain. palette is color/style guidance. Never infer target dimensions from the active canvas.
+    /// Generation params: width and height (1..4096) explicitly requested output pixels; omit both to keep source dimensions. Spritesheet uses frame_width/frame_height plus cols/rows instead. transparent defaults true for sprites; set false for opaque backgrounds or terrain. palette is color/style guidance. next_frame takes `action`. Never infer target dimensions from the active canvas.
     #[serde(default)]
     pub params: serde_json::Value,
 }
@@ -110,23 +110,70 @@ impl SkillServer {
     }
 
     #[tool(
-        name = "run_skill",
-        description = "Run a Bixel provider-backed image skill: image_gen, generate_art, spritesheet, next_frame, pixel_image_gen. Use image_gen for a user's natural-language request to create or edit an image. Use next_frame to advance an animation by exactly one frame: pass the current frame as the `image` input and put the motion in the `action` param as a small increment. Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites and false for image_gen; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Do not compress or request a reduced target implicitly. Raw model sources are retained separately; explicitly prepared assets crop transparent padding before reduction and use nearest-neighbor pixels. Do not use shell, Python, or another tool to fabricate an image. For deterministic/local image work (color reduction, background removal, slicing, packing, tilesets, UI kits), load the matching installed skill with load_skill and run its scripts. Returns saved image filenames."
+        name = "image_gen",
+        description = "Generate a new image or edit a reference image through the configured provider image backend. Use this only to create or transform artwork, never to run a deterministic preparation step (color reduction, background removal, slicing, packing) — those are installed skills loaded with load_skill. Put the complete visual brief in `prompt`; pass a reference with `image`."
     )]
-    pub async fn run_skill(
+    pub async fn image_gen(
         &self,
-        params: Parameters<RunSkillParams>,
+        params: Parameters<ImageSkillParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let p = params.0;
-        let Some(kind) = SkillKind::from_id(&p.skill) else {
-            return Err(ErrorData::new(
-                ErrorCode::INVALID_PARAMS,
-                format!("unknown skill `{}`", p.skill),
-                None,
-            ));
-        };
+        self.run_image(SkillKind::ImageGen, params.0).await
+    }
 
+    #[tool(
+        name = "generate_art",
+        description = "Generate a piece of pixel art from a text prompt through the provider image backend."
+    )]
+    pub async fn generate_art(
+        &self,
+        params: Parameters<ImageSkillParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run_image(SkillKind::GenerateArt, params.0).await
+    }
+
+    #[tool(
+        name = "pixel_image_gen",
+        description = "Generate a single clean, game-ready pixel-art asset from a prompt or reference image. One asset per image."
+    )]
+    pub async fn pixel_image_gen(
+        &self,
+        params: Parameters<ImageSkillParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run_image(SkillKind::PixelImageGen, params.0).await
+    }
+
+    #[tool(
+        name = "spritesheet",
+        description = "Generate a spritesheet grid and slice it into frames. Provide frame_width + frame_height and cols + rows in params."
+    )]
+    pub async fn spritesheet(
+        &self,
+        params: Parameters<ImageSkillParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run_image(SkillKind::Spritesheet, params.0).await
+    }
+
+    #[tool(
+        name = "next_frame",
+        description = "Advance an animation by exactly one frame. Pass the current frame as `image` and put the motion (a small increment) in `params.action`. Returns the next frame at the source frame's size."
+    )]
+    pub async fn next_frame(
+        &self,
+        params: Parameters<ImageSkillParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.run_image(SkillKind::NextFrame, params.0).await
+    }
+
+    async fn run_image(
+        &self,
+        kind: SkillKind,
+        p: ImageSkillParams,
+    ) -> Result<CallToolResult, ErrorData> {
         let runtime = RUNTIME.get().ok_or_else(|| {
             ErrorData::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -203,11 +250,7 @@ impl SkillServer {
         }
 
         if !saved.is_empty() {
-            if !text.is_empty() {
-                text.push_str("\nSaved: ");
-            } else {
-                text.push_str("Saved: ");
-            }
+            text.push_str("\nSaved: ");
             text.push_str(&saved.join(", "));
         }
 
@@ -221,11 +264,11 @@ impl ServerHandler for SkillServer {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("bixel-skills", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Bixel provider-backed image skills: generate or edit images with the configured \
-                 image model (image_gen, generate_art, pixel_image_gen, spritesheet, next_frame). \
-                 Pass input images by their workspace filename. Deterministic image work (color \
-                 reduction, background removal, slicing, packing, tilesets, UI kits) is provided \
-                 by installed agent skills — load them with load_skill and run their scripts.",
+                "Bixel provider-backed image tools: image_gen, generate_art, pixel_image_gen, \
+                 spritesheet, next_frame. Pass input images by their workspace filename. \
+                 Deterministic image work (color reduction, background removal, slicing, packing, \
+                 tilesets, UI kits) is provided by installed agent skills — list them in your \
+                 system instructions, load one with load_skill, and run its scripts.",
             )
     }
 }
