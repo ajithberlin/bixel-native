@@ -898,6 +898,44 @@ final class TileMapModel: ObservableObject {
             }
         }
     }
+
+    // MARK: - Agent control (Take Control bridge)
+
+    /// Structured tilemap state for the agent's `editor_read` tool.
+    func agentState() -> [String: Any] {
+        var state: [String: Any] = [
+            "cell_width": map.cellWidth,
+            "cell_height": map.cellHeight,
+            "columns": map.columns,
+            "rows": map.rows,
+            "pixel_width": map.pixelWidth,
+            "pixel_height": map.pixelHeight,
+            "active_layer": activeLayer,
+        ]
+        state["layers"] = layers.map { layer -> [String: Any] in
+            ["index": layer.index, "name": layer.name, "visible": layer.visible,
+             "opacity": layer.opacity, "type": layer.type]
+        }
+        state["tilesets"] = map.tilesetsInfo().map { info -> [String: Any] in
+            ["index": info.index, "name": info.name, "first_gid": Int(info.firstGid),
+             "tile_width": info.tileWidth, "tile_height": info.tileHeight,
+             "columns": info.columns, "tile_count": info.tileCount]
+        }
+        if let selection {
+            state["selection"] = ["x": selection.x, "y": selection.y,
+                                  "width": selection.width, "height": selection.height]
+        }
+        return state
+    }
+
+    /// Apply validated agent operations to the tilemap. Reads are supported;
+    /// map mutations land in the next update.
+    func applyAgentOps(_ ops: [[String: Any]], confirm: Bool, workspace: URL?) -> [[String: Any]] {
+        ops.map { op in
+            ["op": op["op"] as? String ?? "", "ok": false,
+             "error": "map editing is not enabled yet"]
+        }
+    }
 }
 
 // MARK: - Data copy helper

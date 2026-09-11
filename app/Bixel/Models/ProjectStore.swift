@@ -37,6 +37,7 @@ final class ProjectStore: ObservableObject {
             .appendingPathComponent("Bixel/Projects", isDirectory: true)
         self.root = resolvedRoot
         self.aiGallery = AIGalleryStore(root: resolvedRoot)
+        EditorBridge.shared.attach(store: self)
         refresh()
         bootstrapSamplesIfEmpty()
         do {

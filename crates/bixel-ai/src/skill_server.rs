@@ -96,6 +96,30 @@ pub struct ImageSkillParams {
     pub params: serde_json::Value,
 }
 
+/// Arguments for `editor_read`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EditorReadParams {
+    /// Which editor to read: "all" (default), "document", or "map".
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Include a downscaled preview of the current view for visual reasoning.
+    #[serde(default)]
+    pub include_preview: Option<bool>,
+    /// Longest side of the preview in pixels (default 1024, max 2048).
+    #[serde(default)]
+    pub preview_max: Option<u32>,
+}
+
+/// Arguments for `editor_command`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct EditorCommandParams {
+    /// Ordered operations to apply. Each op is `{"op": "...", ...args}`.
+    pub ops: Vec<serde_json::Value>,
+    /// Set true only after the user approved destructive operations.
+    #[serde(default)]
+    pub confirm: bool,
+}
+
 #[derive(Clone)]
 pub struct SkillServer {
     tool_router: ToolRouter<Self>,
@@ -167,6 +191,69 @@ impl SkillServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
         self.run_image(SkillKind::NextFrame, params.0).await
+    }
+
+    #[tool(
+        name = "editor_read",
+        description = "Read the live editor state (active document or tilemap): dimensions, layers, frames, tags, tilesets, selection, palette and undo availability. Returns structured JSON plus a downscaled preview image of the current view. Call this before changing anything so the plan matches what is actually on screen."
+    )]
+    pub async fn editor_read(
+        &self,
+        params: Parameters<EditorReadParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let p = params.0;
+        let request = serde_json::json!({
+            "command": "read",
+            "workspace": workspace_string(),
+            "scope": p.scope.unwrap_or_else(|| "all".into()),
+            "include_preview": p.include_preview.unwrap_or(true),
+            "preview_max": p.preview_max.unwrap_or(1024).min(2048),
+        });
+        let response = crate::editor_bridge::request(&request)
+            .map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+        if response.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            return Err(bridge_error(&response));
+        }
+        let mut data = response.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let preview = data
+            .get_mut("preview_png_base64")
+            .and_then(|value| value.take().as_str().map(str::to_string));
+        let text = serde_json::to_string_pretty(&data).unwrap_or_default();
+        let mut blocks = vec![ContentBlock::text(text)];
+        if let Some(preview) = preview.filter(|p| !p.is_empty()) {
+            blocks.push(ContentBlock::image(preview, "image/png"));
+        }
+        Ok(CallToolResult::success(blocks))
+    }
+
+    #[tool(
+        name = "editor_command",
+        description = "Apply one or more operations to the live editor (sprite document or tilemap). Use editor_read first. Each op is {\"op\": \"...\", ...}. Destructive ops (delete/remove/clear/replace) require confirm=true after the user approves them. Returns per-op results so failures can be corrected."
+    )]
+    pub async fn editor_command(
+        &self,
+        params: Parameters<EditorCommandParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let p = params.0;
+        if p.ops.is_empty() {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "editor_command needs at least one op".to_string(),
+                None,
+            ));
+        }
+        let request = serde_json::json!({
+            "command": "apply",
+            "workspace": workspace_string(),
+            "ops": p.ops,
+            "confirm": p.confirm,
+        });
+        let response = crate::editor_bridge::request(&request)
+            .map_err(|e| ErrorData::new(ErrorCode::INTERNAL_ERROR, e.to_string(), None))?;
+        let text = serde_json::to_string_pretty(&response).unwrap_or_default();
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     async fn run_image(
@@ -266,11 +353,39 @@ impl ServerHandler for SkillServer {
             .with_instructions(
                 "Bixel provider-backed image tools: image_gen, generate_art, pixel_image_gen, \
                  spritesheet, next_frame. Pass input images by their workspace filename. \
+                 Live editor control: editor_read observes the current document/tilemap (state + \
+                 preview) and editor_command applies validated operations to it. Use editor_read \
+                 before editor_command, and never claim a change without a tool result. \
                  Deterministic image work (color reduction, background removal, slicing, packing, \
                  tilesets, UI kits) is provided by installed agent skills — list them in your \
                  system instructions, load one with load_skill, and run its scripts.",
             )
     }
+}
+
+/// The per-request workspace as a string for the host bridge, when known.
+fn workspace_string() -> Option<String> {
+    RUNTIME
+        .get()
+        .and_then(|runtime| runtime.workspace.lock().unwrap().clone())
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// Turn a `{"ok":false,...}` bridge response into a tool error.
+fn bridge_error(response: &serde_json::Value) -> ErrorData {
+    let code = response
+        .get("code")
+        .and_then(|v| v.as_str())
+        .unwrap_or("editor_error");
+    let message = response
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or("The editor command failed.");
+    ErrorData::new(
+        ErrorCode::INTERNAL_ERROR,
+        format!("{code}: {message}"),
+        None,
+    )
 }
 
 fn counter() -> u32 {

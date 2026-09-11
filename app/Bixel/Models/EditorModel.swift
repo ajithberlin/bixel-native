@@ -1635,4 +1635,275 @@ final class EditorModel: ObservableObject {
         document.loadImageData(targetData, width: self.width, height: self.height, layer: activeLayer, frame: frame)
         commitChange(allFrames: true)
     }
+
+    // MARK: - Agent control (Take Control bridge)
+
+    /// Structured document state for the agent's `editor_read` tool.
+    func agentState() -> [String: Any] {
+        var state: [String: Any] = [
+            "width": width,
+            "height": height,
+            "frame_count": frameCount,
+            "layer_count": document.layerCount,
+            "frame": frame,
+            "active_layer": activeLayer,
+            "tool": tool.rawValue,
+            "can_undo": document.canUndo,
+            "can_redo": document.canRedo,
+        ]
+        state["layers"] = layers.map { layer -> [String: Any] in
+            ["index": layer.index, "name": layer.name, "visible": layer.visible,
+             "opacity": layer.opacity, "blend_mode": layer.blendMode]
+        }
+        state["frames"] = (0..<frameCount).map { index -> [String: Any] in
+            ["index": index, "duration_ms": document.frameDuration(index)]
+        }
+        state["tags"] = document.tags().map { tag -> [String: Any] in
+            ["name": tag.name, "from": tag.from, "to": tag.to, "color": tag.color]
+        }
+        if let selection = selectionRect {
+            state["selection"] = ["x": Int(selection.origin.x), "y": Int(selection.origin.y),
+                                  "width": Int(selection.width), "height": Int(selection.height)]
+        }
+        return state
+    }
+
+    /// Apply validated agent operations. Each op is one undo step; the layer
+    /// panel and canvas refresh once at the end.
+    func applyAgentOps(_ ops: [[String: Any]], confirm: Bool, workspace: URL?) -> [[String: Any]] {
+        var results: [[String: Any]] = []
+        for op in ops {
+            let name = op["op"] as? String ?? ""
+            do {
+                var result = try applyAgentOp(name, op, workspace: workspace)
+                result["op"] = name
+                result["ok"] = true
+                results.append(result)
+            } catch {
+                results.append(["op": name, "ok": false, "error": error.localizedDescription])
+            }
+        }
+        reloadLayers()
+        commitChange(allFrames: true)
+        return results
+    }
+
+    private func applyAgentOp(_ name: String, _ op: [String: Any], workspace: URL?) throws -> [String: Any] {
+        func int(_ key: String) throws -> Int {
+            guard let value = op[key] as? Int else { throw AgentOpError("'\(name)' requires an integer '\(key)'") }
+            return value
+        }
+        func string(_ key: String) throws -> String {
+            guard let value = op[key] as? String else { throw AgentOpError("'\(name)' requires a string '\(key)'") }
+            return value
+        }
+        func bool(_ key: String) throws -> Bool {
+            guard let value = op[key] as? Bool else { throw AgentOpError("'\(name)' requires a boolean '\(key)'") }
+            return value
+        }
+        func double(_ key: String) throws -> Double {
+            if let value = op[key] as? Double { return value }
+            if let value = op[key] as? Int { return Double(value) }
+            throw AgentOpError("'\(name)' requires a number '\(key)'")
+        }
+        func color() throws -> BixelColor { BixelColor(hex: try string("color")) }
+
+        switch name {
+        case "set_pixel":
+            let layer = try int("layer"), f = try int("frame"), x = try int("x"), y = try int("y")
+            try validateAgentCel(layer: layer, frame: f)
+            guard x >= 0, x < width, y >= 0, y < height else { throw AgentOpError("set_pixel is outside the canvas") }
+            document.snapshot()
+            document.setPixel(layer: layer, frame: f, x: x, y: y, try color())
+            return [:]
+
+        case "set_pixels":
+            guard let points = op["points"] as? [[String: Any]] else { throw AgentOpError("'set_pixels' requires a 'points' array") }
+            document.snapshot()
+            for point in points {
+                guard let layer = point["layer"] as? Int, let f = point["frame"] as? Int,
+                      let x = point["x"] as? Int, let y = point["y"] as? Int,
+                      let hex = point["color"] as? String else { throw AgentOpError("each point needs layer, frame, x, y, color") }
+                try validateAgentCel(layer: layer, frame: f)
+                guard x >= 0, x < width, y >= 0, y < height else { continue }
+                document.setPixel(layer: layer, frame: f, x: x, y: y, BixelColor(hex: hex))
+            }
+            return ["count": points.count]
+
+        case "stroke":
+            let layer = try int("layer"), f = try int("frame")
+            try validateAgentCel(layer: layer, frame: f)
+            guard let raw = op["points"] as? [[String: Any]] else { throw AgentOpError("'stroke' requires a 'points' array") }
+            let points: [(x: Int, y: Int)] = raw.compactMap {
+                guard let x = $0["x"] as? Int, let y = $0["y"] as? Int else { return nil }
+                return (x, y)
+            }
+            guard !points.isEmpty else { throw AgentOpError("'stroke' needs at least one point") }
+            let radius = UInt32(max(0, (op["radius"] as? Int ?? 1) - 1))
+            document.snapshot()
+            document.stroke(layer: layer, frame: f, points: points, color: try color(), radius: radius)
+            return ["count": points.count]
+
+        case "flood_fill":
+            let layer = try int("layer"), f = try int("frame"), x = try int("x"), y = try int("y")
+            try validateAgentCel(layer: layer, frame: f)
+            guard x >= 0, x < width, y >= 0, y < height else { throw AgentOpError("flood_fill is outside the canvas") }
+            document.snapshot()
+            let filled = document.floodFill(layer: layer, frame: f, x: x, y: y, try color())
+            return ["pixels": filled]
+
+        case "add_layer":
+            document.snapshot()
+            let index = document.addLayer(op["name"] as? String)
+            activeLayer = index
+            return ["index": index]
+
+        case "remove_layer":
+            let index = try int("index")
+            guard document.layerCount > 1 else { throw AgentOpError("cannot remove the last layer") }
+            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            document.snapshot()
+            document.removeLayer(index)
+            activeLayer = min(activeLayer, document.layerCount - 1)
+            return [:]
+
+        case "rename_layer":
+            let index = try int("index")
+            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            document.snapshot()
+            document.renameLayer(index, name: try string("name"))
+            return [:]
+
+        case "reorder_layer":
+            let from = try int("from"), to = try int("to")
+            guard from >= 0, to >= 0, from < document.layerCount, to < document.layerCount else {
+                throw AgentOpError("layer reorder out of range")
+            }
+            document.snapshot()
+            document.reorderLayer(from: from, to: to)
+            activeLayer = to
+            return [:]
+
+        case "set_layer_visible":
+            let index = try int("index")
+            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            document.snapshot()
+            document.setLayerVisible(index, try bool("visible"))
+            return [:]
+
+        case "set_layer_opacity":
+            let index = try int("index")
+            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            let value = try double("opacity")
+            document.snapshot()
+            document.setLayerOpacity(index, Float(min(1, max(0, value))))
+            return [:]
+
+        case "add_frame":
+            let duration = op["duration_ms"] as? Int ?? 125
+            document.snapshot()
+            let index = document.addFrame(durationMs: max(1, duration))
+            frame = index
+            return ["index": index]
+
+        case "remove_frame":
+            let index = try int("index")
+            guard document.frameCount > 1 else { throw AgentOpError("cannot remove the last frame") }
+            guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+            document.snapshot()
+            document.removeFrame(index)
+            frame = min(frame, document.frameCount - 1)
+            return [:]
+
+        case "reorder_frame":
+            let from = try int("from"), to = try int("to")
+            guard from >= 0, to >= 0, from < frameCount, to < frameCount, from != to else {
+                throw AgentOpError("frame reorder out of range")
+            }
+            document.snapshot()
+            document.reorderFrame(from: from, to: to)
+            frame = min(frame, frameCount - 1)
+            return [:]
+
+        case "set_frame_duration":
+            let index = try int("index")
+            guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+            document.snapshot()
+            document.setFrameDuration(index, ms: max(1, try int("ms")))
+            return [:]
+
+        case "go_to_frame":
+            let index = try int("index")
+            guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+            frame = index
+            return ["frame": frame]
+
+        case "add_tag":
+            document.snapshot()
+            let ok = document.addTag(name: try string("name"), from: try int("from"), to: try int("to"),
+                                     color: op["color"] as? String ?? "#7f7fff")
+            guard ok else { throw AgentOpError("invalid tag range") }
+            return [:]
+
+        case "remove_tag":
+            document.snapshot()
+            _ = document.removeTag(name: try string("name"))
+            return [:]
+
+        case "resize":
+            let w = try int("width"), h = try int("height")
+            guard w > 0, h > 0 else { throw AgentOpError("resize needs positive width and height") }
+            document.snapshot()
+            document.resize(width: w, height: h)
+            frame = min(frame, document.frameCount - 1)
+            return ["width": document.width, "height": document.height]
+
+        case "undo":
+            return ["changed": document.undo()]
+        case "redo":
+            return ["changed": document.redo()]
+
+        case "export_png":
+            guard let workspace else { throw AgentOpError("export_png requires a workspace") }
+            let path = try string("path")
+            guard let url = EditorBridge.resolve(path, in: workspace) else {
+                throw AgentOpError("export path '\(path)' escapes the workspace")
+            }
+            let index = op["frame"] as? Int ?? frame
+            guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+            let scale = max(1, op["scale"] as? Int ?? 1)
+            let base = document.compositeRGBA(frame: index)
+            let pixels = scale == 1 ? base : EditorModel.scalePixels(base, width: width, height: height, scale: scale)
+            guard let data = AIService.rgbaToPNG(pixels, width: width * scale, height: height * scale) else {
+                throw AgentOpError("could not encode the PNG")
+            }
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url)
+            return ["path": path, "bytes": data.count]
+
+        default:
+            throw AgentOpError("unknown op '\(name)'")
+        }
+    }
+
+    private func validateAgentCel(layer: Int, frame index: Int) throws {
+        guard layer >= 0, layer < document.layerCount else { throw AgentOpError("layer \(layer) is out of range") }
+        guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+    }
+
+    private static func scalePixels(_ pixels: [UInt8], width: Int, height: Int, scale: Int) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: width * scale * height * scale * 4)
+        for y in 0..<height * scale {
+            let srcRow = y / scale
+            for x in 0..<width * scale {
+                let src = (srcRow * width + x / scale) * 4
+                let dst = (y * width * scale + x) * 4
+                out[dst] = pixels[src]
+                out[dst + 1] = pixels[src + 1]
+                out[dst + 2] = pixels[src + 2]
+                out[dst + 3] = pixels[src + 3]
+            }
+        }
+        return out
+    }
 }

@@ -1347,6 +1347,40 @@ pub extern "C" fn bixel_ai_chat_stream(
     true
 }
 
+/// Install the host editor bridge. The callback receives a JSON command
+/// envelope (`{"command":"read"|"apply",...}`) and must write a NUL-terminated
+/// JSON response (`{"ok":true,"data":...}` or `{"ok":false,"error":...}`) into
+/// the provided buffer, returning false on timeout/error/overflow.
+///
+/// The callback runs synchronously on the calling thread; the host owns
+/// `context` and must keep it alive until the bridge is cleared.
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_editor_bridge(
+    callback: Option<
+        extern "C" fn(*const c_char, *mut c_char, usize, *mut std::ffi::c_void) -> bool,
+    >,
+    context: *mut std::ffi::c_void,
+) {
+    match callback {
+        Some(callback) => bixel_ai::editor_bridge::set(callback, context),
+        None => bixel_ai::editor_bridge::clear(),
+    }
+}
+
+/// Remove the host editor bridge. Editor tools then fail with a clear error
+/// until a host installs one again.
+#[no_mangle]
+pub extern "C" fn bixel_ai_clear_editor_bridge() {
+    bixel_ai::editor_bridge::clear();
+}
+
+/// True when a host editor bridge is installed (the agent can control the
+/// live editor).
+#[no_mangle]
+pub extern "C" fn bixel_ai_editor_bridge_available() -> bool {
+    bixel_ai::editor_bridge::is_installed()
+}
+
 /// Public model labels only, from the active connection (or the `.env`
 /// fallback). Credentials never cross this boundary.
 #[no_mangle]

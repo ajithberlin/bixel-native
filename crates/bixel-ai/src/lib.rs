@@ -37,6 +37,7 @@ pub mod codex_image;
 pub mod commands;
 pub mod config;
 pub mod connection;
+pub mod editor_bridge;
 pub mod error;
 pub mod image;
 pub mod image_gen;
