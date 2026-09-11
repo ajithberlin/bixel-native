@@ -191,11 +191,12 @@ certificates and provisioning profiles for you.
 2. Set **Team** to your Developer team.
 3. Tick **Automatically manage signing**. Xcode creates the *Mac App Store*
    provisioning profile and the *Apple Distribution* certificate if missing.
-4. Confirm the **App Sandbox** capability is listed. The repo ships the
-   entitlements at `app/Bixel/Bixel-AppStore.entitlements`, and `project.yml`
-   wires them into the **Release** configuration via `CODE_SIGN_ENTITLEMENTS`
-   (Debug/dev builds stay unsandboxed). Add **In-App Purchase** as a capability
-   as well.
+4. Confirm the **App Sandbox** capability is listed, with both **Outgoing
+   Connections (Client)** and **Incoming Connections (Server)** enabled. The
+   repo ships the entitlements at `app/Bixel/Bixel-AppStore.entitlements`, and
+   `project.yml` wires them into the **Release** configuration via
+   `CODE_SIGN_ENTITLEMENTS` (Debug/dev builds stay unsandboxed). Add **In-App
+   Purchase** as a capability as well.
 5. Make sure **Hardened Runtime** is enabled (it is set in `project.yml`).
 
 > `project.yml` is the source of truth and `Bixel.xcodeproj` is generated. Any
@@ -303,8 +304,12 @@ build:
 - **Arbitrary filesystem access** — everything outside the container must go
   through `NSOpenPanel`/`NSSavePanel` (already the case for projects, sources and
   exports; `paths::safe_resolve` keeps writes inside the chosen base).
-- **Network** — the sandbox entitlement `com.apple.security.network.client` is
-  already included; document the OpenRouter/Codex usage in **App Privacy**.
+- **Network** — both `com.apple.security.network.client` and
+  `com.apple.security.network.server` are included. The server entitlement is
+  required because Codex OAuth receives its browser callback on
+  `localhost:1455`. Regenerate the Mac App Store provisioning profile after
+  enabling Incoming Connections (Server), and document the OpenRouter/Codex
+  usage in **App Privacy**.
 - **In-App Purchases** — the RevenueCat lifetime unlock must be configured in App
   Store Connect and offered for the Store build (external payment links are not
   allowed).

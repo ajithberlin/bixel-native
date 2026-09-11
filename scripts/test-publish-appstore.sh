@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT="$ROOT/scripts/publish-appstore.sh"
 PROJECT="$ROOT/project.yml"
+ENTITLEMENTS="$ROOT/app/Bixel/Bixel-AppStore.entitlements"
 
 if rg -q 'xcrun altool --help' "$SCRIPT"; then
   echo "publish script must not probe altool with --help" >&2
@@ -42,6 +43,11 @@ fi
 
 if ! rg -q '^        LSApplicationCategoryType: public\.app-category\.graphics-design$' "$PROJECT"; then
   echo "Mac App Store target must declare an application category" >&2
+  exit 1
+fi
+
+if ! rg -q -U '<key>com\.apple\.security\.network\.server</key>\s*<true/>' "$ENTITLEMENTS"; then
+  echo "App Store entitlements must allow incoming loopback connections for Codex OAuth" >&2
   exit 1
 fi
 
