@@ -25,6 +25,10 @@ base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "multipart", "json", "rustls"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
+# Embeds the workspace `skills/` packages into the binary so they can be
+# installed into goose's global skills dir at runtime (same approach goose uses
+# for its builtins).
+include_dir = "0.7"
 
 # goose pins icu_locale/icu_calendar to 2.1.1 (temporal_rs workaround); idna_adapter
 # 1.2.2 bumps icu_normalizer to 2.2+ which pulls icu_collections 2.3 and conflicts.

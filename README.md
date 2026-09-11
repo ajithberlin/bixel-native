@@ -148,19 +148,28 @@ BIXEL_VISION_MODEL=deepseek/deepseek-v4-flash-vision-exp
 BIXEL_IMAGE_MODEL=google/gemini-3-pro-image
 ```
 
-The built-in **skills**:
+Skills come in two layers:
 
-| Skill | Model | What it does |
-|-------|-------|--------------|
-| `generate_art` | image | text → pixel art |
-| `spritesheet` | image | text → spritesheet grid, sliced into frames |
-| `next_frame` | image | current frame → predicted next frame |
-| `compress` | *local* | reduce to `2^bits` colors (median-cut) |
-| `remove_background` | *local* | strip a near-uniform background |
+**Provider-backed image skills** (Rust `bixel` tool extension — goose has no
+image-generation API):
 
-Local skills need no network and run on-device; model skills require the
-corresponding role to be ready. The AI panel (sparkles button) exposes all of
-them in the UI.
+| Skill | What it does |
+|-------|--------------|
+| `image_gen` | text or reference → finished image |
+| `generate_art` | text → pixel art |
+| `pixel_image_gen` | text/reference → single game-ready pixel asset |
+| `spritesheet` | text → spritesheet grid, sliced into frames |
+| `next_frame` | current frame → predicted next frame (image-to-image) |
+
+**Agent skills** (bundled `SKILL.md` packages installed into `~/.agents/skills`,
+run by goose's native skills extension with its shell tool): color reduction,
+background removal, slicing/packing, tilesets, UI kits, 8-direction sets,
+animation packing, asset prep, spritesheet import, and `skill-creator` (which
+writes new skills back into `~/.agents/skills`). Their Python dependencies are
+auto-installed once into a managed virtualenv.
+
+Model skills require the image role to be ready. The AI panel (sparkles button)
+exposes the image skills; the agent discovers the installed agent skills itself.
 
 ## Build & run
 

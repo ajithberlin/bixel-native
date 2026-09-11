@@ -44,6 +44,18 @@ impl GooseAgent {
 
         skill_server::register();
 
+        // Stage the bundled agent skills into goose's global skills directory so
+        // its native `skills` extension can discover them, then install their
+        // Python dependencies in the background (first run only).
+        if let Err(error) = crate::skill_install::install_bundled() {
+            tracing::warn!(%error, "could not install bundled agent skills");
+        }
+        std::thread::spawn(|| {
+            if let Err(error) = crate::skill_install::ensure_python_deps() {
+                tracing::warn!(%error, "could not install skill python dependencies");
+            }
+        });
+
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| AiError::Provider(format!("failed to start runtime: {e}")))?;
 
@@ -184,12 +196,33 @@ impl GooseAgent {
                     .remove_extension_by_key("bixel")
                     .await
                     .map_err(|e| e.to_string())?;
+                self.agent
+                    .extension_manager
+                    .remove_extension_by_key("skills")
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             self.agent
                 .add_extension(
                     ExtensionConfig::Platform {
                         name: "developer".into(),
                         description: "developer".into(),
+                        display_name: None,
+                        bundled: None,
+                        available_tools: vec![],
+                    },
+                    session_id,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // goose's native skills system: discovers the SKILL.md packages we
+            // installed under ~/.agents/skills and serves the `load_skill` tool.
+            self.agent
+                .add_extension(
+                    ExtensionConfig::Platform {
+                        name: "skills".into(),
+                        description: "skills".into(),
                         display_name: None,
                         bundled: None,
                         available_tools: vec![],

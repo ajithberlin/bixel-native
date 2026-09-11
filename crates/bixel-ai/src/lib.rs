@@ -2,22 +2,20 @@
 //!
 //! AI assistant engine for Bixel Studio. Embeds the **full goose agent**
 //! (`goose`) — its agent loop, tool-calling, extension and skill systems — over
-//! the OpenRouter provider, and exposes Bixel's pixel-art **skills** as a goose
-//! tool extension:
+//! the OpenRouter provider.
 //!
-//! * `image_gen` / `generate_art` / `pixel_image_gen` — provider-backed image generation.
-//! * `spritesheet` — text-to-spritesheet generation + grid slicing.
-//! * `next_frame` — predict/create the next animation frame from the current one.
-//! * `compress` / `pixel_reduce_colors` / `pixel_file_compressor` — color
-//!   quantization / bit-depth / file-size reduction.
-//! * `remove_background` / `pixel_remove_bg` — strip a background.
-//! * `pixel_8dir_character` / `pixel_animate_text` / `pixel_interpolate` —
-//!   pack frames into a uniform spritesheet.
-//! * `pixel_9slice_splitter` / `pixel_spritesheet_gen` / `pixel_tileset_gen` —
-//!   slice images into panels, sprites or tiles.
-//! * `pixel_game_ui_gen` / `pixel_ui_elements_gen` / `pixel_ui_kit_gen` — slice
-//!   UI images into components.
-//! * `pixel_game_asset_prep` — chroma-green shadow placeholder → drop shadow.
+//! Two skill layers cooperate:
+//!
+//! * **goose native skills** — the workspace `skills/` packages (`SKILL.md` +
+//!   scripts) are embedded and installed into `~/.agents/skills` by
+//!   [`skill_install`]. goose's `skills` platform extension lists them and
+//!   serves `load_skill`, so the agent runs deterministic work (color reduce,
+//!   background removal, slicing, packing, tilesets, UI kits, asset prep,
+//!   spritesheet import, and `skill-creator`) itself.
+//! * **`bixel` tool extension** — the provider-backed image skills goose cannot
+//!   do natively: `image_gen` / `generate_art` / `pixel_image_gen` (image
+//!   generation), `spritesheet` (grid + slice) and `next_frame` (image-to-image
+//!   next animation frame).
 //!
 //! Headless examples can use environment defaults (`.env`); the app owns
 //! provider selection and credentials through the connection UI:
@@ -42,6 +40,7 @@ pub mod error;
 pub mod image;
 pub mod image_gen;
 pub mod native_stream;
+pub mod skill_install;
 pub mod skill_server;
 pub mod skills;
 pub mod vision;

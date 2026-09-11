@@ -49,7 +49,7 @@ crates/bixel-core/   # platform-independent domain logic (+ tests/)
 crates/bixel-ai/     # embedded goose agent → OpenRouter + skills (+ tests/)
 crates/bixel-ffi/    # C ABI layer (core + ai)
 app/Bixel/           # SwiftUI + Metal frontend
-skills/              # skill manifests (JSON; mirror of bixel-ai::skills)
+skills/              # agent skill packages (SKILL.md + scripts) + image-skill JSON mirrors
 generated/           # (gitignored) staged libbixel.a + bixel.h
 ```
 
@@ -92,10 +92,31 @@ client (`image_gen.rs`); vision (attachment descriptions) uses `vision.rs`.
 The app does not read `.env` — connection config is UI-owned (the
 `ConnectionConfig::from_env` path remains for headless examples only).
 
-Pixel-art skills are exposed to the agent as an in-process `rmcp` builtin
-extension (`skill_server.rs` → `run_skill` tool) that dispatches to the skill
-registry (`skills.rs`). Deterministic skills run locally; model-backed skills
-call the OpenRouter image endpoints (`image_gen.rs`).
+Two skill layers cooperate:
+
+- **goose native skills.** The workspace `skills/` packages (`SKILL.md` +
+  `scripts/` + `requirements.txt`) are embedded in the binary with
+  `include_dir!` (`skill_install.rs`) and staged into goose's global skills dir
+  (`~/.agents/skills`) at startup. goose's `skills` platform extension lists
+  them to the agent and serves `load_skill`, so the agent runs the
+  deterministic work itself with its shell tool: color reduce, background
+  removal, slicing/packing, tilesets, UI kits, asset prep, spritesheet import,
+  and `skill-creator` (which writes new skills back into `~/.agents/skills`).
+  Python dependencies are auto-installed once into a managed venv
+  (`~/Library/Application Support/Bixel/skill-venv`) built with the newest
+  available Python. goose's shell tool overrides `PATH` with the user's
+  login-shell PATH, so the assistant system prompt (`AssistantSession`) tells
+  the agent to run skill scripts with that venv interpreter explicitly.
+- **`bixel` tool extension.** goose has no image-generation API, so the
+  provider-backed image skills stay in Rust (`skills.rs`) and are exposed as an
+  in-process `rmcp` builtin extension (`skill_server.rs` → `run_skill`):
+  `image_gen`, `generate_art`, `pixel_image_gen`, `spritesheet`, `next_frame`.
+  They call the OpenRouter/Codex image backends (`image_gen.rs`,
+  `codex_image.rs`).
+
+The top-level `skills/*.json` files are documentation mirrors of the Rust image
+skill specs (not read at runtime); the `skills/pixel-*/skill.json` files are the
+packages' own manifests, unused by goose.
 
 Spritesheet import is shared between the file importer and the `import_spritesheet`
 skill: both build a `bixel_core::sheet::SheetPlan` (Bixel-export / atlas-actions /

@@ -71,19 +71,10 @@ fn file_compressor_crops_transparent_margins_before_downscaling() {
             img.set_pixel(x, y, pixel(220, 90, 40, 255));
         }
     }
-    let input = bixel_ai::skills::SkillInput {
-        image: Some(img),
-        params: serde_json::json!({"scale": 0.5}),
-        ..Default::default()
-    };
-
-    let output = bixel_ai::skills::Skills::run(
-        None,
-        bixel_ai::skills::SkillKind::PixelFileCompressor,
-        input,
-    )
-    .unwrap();
-    let compressed = output.image.unwrap();
+    // The file-compressor skill now lives as a bundled Python skill; its image
+    // primitives still back preparation and remain covered directly.
+    let cropped = image::crop_to_content(&img, 0, 0);
+    let compressed = image::downscale_nearest(&cropped, 0.5);
 
     assert_eq!((compressed.width, compressed.height), (1, 2));
     assert!(compressed.data.chunks_exact(4).all(|p| p == [220, 90, 40, 255]));

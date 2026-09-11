@@ -83,7 +83,7 @@ fn spawn(r: tokio::io::DuplexStream, w: tokio::io::DuplexStream) {
 /// Arguments for the single skill tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RunSkillParams {
-    /// Skill id (e.g. generate_art, compress, pixel_image_gen, pixel_tileset_gen).
+    /// Skill id (image_gen, generate_art, spritesheet, next_frame, pixel_image_gen).
     pub skill: String,
     /// Text prompt for model-backed skills.
     #[serde(default)]
@@ -111,7 +111,7 @@ impl SkillServer {
 
     #[tool(
         name = "run_skill",
-        description = "Run a Bixel pixel-art skill. Skills: image_gen, generate_art, spritesheet, next_frame, pixel_image_gen (provider image backend); compress, remove_background, pixel_reduce_colors, pixel_file_compressor, pixel_remove_bg, pixel_8dir_character, pixel_animate_text, pixel_interpolate, pixel_9slice_splitter, pixel_spritesheet_gen, pixel_tileset_gen, pixel_game_ui_gen, pixel_ui_elements_gen, pixel_ui_kit_gen, pixel_game_asset_prep, import_spritesheet (local, no network). Use import_spritesheet to slice an existing sheet into animation frames from a JSON manifest or grid params. Use image_gen for a user's natural-language request to create or edit an image. Use next_frame to advance an animation by exactly one frame: pass the current frame as the `image` input and put the motion in the `action` param as a small increment. Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites and false for image_gen; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Do not compress or request a reduced target implicitly. Raw model sources are retained separately; explicitly prepared assets crop transparent padding before reduction and use nearest-neighbor pixels. Do not use shell, Python, or another tool to fabricate an image. Returns saved image filenames."
+        description = "Run a Bixel provider-backed image skill: image_gen, generate_art, spritesheet, next_frame, pixel_image_gen. Use image_gen for a user's natural-language request to create or edit an image. Use next_frame to advance an animation by exactly one frame: pass the current frame as the `image` input and put the motion in the `action` param as a small increment. Generation params: width + height (1..4096, explicit target only); spritesheet uses frame_width + frame_height and cols/rows (1..64, max 256 cells). transparent defaults true for sprites and false for image_gen; palette is a string of palette/style guidance. Omit target dimensions to keep source size. Never silently inherit canvas dimensions; ask the user if target intent is unclear. Do not compress or request a reduced target implicitly. Raw model sources are retained separately; explicitly prepared assets crop transparent padding before reduction and use nearest-neighbor pixels. Do not use shell, Python, or another tool to fabricate an image. For deterministic/local image work (color reduction, background removal, slicing, packing, tilesets, UI kits), load the matching installed skill with load_skill and run its scripts. Returns saved image filenames."
     )]
     pub async fn run_skill(
         &self,
@@ -221,10 +221,11 @@ impl ServerHandler for SkillServer {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("bixel-skills", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Bixel pixel-art skills: generate sprite assets with the image model, or run \
-                 local deterministic operations (color reduce, background removal, slicing, \
-                 packing) on images already in the workspace. Pass input images by their \
-                 workspace filename.",
+                "Bixel provider-backed image skills: generate or edit images with the configured \
+                 image model (image_gen, generate_art, pixel_image_gen, spritesheet, next_frame). \
+                 Pass input images by their workspace filename. Deterministic image work (color \
+                 reduction, background removal, slicing, packing, tilesets, UI kits) is provided \
+                 by installed agent skills — load them with load_skill and run their scripts.",
             )
     }
 }
@@ -274,8 +275,9 @@ mod tests {
 
     #[test]
     fn skill_ids_resolve() {
-        assert!(SkillKind::from_id("compress").is_some());
+        assert!(SkillKind::from_id("image_gen").is_some());
         assert!(SkillKind::from_id("generate_art").is_some());
+        assert!(SkillKind::from_id("next_frame").is_some());
         assert!(SkillKind::from_id("does_not_exist").is_none());
     }
 
