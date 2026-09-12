@@ -940,7 +940,7 @@ final class TileMapModel: ObservableObject {
                 result["ok"] = true
                 results.append(result)
             } catch {
-                results.append(["op": name, "ok": false, "error": error.localizedDescription])
+                results.append(["op": name, "ok": false, "error": agentErrorDescription(error)])
             }
         }
         reloadLayers()

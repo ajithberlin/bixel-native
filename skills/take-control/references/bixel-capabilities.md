@@ -107,7 +107,14 @@ op reports its error without aborting the rest.
 `add_layer`, `remove_layer`, `rename_layer`, `reorder_layer`,
 `set_layer_visible`, `set_layer_opacity`, `add_frame`, `remove_frame`,
 `reorder_frame`, `set_frame_duration`, `go_to_frame`, `add_tag`, `remove_tag`,
-`resize`, `undo`, `redo`, `export_png`.
+`resize`, `undo`, `redo`, `export_png`, `place_image`, `stamp_image`,
+`import_sheet`, `add_animation`.
+
+**Applying generated assets:** after an image tool saves a file, add it to the
+project in the same turn — `place_image` (single image, new layer), `add_animation`
+(sheet → timeline frames), `import_sheet` (sheet whose cells match the canvas),
+or `accept_asset` (copy a generated file into the project's `assets/`). Pass the
+saved filename as `path`.
 
 **Tilemap ops:** `map_set_tile`, `map_fill`, `map_paint_rect`, `map_paint_line`,
 `map_stamp`, `map_add_layer`, `map_remove_layer`, `map_rename_layer`,

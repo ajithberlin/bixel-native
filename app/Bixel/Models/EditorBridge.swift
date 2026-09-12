@@ -55,9 +55,8 @@ private func bixelEditorBridgeTrampoline(
         payload = EditorBridge.shared.handle(requestJSON: requestJSON)
         semaphore.signal()
     }
-    // The agent turn runs off the main thread; a destructive confirmation can
-    // keep the main thread busy while the user reads the sheet.
-    if semaphore.wait(timeout: .now() + 300) == .timedOut { return false }
+    // The agent turn runs off the main thread; the editor responds promptly.
+    if semaphore.wait(timeout: .now() + 30) == .timedOut { return false }
     guard let payload else { return false }
     let bytes = Array(payload.utf8) + [0]
     guard UInt(bytes.count) <= capacity else { return false }

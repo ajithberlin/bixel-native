@@ -195,6 +195,15 @@ struct LayerInfo: Identifiable {
     }
 }
 
+/// A frame captured for the in-app clipboard: every layer's raw RGBA plus the
+/// frame's hold duration, so a paste restores the frame faithfully.
+struct FrameClipboardItem {
+    var layers: [[UInt8]]
+    var durationMs: Int
+    var width: Int
+    var height: Int
+}
+
 final class EditorModel: ObservableObject {
     let document: Document
     let timeline: Timeline
@@ -226,6 +235,8 @@ final class EditorModel: ObservableObject {
     private var layerIDs: [UUID] = []
     @Published var selectionRect: CGRect?
     @Published var transformRect: CGRect?
+    /// Frames captured via copy/cut, ready to be pasted after the current frame.
+    @Published private(set) var frameClipboard: [FrameClipboardItem] = []
     /// Transient clockwise rotation preview in radians. The Rust transform
     /// applies the complete angle with nearest-neighbour sampling.
     @Published var transformAngle: CGFloat = 0
@@ -1237,6 +1248,55 @@ final class EditorModel: ObservableObject {
         commitChange(allFrames: true)
     }
 
+    // MARK: - Frame clipboard
+
+    var canPasteFrame: Bool { !frameClipboard.isEmpty }
+
+    /// Capture a frame (every layer's cel + its hold duration) into the tray.
+    func copyFrame(at index: Int? = nil) {
+        let index = index ?? frame
+        guard index >= 0, index < frameCount else { return }
+        let layers = (0..<document.layerCount).map { document.celRGBA(layer: $0, frame: index) }
+        frameClipboard = [FrameClipboardItem(
+            layers: layers,
+            durationMs: document.frameDuration(index),
+            width: width,
+            height: height
+        )]
+    }
+
+    /// Copy the frame then delete it. The last remaining frame is never removed.
+    @discardableResult
+    func cutFrame(at index: Int? = nil) -> Bool {
+        let index = index ?? frame
+        guard frameCount > 1, index >= 0, index < frameCount else { return false }
+        copyFrame(at: index)
+        removeFrame(at: index)
+        return true
+    }
+
+    /// Insert the clipboard frame(s) directly after `index` (default: current).
+    @discardableResult
+    func pasteFrame(after index: Int? = nil) -> Bool {
+        guard !frameClipboard.isEmpty else { return false }
+        let anchor = index ?? frame
+        pause()
+        document.snapshot()
+        var target = min(max(anchor + 1, 0), document.frameCount)
+        for clip in frameClipboard {
+            let inserted = document.addFrame(durationMs: clip.durationMs)
+            let dest = min(max(target, 0), document.frameCount - 1)
+            if inserted != dest { document.reorderFrame(from: inserted, to: dest) }
+            for (layer, data) in clip.layers.enumerated() where layer < document.layerCount {
+                document.loadImageData(data, width: clip.width, height: clip.height, layer: layer, frame: dest)
+            }
+            target = dest + 1
+        }
+        frame = min(max(target - 1, 0), document.frameCount - 1)
+        commitChange(allFrames: true)
+        return true
+    }
+
     /// Resize the canvas, preserving existing pixels anchored to the top-left.
     func resizeCanvas(width newWidth: Int, height newHeight: Int) {
         guard newWidth > 0, newHeight > 0, newWidth != width || newHeight != height else { return }
@@ -1692,7 +1752,7 @@ final class EditorModel: ObservableObject {
                 result["ok"] = true
                 results.append(result)
             } catch {
-                results.append(["op": name, "ok": false, "error": error.localizedDescription])
+                results.append(["op": name, "ok": false, "error": agentErrorDescription(error)])
             }
         }
         reloadLayers()
@@ -1875,8 +1935,53 @@ final class EditorModel: ObservableObject {
         case "redo":
             return ["changed": document.redo()]
 
+        case "place_image":
+            let image = try loadAgentImage(op, workspace: workspace, name: "place_image")
+            let targetFrame = op["frame"] as? Int ?? frame
+            guard targetFrame >= 0, targetFrame < frameCount else { throw AgentOpError("frame \(targetFrame) is out of range") }
+            let index = try document.placeImageData(
+                image.rgba, width: image.width, height: image.height,
+                x: op["x"] as? Int ?? 0, y: op["y"] as? Int ?? 0,
+                frame: targetFrame, name: op["name"] as? String ?? "AI image"
+            )
+            activeLayer = index
+            frame = targetFrame
+            return ["layer": index, "width": image.width, "height": image.height]
+
+        case "stamp_image":
+            let image = try loadAgentImage(op, workspace: workspace, name: "stamp_image")
+            let layer = try int("layer"), f = try int("frame")
+            try validateAgentCel(layer: layer, frame: f)
+            document.snapshot()
+            try document.stampImageData(image.rgba, width: image.width, height: image.height,
+                                        x: try int("x"), y: try int("y"), layer: layer, frame: f)
+            return [:]
+
+        case "import_sheet":
+            let image = try loadAgentImage(op, workspace: workspace, name: "import_sheet")
+            let index = try document.importSheetData(
+                image.rgba, width: image.width, height: image.height,
+                cellWidth: width, cellHeight: height, name: op["name"] as? String ?? "Sheet"
+            )
+            activeLayer = index
+            return ["layer": index]
+
+        case "add_animation":
+            let image = try loadAgentImage(op, workspace: workspace, name: "add_animation")
+            let manifest = op["manifest"] as? String
+                ?? SheetImport.gridManifest(cellWidth: width, cellHeight: height)
+            let added = try document.appendSheet(
+                rgba: image.rgba, width: image.width, height: image.height,
+                manifest: manifest, layerName: op["name"] as? String ?? "Animation",
+                replace: op["replace"] as? Bool ?? false
+            )
+            frame = max(0, document.frameCount - added)
+            activeLayer = max(0, document.layerCount - 1)
+            return ["frames_added": added]
+
         case "export_png":
-            guard let workspace else { throw AgentOpError("export_png requires a workspace") }            let path = try string("path")
+            guard let workspace else { throw AgentOpError("export_png requires a workspace") }
+            let path = try string("path")
             guard let url = EditorBridge.resolve(path, in: workspace) else {
                 throw AgentOpError("export path '\(path)' escapes the workspace")
             }
@@ -1900,6 +2005,19 @@ final class EditorModel: ObservableObject {
     private func validateAgentCel(layer: Int, frame index: Int) throws {
         guard layer >= 0, layer < document.layerCount else { throw AgentOpError("layer \(layer) is out of range") }
         guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+    }
+
+    /// Load a PNG from the conversation workspace for a placement op.
+    private func loadAgentImage(_ op: [String: Any], workspace: URL?, name: String) throws -> (rgba: [UInt8], width: Int, height: Int) {
+        guard let workspace else { throw AgentOpError("\(name) requires a workspace") }
+        guard let path = op["path"] as? String else { throw AgentOpError("\(name) requires a 'path'") }
+        guard let url = EditorBridge.resolve(path, in: workspace) else {
+            throw AgentOpError("image '\(path)' escapes the workspace")
+        }
+        guard let data = try? Data(contentsOf: url), let decoded = AIService.pngToRGBA(data) else {
+            throw AgentOpError("could not read image '\(path)' from the workspace")
+        }
+        return decoded
     }
 
     private static func scalePixels(_ pixels: [UInt8], width: Int, height: Int, scale: Int) -> [UInt8] {

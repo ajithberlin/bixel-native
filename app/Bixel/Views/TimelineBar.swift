@@ -332,6 +332,15 @@ struct TimelineBar: View {
         Button("Duplicate") {
             withAnimation(stripAnimation) { model.pause(); model.goTo(index); model.duplicateFrame() }
         }
+        Divider()
+        Button("Copy") { model.copyFrame(at: index) }
+        Button("Cut") {
+            withAnimation(stripAnimation) { _ = model.cutFrame(at: index) }
+        }
+        .disabled(model.frameCount <= 1)
+        Button("Paste After") { model.pasteFrame(after: index) }
+            .disabled(!model.canPasteFrame)
+        Divider()
         Button("Delete", role: .destructive) {
             withAnimation(stripAnimation) {
                 model.removeFrame(at: index)
