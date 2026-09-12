@@ -24,8 +24,29 @@ struct HomePageView: View {
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
     @State private var aiPrompt = ""
-    @State private var selectedSize: Int = 32
+    @State private var selectedWidth: Int = 32
+    @State private var selectedHeight: Int = 32
+    @State private var showCustomSizePopover = false
+    @State private var customWidthText = "32"
+    @State private var customHeightText = "32"
     @State private var selectedStyle: String = "16-Bit Retro"
+
+    struct ScreenPreset: Identifiable, Hashable {
+        var id: String { name }
+        let w: Int
+        let h: Int
+        let name: String
+    }
+
+    private static let squarePresets: [Int] = [8, 16, 24, 32, 48, 64, 96, 128, 256, 512]
+    private static let screenPresets: [ScreenPreset] = [
+        ScreenPreset(w: 160, h: 144, name: "Game Boy"),
+        ScreenPreset(w: 240, h: 160, name: "GBA"),
+        ScreenPreset(w: 256, h: 224, name: "SNES"),
+        ScreenPreset(w: 320, h: 180, name: "16:9"),
+        ScreenPreset(w: 320, h: 240, name: "4:3"),
+        ScreenPreset(w: 640, h: 360, name: "HD Screen")
+    ]
     @State private var selectedGalleryItem: AIGalleryItem?
     @State private var renamingProject: StudioProject? = nil
     @State private var renameText = ""
@@ -415,15 +436,56 @@ struct HomePageView: View {
                 HStack(spacing: 10) {
                     // Size Selector Menu
                     Menu {
-                        Button("16 × 16 px") { selectedSize = 16 }
-                        Button("32 × 32 px") { selectedSize = 32 }
-                        Button("64 × 64 px") { selectedSize = 64 }
-                        Button("128 × 128 px") { selectedSize = 128 }
+                        Section("Square Sizes") {
+                            ForEach(Self.squarePresets, id: \.self) { size in
+                                Button {
+                                    selectedWidth = size
+                                    selectedHeight = size
+                                    customWidthText = "\(size)"
+                                    customHeightText = "\(size)"
+                                } label: {
+                                    if selectedWidth == size && selectedHeight == size {
+                                        Label("\(size) × \(size) px", systemImage: "checkmark")
+                                    } else {
+                                        Text("\(size) × \(size) px")
+                                    }
+                                }
+                            }
+                        }
+
+                        Section("Retro & Screens") {
+                            ForEach(Self.screenPresets) { preset in
+                                Button {
+                                    selectedWidth = preset.w
+                                    selectedHeight = preset.h
+                                    customWidthText = "\(preset.w)"
+                                    customHeightText = "\(preset.h)"
+                                } label: {
+                                    if selectedWidth == preset.w && selectedHeight == preset.h {
+                                        Label("\(preset.w) × \(preset.h) px (\(preset.name))", systemImage: "checkmark")
+                                    } else {
+                                        Text("\(preset.w) × \(preset.h) px (\(preset.name))")
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Button {
+                            customWidthText = "\(selectedWidth)"
+                            customHeightText = "\(selectedHeight)"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                showCustomSizePopover = true
+                            }
+                        } label: {
+                            Label("Other (Custom W × H)…", systemImage: "slider.horizontal.below.square.filled.and.square")
+                        }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "aspectratio")
                                 .font(.system(size: 10))
-                            Text("\(selectedSize) × \(selectedSize)")
+                            Text("\(selectedWidth) × \(selectedHeight)")
                                 .font(.system(size: 11, design: .monospaced))
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 8))
@@ -436,6 +498,9 @@ struct HomePageView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .disabled(isAIGenerating)
+                    .popover(isPresented: $showCustomSizePopover, arrowEdge: .bottom) {
+                        customSizePopoverContent
+                    }
 
                     // Art Style Menu
                     Menu {
@@ -540,12 +605,173 @@ struct HomePageView: View {
     }
 
 
+    private var customSizePopoverContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: "slider.horizontal.below.square.filled.and.square")
+                    .foregroundColor(StudioTheme.bixelGreen)
+                    .font(.system(size: 12))
+                Text("Custom Canvas Size")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Spacer()
+            }
+
+            // Width & Height inputs
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Width")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    HStack(spacing: 4) {
+                        TextField("W", text: $customWidthText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white)
+                            .frame(width: 54)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                            )
+                            .onSubmit { applyCustomSize() }
+                        Text("px")
+                            .font(.system(size: 11))
+                            .foregroundColor(StudioTheme.textSecondary)
+                    }
+                }
+
+                Text("×")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.top, 16)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Height")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    HStack(spacing: 4) {
+                        TextField("H", text: $customHeightText)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white)
+                            .frame(width: 54)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                            )
+                            .onSubmit { applyCustomSize() }
+                        Text("px")
+                            .font(.system(size: 11))
+                            .foregroundColor(StudioTheme.textSecondary)
+                    }
+                }
+            }
+
+            // Aspect ratio shortcuts
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Aspect Ratio")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                HStack(spacing: 6) {
+                    Button("1:1") {
+                        if let w = Int(customWidthText), w > 0 {
+                            customHeightText = "\(w)"
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 4))
+
+                    Button("4:3") {
+                        if let w = Int(customWidthText), w > 0 {
+                            customHeightText = "\(max(1, w * 3 / 4))"
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 4))
+
+                    Button("16:9") {
+                        if let w = Int(customWidthText), w > 0 {
+                            customHeightText = "\(max(1, w * 9 / 16))"
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 4))
+
+                    Button("Swap ⇄") {
+                        let temp = customWidthText
+                        customWidthText = customHeightText
+                        customHeightText = temp
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(StudioTheme.homeCardBorder, in: RoundedRectangle(cornerRadius: 4))
+                }
+            }
+
+            Divider().overlay(StudioTheme.homeCardBorder)
+
+            HStack {
+                Button("Cancel") {
+                    showCustomSizePopover = false
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundColor(StudioTheme.textSecondary)
+
+                Spacer()
+
+                Button("Apply") {
+                    applyCustomSize()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(StudioTheme.bixelGreen)
+                .foregroundColor(.black)
+            }
+        }
+        .padding(14)
+        .frame(width: 230)
+        .background(StudioTheme.homeDark)
+    }
+
+    private func applyCustomSize() {
+        let rawW = Int(customWidthText) ?? selectedWidth
+        let rawH = Int(customHeightText) ?? selectedHeight
+        selectedWidth = min(max(1, rawW), 4096)
+        selectedHeight = min(max(1, rawH), 4096)
+        customWidthText = "\(selectedWidth)"
+        customHeightText = "\(selectedHeight)"
+        showCustomSizePopover = false
+    }
+
     private func submitAIPrompt() {
         let text = aiPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isAIGenerating else { return }
         aiPrompt = ""
         promptFieldFocused = false
-        onOpenWithAIPrompt(AICreationRequest(prompt: text, size: selectedSize, style: selectedStyle))
+        onOpenWithAIPrompt(AICreationRequest(prompt: text, width: selectedWidth, height: selectedHeight, style: selectedStyle))
     }
 
     // MARK: - Recent Projects Section
@@ -1111,11 +1337,15 @@ struct NewProjectQuickDialog: View {
                 if mode != .map {
                     VStack(alignment: .trailing, spacing: 4) {
                         Text("Presets").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                        HStack(spacing: 6) {
+                        HStack(spacing: 4) {
+                            presetButton("8²") { width = 8; height = 8 }
                             presetButton("16²") { width = 16; height = 16 }
+                            presetButton("24²") { width = 24; height = 24 }
                             presetButton("32²") { width = 32; height = 32 }
+                            presetButton("48²") { width = 48; height = 48 }
                             presetButton("64²") { width = 64; height = 64 }
                             presetButton("128²") { width = 128; height = 128 }
+                            presetButton("256²") { width = 256; height = 256 }
                         }
                     }
                 }

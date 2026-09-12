@@ -1216,12 +1216,24 @@ final class EditorModel: ObservableObject {
     }
 
     func removeFrame() {
-        guard document.frameCount > 1 else { return }
+        removeFrame(at: frame)
+    }
+
+    func removeFrame(at index: Int) {
+        guard document.frameCount > 1, index >= 0, index < frameCount else { return }
+        pause()
         document.snapshot()
-        let removed = frame
-        document.removeFrame(frame)
-        if frameIDs.indices.contains(removed) { frameIDs.remove(at: removed) }
-        frame = min(frame, document.frameCount - 1)
+        document.removeFrame(index)
+        if frameIDs.indices.contains(index) { frameIDs.remove(at: index) }
+        let selected: Int
+        if frame == index {
+            selected = min(index, document.frameCount - 1)
+        } else if frame > index {
+            selected = frame - 1
+        } else {
+            selected = frame
+        }
+        goTo(selected)
         commitChange(allFrames: true)
     }
 
@@ -1864,8 +1876,7 @@ final class EditorModel: ObservableObject {
             return ["changed": document.redo()]
 
         case "export_png":
-            guard let workspace else { throw AgentOpError("export_png requires a workspace") }
-            let path = try string("path")
+            guard let workspace else { throw AgentOpError("export_png requires a workspace") }            let path = try string("path")
             guard let url = EditorBridge.resolve(path, in: workspace) else {
                 throw AgentOpError("export path '\(path)' escapes the workspace")
             }

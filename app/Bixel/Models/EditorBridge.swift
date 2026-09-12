@@ -7,12 +7,11 @@
 // JSON response. It never lets the agent touch the Rust document handle behind
 // the editor's back.
 
-import AppKit
 import Foundation
 
 /// How the assistant's destructive editor changes are approved.
 enum EditorApprovalMode: String {
-    /// Show a native confirmation sheet for destructive operations.
+    /// Destructive operations require the user's approval (`confirm: true`).
     case confirm
     /// Apply destructive operations without prompting.
     case autonomous
@@ -27,6 +26,16 @@ struct AgentOpError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+/// Error text that keeps the domain and code for non-localized failures, so an
+/// opaque "The operation couldn't be completed." stays diagnosable.
+func agentErrorDescription(_ error: Error) -> String {
+    let ns = error as NSError
+    if ns.domain == NSCocoaErrorDomain || ns.domain == NSPOSIXErrorDomain || ns.domain == NSOSStatusErrorDomain {
+        return "\(error.localizedDescription) (\(ns.domain) \(ns.code))"
+    }
+    return error.localizedDescription
 }
 
 /// Trampoline installed into the Rust editor bridge. Runs on the agent's
@@ -143,26 +152,57 @@ final class EditorBridge {
         let destructive = ops
             .compactMap { $0["op"] as? String }
             .filter { Self.destructiveOps.contains($0) }
-        // Destructive ops need approval: either the agent already obtained it
-        // (confirm) or the user approves in the native sheet. Autonomous mode
-        // skips the prompt entirely.
+        // Destructive ops need the user's approval, asserted by the agent via
+        // confirm. Autonomous mode skips the requirement. This stays
+        // agent-mediated so no modal AppKit session runs inside the bridge.
         if !destructive.isEmpty, !confirm, EditorApprovalMode.current == .confirm {
-            guard Self.confirmDestructive(destructive) else {
-                return Self.error(
-                    "approval_denied",
-                    "The user declined the destructive operation(s): \(destructive.joined(separator: ", "))."
-                )
-            }
+            return Self.error(
+                "approval_required",
+                "Destructive operations need the user's approval: \(destructive.joined(separator: ", ")). Ask the user, then call editor_command again with confirm=true."
+            )
         }
         let workspace = (request["workspace"] as? String)
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
-        let results: [[String: Any]]
-        if store.isMapActive, let map = store.mapEditor {
-            results = map.applyAgentOps(ops, confirm: confirm, workspace: workspace)
-        } else {
-            results = store.editor.applyAgentOps(ops, confirm: confirm, workspace: workspace)
+        // Asset persistence is a project operation, not an editor one, so run
+        // those ops here and delegate the rest to the active editor model.
+        var results: [[String: Any]] = []
+        var modelOps: [[String: Any]] = []
+        for op in ops {
+            if (op["op"] as? String) == "accept_asset" {
+                results.append(acceptAsset(op, workspace: workspace))
+            } else {
+                modelOps.append(op)
+            }
+        }
+        if !modelOps.isEmpty {
+            if store.isMapActive, let map = store.mapEditor {
+                results += map.applyAgentOps(modelOps, confirm: confirm, workspace: workspace)
+            } else {
+                results += store.editor.applyAgentOps(modelOps, confirm: confirm, workspace: workspace)
+            }
         }
         return Self.ok(["results": results])
+    }
+
+    /// Copy a generated workspace file into the project's permanent `assets/`
+    /// folder so it survives chat cleanup.
+    private func acceptAsset(_ op: [String: Any], workspace: URL?) -> [String: Any] {
+        guard let store, let projectRoot = store.projectRoot else {
+            return ["op": "accept_asset", "ok": false, "error": "Open a project first."]
+        }
+        guard let path = op["path"] as? String, let source = Self.resolve(path, in: workspace) else {
+            return ["op": "accept_asset", "ok": false, "error": "accept_asset needs a workspace-relative path."]
+        }
+        do {
+            let data = try Data(contentsOf: source)
+            let name = (op["name"] as? String) ?? source.lastPathComponent
+            let destination = "assets/\(UUID().uuidString)-\(name)"
+            try ProjectStorage.write(base: projectRoot, path: destination, data: data)
+            store.refreshAssets()
+            return ["op": "accept_asset", "ok": true, "path": destination]
+        } catch {
+            return ["op": "accept_asset", "ok": false, "error": agentErrorDescription(error)]
+        }
     }
 
     /// Operations that remove, resize, or otherwise risk existing work.
@@ -170,17 +210,6 @@ final class EditorBridge {
         "remove_layer", "remove_frame", "remove_tag", "resize",
         "map_remove_layer", "map_remove_object", "map_remove_tileset", "map_resize",
     ]
-
-    /// Native confirmation sheet for destructive agent operations.
-    private static func confirmDestructive(_ ops: [String]) -> Bool {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Allow the AI assistant to make destructive changes?"
-        alert.informativeText = "The assistant wants to run: \(ops.joined(separator: ", ")). This can remove or resize existing content. You can undo afterwards."
-        alert.addButton(withTitle: "Allow")
-        alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn
-    }
 
     // MARK: Helpers
 

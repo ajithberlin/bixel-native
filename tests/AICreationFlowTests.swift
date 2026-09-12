@@ -77,6 +77,25 @@ struct AICreationFlowTests {
         precondition(reopened.items[0].width == 128 && reopened.items[0].height == 128)
         precondition(reopened.items[0].data == png)
 
+        let nonSquareRequest = AICreationRequest(
+            prompt: "Game Boy hero",
+            width: 160,
+            height: 144,
+            style: "Game Boy"
+        )
+        precondition(nonSquareRequest.width == 160)
+        precondition(nonSquareRequest.height == 144)
+        precondition(nonSquareRequest.imageParameters["width"] as? Int == 160)
+        precondition(nonSquareRequest.imageParameters["height"] as? Int == 144)
+        let nonSquareRgba = [UInt8](repeating: 120, count: 160 * 144 * 4)
+        let nonSquarePng = AIService.rgbaToPNG(nonSquareRgba, width: 160, height: 144)!
+        let nonSquareResult = try JSONDecoder().decode(
+            SkillRunResult.self,
+            from: JSONSerialization.data(withJSONObject: ["image": nonSquarePng.base64EncodedString()])
+        )
+        let nonSquareDraft = try AIGenerationFlow.makeDraft(request: nonSquareRequest, result: nonSquareResult)
+        precondition(nonSquareDraft.width == 160 && nonSquareDraft.height == 144)
+
         print("AI creation request, prepared image, and gallery persistence passed")
     }
 }

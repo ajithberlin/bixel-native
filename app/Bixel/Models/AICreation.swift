@@ -3,21 +3,29 @@ import Foundation
 /// The complete user choice made in the Home AI Studio composer.
 struct AICreationRequest: Hashable, Sendable {
     let prompt: String
-    let size: Int
+    let width: Int
+    let height: Int
     let style: String
 
-    init(prompt: String, size: Int, style: String) {
+    var size: Int { max(width, height) }
+
+    init(prompt: String, width: Int, height: Int, style: String) {
         self.prompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.size = max(1, size)
+        self.width = max(1, width)
+        self.height = max(1, height)
         self.style = style.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(prompt: String, size: Int, style: String) {
+        self.init(prompt: prompt, width: size, height: size, style: style)
     }
 
     /// Explicit parameters keep the provider target tied to the user's menu
     /// selection instead of relying on prompt interpretation or canvas state.
     var imageParameters: [String: Any] {
         [
-            "width": size,
-            "height": size,
+            "width": width,
+            "height": height,
             "style": style,
             "transparent": false
         ]
@@ -58,15 +66,15 @@ enum AIGenerationError: LocalizedError {
     case provider(String)
     case missingImage
     case invalidImage
-    case unexpectedDimensions(expected: Int, actualWidth: Int, actualHeight: Int)
+    case unexpectedDimensions(expectedWidth: Int, expectedHeight: Int, actualWidth: Int, actualHeight: Int)
 
     var errorDescription: String? {
         switch self {
         case .provider(let message): return message
         case .missingImage: return "The AI did not return an image. No project was created."
         case .invalidImage: return "The AI returned an unreadable image. No project was created."
-        case .unexpectedDimensions(let expected, let actualWidth, let actualHeight):
-            return "The AI returned \(actualWidth) × \(actualHeight) instead of \(expected) × \(expected). No project was created."
+        case .unexpectedDimensions(let expectedWidth, let expectedHeight, let actualWidth, let actualHeight):
+            return "The AI returned \(actualWidth) × \(actualHeight) instead of \(expectedWidth) × \(expectedHeight). No project was created."
         }
     }
 }
@@ -83,9 +91,10 @@ enum AIGenerationFlow {
         guard let decoded = AIService.pngToRGBA(data) else {
             throw AIGenerationError.invalidImage
         }
-        guard decoded.width == request.size, decoded.height == request.size else {
+        guard decoded.width == request.width, decoded.height == request.height else {
             throw AIGenerationError.unexpectedDimensions(
-                expected: request.size,
+                expectedWidth: request.width,
+                expectedHeight: request.height,
                 actualWidth: decoded.width,
                 actualHeight: decoded.height
             )
