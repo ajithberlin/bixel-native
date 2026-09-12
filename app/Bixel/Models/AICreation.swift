@@ -23,10 +23,11 @@ struct AICreationRequest: Hashable, Sendable {
     /// Explicit parameters keep the provider target tied to the user's menu
     /// selection instead of relying on prompt interpretation or canvas state.
     var imageParameters: [String: Any] {
-        [
+        let cleanStyle = (style.caseInsensitiveCompare("none") == .orderedSame) ? "" : style
+        return [
             "width": width,
             "height": height,
-            "style": style,
+            "style": cleanStyle,
             "transparent": false
         ]
     }

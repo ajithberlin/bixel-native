@@ -13,6 +13,16 @@ struct LayersPopover: View {
     @ObservedObject var model: EditorModel
     @State private var showBgColorPicker = false
 
+    @State private var hoveredLayerIndex: Int? = nil
+    @State private var draggingLayerIndex: Int? = nil
+    @State private var draggingUIIndex: Int? = nil
+    @State private var dragTranslationY: CGFloat = 0
+    @State private var targetUIIndex: Int? = nil
+
+    private let rowHeight: CGFloat = 56
+    private let rowSpacing: CGFloat = 6
+    private var rowStep: CGFloat { rowHeight + rowSpacing }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header: "Layers" + "+"
@@ -37,44 +47,88 @@ struct LayersPopover: View {
             .padding(.bottom, 10)
 
             // Scrollable Layer rows
-            ScrollView {
-                VStack(spacing: 6) {
-                    ForEach(model.layers.reversed()) { layer in
-                        ProcreateLayerRow(
-                            layer: layer,
-                            selected: layer.index == model.activeLayer,
-                            thumbnail: model.layerThumbnailCGImage(layer.index),
-                            thumbWidth: model.width,
-                            thumbHeight: model.height,
-                            canDelete: model.layers.count > 1,
-                            onSelect: { model.activeLayer = layer.index },
-                            onToggle: { model.toggleLayerVisibility(layer.index) },
-                            onRename: { model.renameLayer(layer.index, name: $0) },
-                            onDelete: {
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                    model.activeLayer = layer.index
-                                    model.deleteLayer()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: rowSpacing) {
+                        ForEach(Array(model.layers.reversed().enumerated()), id: \.element.id) { uiIndex, layer in
+                            let isSelected = layer.index == model.activeLayer
+                            let isHovered = hoveredLayerIndex == layer.index && draggingLayerIndex == nil
+                            let isDragging = draggingLayerIndex == layer.index
+                            let isDropSlot = draggingLayerIndex != nil && targetUIIndex == uiIndex && draggingUIIndex != uiIndex
+
+                            ZStack {
+                                // Drop target slot indicator (anchored at unshifted slot position)
+                                if isDropSlot {
+                                    LayerDropSlotIndicator()
+                                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
                                 }
-                            },
-                            onDuplicate: {
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                    model.duplicateLayer(layer.index)
+
+                                ProcreateLayerRow(
+                                    layer: layer,
+                                    selected: isSelected,
+                                    isHovered: isHovered,
+                                    isDragging: isDragging,
+                                    thumbnail: model.layerThumbnailCGImage(layer.index),
+                                    thumbWidth: model.width,
+                                    thumbHeight: model.height,
+                                    canDelete: model.layers.count > 1,
+                                    onSelect: { model.activeLayer = layer.index },
+                                    onToggle: { model.toggleLayerVisibility(layer.index) },
+                                    onRename: { model.renameLayer(layer.index, name: $0) },
+                                    onDelete: {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                            model.activeLayer = layer.index
+                                            model.deleteLayer()
+                                        }
+                                    },
+                                    onDuplicate: {
+                                        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                            model.duplicateLayer(layer.index)
+                                        }
+                                    },
+                                    onSetBlendMode: { mode in model.setLayerBlendMode(layer.index, mode) },
+                                    onSetOpacity: { val in model.setLayerOpacity(layer.index, val) }
+                                )
+                                .offset(y: rowOffsetY(for: uiIndex, layerIndex: layer.index))
+                                .scaleEffect(isDragging ? 1.025 : (isHovered ? 1.008 : 1.0))
+                                .shadow(
+                                    color: isDragging ? Color.black.opacity(0.65) : (isHovered ? Color.black.opacity(0.35) : Color.clear),
+                                    radius: isDragging ? 10 : (isHovered ? 4 : 0),
+                                    x: 0,
+                                    y: isDragging ? 6 : (isHovered ? 2 : 0)
+                                )
+                                .zIndex(rowZIndex(for: uiIndex, layerIndex: layer.index))
+                            }
+                            .frame(height: rowHeight)
+                            .onHover { hovering in
+                                if hovering {
+                                    if draggingLayerIndex == nil {
+                                        hoveredLayerIndex = layer.index
+                                    }
+                                } else if hoveredLayerIndex == layer.index {
+                                    hoveredLayerIndex = nil
                                 }
-                            },
-                            onMoveHere: { from in
-                                withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                    model.moveLayer(from: from, to: layer.index)
-                                }
-                            },
-                            onSetBlendMode: { mode in model.setLayerBlendMode(layer.index, mode) },
-                            onSetOpacity: { val in model.setLayerOpacity(layer.index, val) }
-                        )
+                            }
+                            .gesture(
+                                DragGesture(minimumDistance: 3)
+                                    .onChanged { value in
+                                        handleDragChanged(uiIndex: uiIndex, layerIndex: layer.index, value: value, proxy: proxy)
+                                    }
+                                    .onEnded { value in
+                                        handleDragEnded(uiIndex: uiIndex, layerIndex: layer.index, value: value)
+                                    }
+                            )
+                            .onTapGesture {
+                                model.activeLayer = layer.index
+                            }
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .animation(.spring(response: 0.34, dampingFraction: 0.82), value: model.layerIDs)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .frame(maxHeight: 380)
             }
-            .frame(maxHeight: 380)
 
             Divider().overlay(StudioTheme.hairline)
 
@@ -131,6 +185,114 @@ struct LayersPopover: View {
             blue: Double(model.canvasBackgroundColor.b) / 255
         )
     }
+
+    private func rowOffsetY(for uiIndex: Int, layerIndex: Int) -> CGFloat {
+        guard let draggingLayer = draggingLayerIndex, let sourceUI = draggingUIIndex else {
+            if hoveredLayerIndex == layerIndex {
+                return -2
+            }
+            return 0
+        }
+
+        if layerIndex == draggingLayer {
+            return dragTranslationY
+        }
+
+        guard let targetUI = targetUIIndex else { return 0 }
+
+        if sourceUI < targetUI {
+            if uiIndex > sourceUI && uiIndex <= targetUI {
+                return -rowStep
+            }
+        } else if sourceUI > targetUI {
+            if uiIndex >= targetUI && uiIndex < sourceUI {
+                return rowStep
+            }
+        }
+
+        return 0
+    }
+
+    private func rowZIndex(for uiIndex: Int, layerIndex: Int) -> Double {
+        if draggingLayerIndex == layerIndex {
+            return 100
+        }
+        if hoveredLayerIndex == layerIndex {
+            return 10
+        }
+        return 1
+    }
+
+    private func handleDragChanged(uiIndex: Int, layerIndex: Int, value: DragGesture.Value, proxy: ScrollViewProxy) {
+        guard model.layers.count > 1 else { return }
+
+        if draggingLayerIndex == nil {
+            draggingLayerIndex = layerIndex
+            draggingUIIndex = uiIndex
+            targetUIIndex = uiIndex
+            hoveredLayerIndex = nil
+        }
+        dragTranslationY = value.translation.height
+
+        let deltaSlots = Int(round(value.translation.height / rowStep))
+        let rawTarget = uiIndex + deltaSlots
+        let newTargetUI = min(max(rawTarget, 0), model.layers.count - 1)
+
+        if newTargetUI != targetUIIndex {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                targetUIIndex = newTargetUI
+            }
+            let reversedLayers = Array(model.layers.reversed())
+            if reversedLayers.indices.contains(newTargetUI) {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    proxy.scrollTo(reversedLayers[newTargetUI].id, anchor: .center)
+                }
+            }
+        }
+    }
+
+    private func handleDragEnded(uiIndex: Int, layerIndex: Int, value: DragGesture.Value) {
+        guard let sourceLayer = draggingLayerIndex, let sourceUI = draggingUIIndex else {
+            model.activeLayer = layerIndex
+            return
+        }
+        let targetUI = targetUIIndex ?? sourceUI
+
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+            if sourceUI != targetUI {
+                let targetLayer = (model.layers.count - 1) - targetUI
+                model.moveLayer(from: sourceLayer, to: targetLayer)
+            } else {
+                model.activeLayer = sourceLayer
+            }
+            draggingLayerIndex = nil
+            draggingUIIndex = nil
+            targetUIIndex = nil
+            dragTranslationY = 0
+            hoveredLayerIndex = nil
+        }
+    }
+}
+
+private struct LayerDropSlotIndicator: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(StudioTheme.accent.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(StudioTheme.accent.opacity(0.12))
+            )
+            .frame(height: 56)
+            .overlay(
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.up.and.down")
+                        .font(.system(size: 11, weight: .bold))
+                    Text("Drop layer here")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundColor(StudioTheme.accent.opacity(0.85))
+            )
+    }
 }
 
 // MARK: - Procreate Layer Row
@@ -138,6 +300,8 @@ struct LayersPopover: View {
 struct ProcreateLayerRow: View {
     let layer: LayerInfo
     let selected: Bool
+    let isHovered: Bool
+    let isDragging: Bool
     let thumbnail: CGImage?
     let thumbWidth: Int
     let thumbHeight: Int
@@ -147,13 +311,11 @@ struct ProcreateLayerRow: View {
     let onRename: (String) -> Void
     let onDelete: () -> Void
     let onDuplicate: () -> Void
-    let onMoveHere: (Int) -> Void
     let onSetBlendMode: (String) -> Void
     let onSetOpacity: (Double) -> Void
 
     @State private var editing = false
     @State private var draft = ""
-    @State private var dropTargeted = false
     @State private var showBlendPopover = false
 
     var body: some View {
@@ -208,6 +370,9 @@ struct ProcreateLayerRow: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.plain)
+            .highPriorityGesture(TapGesture().onEnded {
+                showBlendPopover = true
+            })
             .popover(isPresented: $showBlendPopover, arrowEdge: .trailing) {
                 BlendModeAndOpacityPicker(
                     blendMode: layer.blendMode,
@@ -226,25 +391,24 @@ struct ProcreateLayerRow: View {
                 isOnBlue: selected,
                 action: onToggle
             )
+            .highPriorityGesture(TapGesture().onEnded {
+                onToggle()
+            })
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(selected ? StudioTheme.procreateBlue : Color(white: 0.17, opacity: 0.65))
+                .fill(selected ? StudioTheme.procreateBlue : (isHovered ? Color(white: 0.22, opacity: 0.75) : Color(white: 0.17, opacity: 0.65)))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(dropTargeted ? Color.white : (selected ? Color.white.opacity(0.2) : Color.clear), lineWidth: 1.5)
+                .stroke(
+                    isDragging ? StudioTheme.accent : (selected ? Color.white.opacity(0.25) : (isHovered ? Color.white.opacity(0.18) : Color.clear)),
+                    lineWidth: isDragging ? 2 : 1
+                )
         )
         .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
-        .draggable(String(layer.index))
-        .dropDestination(for: String.self, action: { items, _ in
-            guard let raw = items.first, let from = Int(raw), from != layer.index else { return false }
-            onMoveHere(from)
-            return true
-        }, isTargeted: { dropTargeted = $0 })
         .contextMenu {
             Button("Rename") {
                 draft = layer.name
@@ -255,6 +419,8 @@ struct ProcreateLayerRow: View {
             Button("Delete Layer", role: .destructive, action: onDelete)
                 .disabled(!canDelete)
         }
+        .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isHovered)
+        .animation(.spring(response: 0.25, dampingFraction: 0.75), value: isDragging)
     }
 }
 

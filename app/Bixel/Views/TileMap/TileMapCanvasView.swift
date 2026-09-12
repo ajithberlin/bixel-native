@@ -161,6 +161,7 @@ final class MapCanvas: NSView {
         wantsLayer = true
         guard let root = layer else { return }
         root.backgroundColor = NSColor(red: 0.07, green: 0.073, blue: 0.085, alpha: 1.0).cgColor
+        root.masksToBounds = true
 
         artboardShadowLayer.shadowColor = NSColor.black.cgColor
         artboardShadowLayer.shadowOpacity = 0.45

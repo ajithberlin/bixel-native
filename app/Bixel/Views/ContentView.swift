@@ -332,11 +332,13 @@ struct ContentView: View {
                             .frame(width: 1)
                     }
                     .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(2)
             }
 
             // Center Window: Main Editor Workspace (Canvas, top bar, layers/color popovers, timeline, dock)
             editorWorkspaceView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
             // Right Window: Full-Height Connected AI Agent Pane
             if showAI {
@@ -344,6 +346,7 @@ struct ContentView: View {
                     .fill(StudioTheme.hairlineStrong)
                     .frame(width: 1)
                     .frame(maxHeight: .infinity)
+                    .zIndex(2)
 
                 AIPanel(
                     model: model,
@@ -365,6 +368,7 @@ struct ContentView: View {
                 .frame(maxHeight: .infinity)
                 .background(StudioTheme.panel)
                 .transition(.move(edge: .trailing).combined(with: .opacity))
+                .zIndex(2)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -392,6 +396,7 @@ struct ContentView: View {
                 .id(projects.catalog.activeDocumentID)
                 .allowsHitTesting(projects.activeDocument != nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
 
             // Eyedropper Magnifying Loupe Overlay
             EyedropperOverlayView(model: model)
@@ -430,10 +435,42 @@ struct ContentView: View {
 
             // Top navigation bar & Bottom timeline
             spriteTopChrome
+
+            spriteCommandSink
         }
         .coordinateSpace(name: "CanvasCoordinateSpace")
         .disabled(projects.current == nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Sprite/animation menu commands: frame clipboard plus timeline navigation.
+    private var spriteCommandSink: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onReceive(NotificationCenter.default.publisher(for: .studioCopy)) { _ in model.copyFrame() }
+            .onReceive(NotificationCenter.default.publisher(for: .studioCut)) { _ in model.cutFrame() }
+            .onReceive(NotificationCenter.default.publisher(for: .studioPaste)) { _ in model.pasteFrame() }
+            .onReceive(NotificationCenter.default.publisher(for: .studioDelete)) { _ in
+                guard model.selectionRect == nil, model.transformRect == nil,
+                      model.floatingImport == nil else { return }
+                model.removeFrame()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .studioAddFrame)) { _ in
+                model.pause()
+                model.addFrame()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .studioDuplicateFrame)) { _ in
+                model.pause()
+                model.duplicateFrame()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .studioPrevFrame)) { _ in
+                model.pause()
+                model.goTo(model.frame - 1)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .studioNextFrame)) { _ in
+                model.pause()
+                model.goTo(model.frame + 1)
+            }
     }
 
     private var spriteTopChrome: some View {
@@ -536,6 +573,7 @@ struct ContentView: View {
         TileMapCanvasView(model: mapModel, viewport: viewport)
             .id(projects.catalog.activeDocumentID)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
     }
 
     /// Left column: tool dock + an always-visible tileset palette.
@@ -631,6 +669,10 @@ extension Notification.Name {
     static let studioCut = Notification.Name("studio.cut")
     static let studioPaste = Notification.Name("studio.paste")
     static let studioDelete = Notification.Name("studio.delete")
+    static let studioAddFrame = Notification.Name("studio.addFrame")
+    static let studioDuplicateFrame = Notification.Name("studio.duplicateFrame")
+    static let studioPrevFrame = Notification.Name("studio.prevFrame")
+    static let studioNextFrame = Notification.Name("studio.nextFrame")
     static let studioFlipH = Notification.Name("studio.flipH")
     static let studioFlipV = Notification.Name("studio.flipV")
     static let studioRotate = Notification.Name("studio.rotate")

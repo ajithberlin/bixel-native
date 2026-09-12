@@ -30,6 +30,34 @@ struct HomePageView: View {
     @State private var customWidthText = "32"
     @State private var customHeightText = "32"
     @State private var selectedStyle: String = "16-Bit Retro"
+    @State private var showCustomStylePopover = false
+    @State private var customStyleText = ""
+
+    private static let retroStyles: [String] = [
+        "16-Bit Retro",
+        "Classic 8-Bit",
+        "Game Boy (4 Colors)",
+        "PICO-8 (16 Colors)",
+        "Arcade Neo-Geo"
+    ]
+    private static let themeStyles: [String] = [
+        "Fantasy RPG",
+        "Cyberpunk Neon",
+        "Dark Fantasy / Gothic",
+        "Sci-Fi Space",
+        "Post-Apocalyptic",
+        "Cozy Cottagecore"
+    ]
+    private static let techniqueStyles: [String] = [
+        "Isometric Pixel",
+        "Top-Down RPG",
+        "Side-Scroller Platformer",
+        "Chibi / Cute Sprite",
+        "Dithered Retro"
+    ]
+    private static var allPresetStyles: [String] {
+        retroStyles + themeStyles + techniqueStyles
+    }
 
     struct ScreenPreset: Identifiable, Hashable {
         var id: String { name }
@@ -504,16 +532,83 @@ struct HomePageView: View {
 
                     // Art Style Menu
                     Menu {
-                        Button("16-Bit Retro") { selectedStyle = "16-Bit Retro" }
-                        Button("Classic 8-Bit") { selectedStyle = "Classic 8-Bit" }
-                        Button("Cyberpunk Neon") { selectedStyle = "Cyberpunk Neon" }
-                        Button("Fantasy RPG") { selectedStyle = "Fantasy RPG" }
-                        Button("Game Boy (4 Colors)") { selectedStyle = "Game Boy (4 Colors)" }
+                        // 1. None Option
+                        Button {
+                            selectedStyle = "None"
+                        } label: {
+                            if selectedStyle == "None" {
+                                Label("None (Freeform / No Style)", systemImage: "checkmark")
+                            } else {
+                                Text("None (Freeform / No Style)")
+                            }
+                        }
+
+                        Divider()
+
+                        // 2. Retro & Consoles
+                        Section("Retro & Consoles") {
+                            ForEach(Self.retroStyles, id: \.self) { style in
+                                Button {
+                                    selectedStyle = style
+                                } label: {
+                                    if selectedStyle == style {
+                                        Label(style, systemImage: "checkmark")
+                                    } else {
+                                        Text(style)
+                                    }
+                                }
+                            }
+                        }
+
+                        // 3. Game Themes
+                        Section("Game Themes") {
+                            ForEach(Self.themeStyles, id: \.self) { style in
+                                Button {
+                                    selectedStyle = style
+                                } label: {
+                                    if selectedStyle == style {
+                                        Label(style, systemImage: "checkmark")
+                                    } else {
+                                        Text(style)
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. Visual Techniques
+                        Section("Visual Techniques") {
+                            ForEach(Self.techniqueStyles, id: \.self) { style in
+                                Button {
+                                    selectedStyle = style
+                                } label: {
+                                    if selectedStyle == style {
+                                        Label(style, systemImage: "checkmark")
+                                    } else {
+                                        Text(style)
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        // 5. Custom Style
+                        Button {
+                            if selectedStyle != "None" && !Self.allPresetStyles.contains(selectedStyle) {
+                                customStyleText = selectedStyle
+                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                showCustomStylePopover = true
+                            }
+                        } label: {
+                            Label("Other (Custom Style)…", systemImage: "pencil.and.outline")
+                        }
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "paintpalette.fill")
                                 .font(.system(size: 10))
-                            Text(selectedStyle)
+                                .foregroundColor(selectedStyle == "None" ? StudioTheme.textDisabled : StudioTheme.bixelGreen)
+                            Text(selectedStyle == "None" ? "No Style" : selectedStyle)
                                 .font(.system(size: 11))
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 8))
@@ -526,6 +621,9 @@ struct HomePageView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .disabled(isAIGenerating)
+                    .popover(isPresented: $showCustomStylePopover, arrowEdge: .bottom) {
+                        customStylePopoverContent
+                    }
 
                     Spacer()
 
@@ -764,6 +862,101 @@ struct HomePageView: View {
         customWidthText = "\(selectedWidth)"
         customHeightText = "\(selectedHeight)"
         showCustomSizePopover = false
+    }
+
+    private var customStylePopoverContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Image(systemName: "pencil.and.outline")
+                    .foregroundColor(StudioTheme.bixelGreen)
+                    .font(.system(size: 12))
+                Text("Custom Art Style")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Spacer()
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Describe Style or Aesthetics")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                TextField("e.g. Vaporwave Pastel, Ghibli Pixel, Noir Shadow", text: $customStyleText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                    )
+                    .onSubmit { applyCustomStyle() }
+            }
+
+            // Quick Tag Suggestions
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Quick Ideas")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                let ideas = ["Vaporwave", "Steampunk", "Studio Ghibli", "Film Noir", "Pastel Anime", "Horror Dither"]
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                    ForEach(ideas, id: \.self) { idea in
+                        Button {
+                            customStyleText = idea
+                        } label: {
+                            Text(idea)
+                                .font(.system(size: 10, weight: .medium))
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .foregroundColor(StudioTheme.textSecondary)
+                                .background(StudioTheme.homeCard, in: RoundedRectangle(cornerRadius: 4))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Divider().overlay(StudioTheme.homeCardBorder)
+
+            HStack {
+                Button("Cancel") {
+                    showCustomStylePopover = false
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundColor(StudioTheme.textSecondary)
+
+                Spacer()
+
+                Button("Apply") {
+                    applyCustomStyle()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(StudioTheme.bixelGreen)
+                .foregroundColor(.black)
+            }
+        }
+        .padding(14)
+        .frame(width: 250)
+        .background(StudioTheme.homeDark)
+    }
+
+    private func applyCustomStyle() {
+        let trimmed = customStyleText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            selectedStyle = trimmed
+        }
+        showCustomStylePopover = false
     }
 
     private func submitAIPrompt() {
@@ -1284,102 +1477,149 @@ struct NewProjectQuickDialog: View {
     @State private var height = 32
     @State private var cellSize = 16
 
+    private static let squarePresets: [Int] = [16, 32, 48, 64, 128, 256]
+    private static let screenPresets: [(w: Int, h: Int, label: String)] = [
+        (160, 144, "160×144 (GB)"),
+        (240, 160, "240×160 (GBA)"),
+        (320, 180, "320×180 (16:9)"),
+        (320, 240, "320×240 (4:3)")
+    ]
+
+    private static let mapPresets: [(cols: Int, rows: Int, label: String)] = [
+        (20, 15, "Small (20×15)"),
+        (40, 25, "Standard (40×25)"),
+        (60, 40, "Large (60×40)"),
+        (80, 50, "Epic (80×50)")
+    ]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("Create New Project")
-                .font(.system(size: 18, weight: .bold, design: .rounded))
-                .foregroundColor(.white)
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Project Name").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                TextField("e.g. Hero Sprite, Dungeon Map", text: $name)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Project Type").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                Picker("", selection: $mode) {
-                    Text("Normal").tag(WorkspaceMode.normal)
-                    Text("Map").tag(WorkspaceMode.map)
+            // Header
+            HStack(spacing: 10) {
+                Image(systemName: "plus.square.fill")
+                    .font(.system(size: 20))
+                    .foregroundColor(StudioTheme.bixelGreen)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New Project")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    Text("Configure your canvas dimensions and workspace")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
                 }
-                .pickerStyle(.segmented)
-            }
-
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mode == .map ? "Columns" : "Width (px)")
-                        .font(.caption).foregroundColor(StudioTheme.textSecondary)
-                    TextField("", value: $width, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mode == .map ? "Rows" : "Height (px)")
-                        .font(.caption).foregroundColor(StudioTheme.textSecondary)
-                    TextField("", value: $height, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                }
-
-                if mode == .map {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Tile (px)").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                        TextField("", value: $cellSize, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 70)
-                    }
-                }
-
                 Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .padding(6)
+                        .background(StudioTheme.homeCard, in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
 
-                // Quick presets
-                if mode != .map {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        Text("Presets").font(.caption).foregroundColor(StudioTheme.textSecondary)
-                        HStack(spacing: 4) {
-                            presetButton("8²") { width = 8; height = 8 }
-                            presetButton("16²") { width = 16; height = 16 }
-                            presetButton("24²") { width = 24; height = 24 }
-                            presetButton("32²") { width = 32; height = 32 }
-                            presetButton("48²") { width = 48; height = 48 }
-                            presetButton("64²") { width = 64; height = 64 }
-                            presetButton("128²") { width = 128; height = 128 }
-                            presetButton("256²") { width = 256; height = 256 }
+            // Project Name
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Project Name")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12))
+                        .foregroundColor(StudioTheme.textDisabled)
+                    TextField("e.g. Hero Sprite, Dungeon Level", text: $name)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .foregroundColor(.white)
+                    if !name.isEmpty {
+                        Button { name = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(StudioTheme.textDisabled)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                )
             }
+
+            // Project Type
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Project Type")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                HStack(spacing: 10) {
+                    modeSelectionCard(
+                        title: "Pixel Art Canvas",
+                        subtitle: "Frames, layers & animation",
+                        icon: "paintpalette.fill",
+                        targetMode: .normal
+                    )
+                    modeSelectionCard(
+                        title: "Tilemap Designer",
+                        subtitle: "Grid cells & stamping",
+                        icon: "square.grid.3x3.fill",
+                        targetMode: .map
+                    )
+                }
+            }
+
+            // Dimensions and Presets
+            if mode == .normal {
+                normalDimensionsSection
+            } else {
+                mapDimensionsSection
+            }
+
+            // Canvas Summary Pill
+            summaryPill
 
             Divider().overlay(StudioTheme.homeCardBorder)
 
+            // Footer
             HStack {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 12))
+                    .foregroundColor(StudioTheme.textSecondary)
 
                 Spacer()
 
-                Button("Create Project") {
-                    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
-                    if mode == .map {
-                        if let project = store.createProject(name: projName, mode: .map,
-                                                             width: max(1, width), height: max(1, height),
-                                                             cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
-                            onCreated(project)
-                        }
-                    } else if let project = store.createProject(name: projName, mode: .normal, width: width, height: height) {
-                        onCreated(project)
+                Button {
+                    createProjectAction()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("Create Project")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
                     }
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(StudioTheme.bixelGreen)
+                    )
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(StudioTheme.bixelGreen)
-                .foregroundColor(.black)
+                .buttonStyle(.plain)
                 .keyboardShortcut(.defaultAction)
+                .disabled(width < 1 || height < 1)
             }
         }
-        .padding(24)
-        .frame(width: 440)
+        .padding(22)
+        .frame(width: 480)
         .background(StudioTheme.homeDark)
         .onChange(of: mode) { value in
             if value == .map {
@@ -1392,13 +1632,273 @@ struct NewProjectQuickDialog: View {
         }
     }
 
-    private func presetButton(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(label, action: action)
-            .buttonStyle(.plain)
-            .font(.system(size: 10, design: .monospaced))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(StudioTheme.homeCard, in: RoundedRectangle(cornerRadius: 4))
+    private var normalDimensionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Dimension Inputs & Aspect Ratio
+            HStack(spacing: 12) {
+                dimensionField(label: "Width", value: $width, unit: "px")
+
+                Text("×")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.top, 18)
+
+                dimensionField(label: "Height", value: $height, unit: "px")
+
+                Spacer()
+
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Aspect Ratio")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    HStack(spacing: 5) {
+                        aspectButton("1:1") { height = width }
+                        aspectButton("4:3") { height = max(1, width * 3 / 4) }
+                        aspectButton("16:9") { height = max(1, width * 9 / 16) }
+                        aspectButton("Swap ⇄") {
+                            let temp = width
+                            width = height
+                            height = temp
+                        }
+                    }
+                }
+            }
+
+            // Presets Rows
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Canvas Presets")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                // Row 1: Squares
+                HStack(spacing: 6) {
+                    ForEach(Self.squarePresets, id: \.self) { sz in
+                        presetPill(label: "\(sz) × \(sz)", isSelected: width == sz && height == sz) {
+                            width = sz
+                            height = sz
+                        }
+                    }
+                }
+
+                // Row 2: Screens
+                HStack(spacing: 6) {
+                    ForEach(Self.screenPresets, id: \.label) { p in
+                        presetPill(label: p.label, isSelected: width == p.w && height == p.h) {
+                            width = p.w
+                            height = p.h
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var mapDimensionsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                dimensionField(label: "Columns", value: $width, unit: "tiles")
+                Text("×")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .padding(.top, 18)
+                dimensionField(label: "Rows", value: $height, unit: "tiles")
+                Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Tile Size")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    HStack(spacing: 5) {
+                        ForEach([8, 16, 32], id: \.self) { sz in
+                            presetPill(label: "\(sz)px", isSelected: cellSize == sz) {
+                                cellSize = sz
+                            }
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Map Size Presets")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(StudioTheme.textSecondary)
+                HStack(spacing: 6) {
+                    ForEach(Self.mapPresets, id: \.label) { p in
+                        presetPill(label: p.label, isSelected: width == p.cols && height == p.rows) {
+                            width = p.cols
+                            height = p.rows
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func modeSelectionCard(title: String, subtitle: String, icon: String, targetMode: WorkspaceMode) -> some View {
+        let isSelected = mode == targetMode
+        return Button {
+            mode = targetMode
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                    .foregroundColor(isSelected ? StudioTheme.bixelGreen : StudioTheme.textSecondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(isSelected ? .white : StudioTheme.textSecondary)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundColor(StudioTheme.textDisabled)
+                }
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(StudioTheme.bixelGreen)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? StudioTheme.bixelGreenSoft : StudioTheme.panelElevated)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? StudioTheme.bixelGreen.opacity(0.8) : StudioTheme.homeCardBorder, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func dimensionField(label: String, value: Binding<Int>, unit: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(StudioTheme.textSecondary)
+            HStack(spacing: 4) {
+                TextField("", value: value, format: .number)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .frame(width: 50)
+                Text(unit)
+                    .font(.system(size: 10))
+                    .foregroundColor(StudioTheme.textDisabled)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(StudioTheme.panelElevated, in: RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+            )
+        }
+    }
+
+    private func presetPill(label: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: isSelected ? .bold : .medium, design: .monospaced))
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .foregroundColor(isSelected ? StudioTheme.bixelGreen : StudioTheme.textSecondary)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(isSelected ? StudioTheme.bixelGreenSoft : StudioTheme.homeCard)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(isSelected ? StudioTheme.bixelGreen.opacity(0.8) : StudioTheme.homeCardBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func aspectButton(_ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .foregroundColor(StudioTheme.textSecondary)
+                .background(StudioTheme.homeCard, in: RoundedRectangle(cornerRadius: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(StudioTheme.homeCardBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var summaryPill: some View {
+        HStack(spacing: 8) {
+            Image(systemName: mode == .map ? "square.grid.3x3.fill" : "aspectratio")
+                .font(.system(size: 11))
+                .foregroundColor(StudioTheme.bixelGreen)
+
+            if mode == .map {
+                Text("\(width) × \(height) tiles • \(cellSize)px grid")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(StudioTheme.textSecondary)
+                Spacer()
+                Text("\(width * cellSize) × \(height * cellSize) px total")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(StudioTheme.textDisabled)
+            } else {
+                Text("\(width) × \(height) px • \(aspectRatioLabel)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(StudioTheme.textSecondary)
+                Spacer()
+                Text("\(width * height) px total")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(StudioTheme.textDisabled)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(StudioTheme.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var aspectRatioLabel: String {
+        if width == height { return "1:1 Square" }
+        let gcdVal = gcd(width, height)
+        let rw = width / gcdVal
+        let rh = height / gcdVal
+        if (rw == 4 && rh == 3) || (rw == 16 && rh == 9) || (rw == 3 && rh == 2) || (rw == 10 && rh == 9) {
+            return "\(rw):\(rh)"
+        }
+        let ratio = Double(width) / Double(max(1, height))
+        return String(format: "%.2f:1", ratio)
+    }
+
+    private func gcd(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            let t = y
+            y = x % y
+            x = t
+        }
+        return max(1, x)
+    }
+
+    private func createProjectAction() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
+        if mode == .map {
+            if let project = store.createProject(name: projName, mode: .map,
+                                                 width: max(1, width), height: max(1, height),
+                                                 cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
+                onCreated(project)
+            }
+        } else if let project = store.createProject(name: projName, mode: .normal, width: max(1, width), height: max(1, height)) {
+            onCreated(project)
+        }
     }
 }
 

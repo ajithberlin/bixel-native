@@ -40,16 +40,36 @@ struct BixelApp: App {
                 Button("Delete") { post(.studioDelete) }
                 Divider()
                 Button("Flip Horizontal") { post(.studioFlipH) }
-                    .keyboardShortcut("x", modifiers: [.command])
+                    .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("Flip Vertical") { post(.studioFlipV) }
-                    .keyboardShortcut("y", modifiers: [.command])
+                    .keyboardShortcut("u", modifiers: [.command, .shift])
                 Button("Rotate Clockwise") { post(.studioRotate) }
-                    .keyboardShortcut("c", modifiers: [.command])
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
                 Divider()
                 Button("Resize Map…") { post(.studioMapResize) }
                 Button("Export Tiled JSON…") { post(.studioExportTiledJSON) }
                 Button("Export Map CSV…") { post(.studioExportCSV) }
                 Button("Export Map PNG…") { post(.studioExportMapPNG) }
+            }
+            CommandMenu("Frame") {
+                Button("Add Frame") { post(.studioAddFrame) }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("Duplicate Frame") { post(.studioDuplicateFrame) }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Delete Frame") { post(.studioDelete) }
+                    .keyboardShortcut(.delete, modifiers: .command)
+                Divider()
+                Button("Copy Frame") { post(.studioCopy) }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                Button("Cut Frame") { post(.studioCut) }
+                    .keyboardShortcut("x", modifiers: [.command, .shift])
+                Button("Paste Frame") { post(.studioPaste) }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                Divider()
+                Button("Previous Frame") { post(.studioPrevFrame) }
+                    .keyboardShortcut(",", modifiers: .command)
+                Button("Next Frame") { post(.studioNextFrame) }
+                    .keyboardShortcut(".", modifiers: .command)
             }
             CommandGroup(after: .sidebar) {
                 Divider()

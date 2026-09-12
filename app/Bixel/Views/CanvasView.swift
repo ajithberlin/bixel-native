@@ -304,6 +304,7 @@ final class PixelCanvas: NSView {
 
         // Workspace background: graphite gray (#202226)
         root.backgroundColor = Self.workspaceBaseColor.cgColor
+        root.masksToBounds = true
 
         // Artboard shadow layer
         artboardShadowLayer.shadowColor = NSColor.black.cgColor
@@ -1190,6 +1191,19 @@ final class PixelCanvas: NSView {
             default: super.keyDown(with: event)
             }
             return
+        }
+
+        // Frame navigation and deletion when no selection/transform is active.
+        if model.selectionRect == nil, model.transformRect == nil, model.floatingImport == nil {
+            if event.keyCode == 51 || event.keyCode == 117 {
+                model.removeFrame()
+                return
+            }
+            switch event.charactersIgnoringModifiers {
+            case ",": model.pause(); model.goTo(model.frame - 1); return
+            case ".": model.pause(); model.goTo(model.frame + 1); return
+            default: break
+            }
         }
 
         switch event.keyCode {

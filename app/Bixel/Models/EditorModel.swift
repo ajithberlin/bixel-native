@@ -232,7 +232,7 @@ final class EditorModel: ObservableObject {
     /// Stable identities for timeline frames so reordering animates as a move
     /// (index-keyed identities would just swap content in place).
     @Published private(set) var frameIDs: [UUID] = []
-    private var layerIDs: [UUID] = []
+    @Published private(set) var layerIDs: [UUID] = []
     @Published var selectionRect: CGRect?
     @Published var transformRect: CGRect?
     /// Frames captured via copy/cut, ready to be pasted after the current frame.
