@@ -96,6 +96,12 @@ final class TileMapModel: ObservableObject {
     @Published var tileName: String?
     @Published var autotileEnabled = false
 
+    // Projection (mirrors the Rust TileMap; kept in sync via reloadGeometry).
+    @Published var orientation: MapOrientation = .orthogonal
+    @Published var renderOrder: MapRenderOrder = .rightDown
+    @Published var staggerAxis: MapStaggerAxis = .y
+    @Published var staggerIndex: MapStaggerIndex = .odd
+
     /// True while the paste ghost is floating (committed on the next stamp).
     @Published var hasPasteGhost = false
 
@@ -138,18 +144,21 @@ final class TileMapModel: ObservableObject {
     init(width: Int, height: Int, tileWidth: Int = 16, tileHeight: Int = 16) {
         self.map = TileMap(width: width, height: height, tileWidth: tileWidth, tileHeight: tileHeight)
         reloadLayers()
+        reloadGeometry()
         registerTilesets()
     }
 
     init(map restored: TileMap) {
         self.map = restored
         reloadLayers()
+        reloadGeometry()
         registerTilesets()
     }
 
     init(json: String) throws {
         self.map = try TileMap(json: json)
         reloadLayers()
+        reloadGeometry()
         registerTilesets()
     }
 
@@ -179,6 +188,71 @@ final class TileMapModel: ObservableObject {
         } else {
             activeLayer = min(max(0, activeLayer), layers.count - 1)
         }
+    }
+
+    /// Pull the projection settings back out of the engine (after load/undo).
+    func reloadGeometry() {
+        orientation = map.orientation
+        renderOrder = map.renderOrder
+        staggerAxis = map.staggerAxis
+        staggerIndex = map.staggerIndex
+    }
+
+    // MARK: - Projection
+
+    func setOrientation(_ value: MapOrientation) {
+        guard value != map.orientation else { return }
+        map.snapshot()
+        map.setOrientation(value)
+        reloadGeometry()
+        selection = nil
+        commitChange()
+    }
+
+    func setRenderOrder(_ value: MapRenderOrder) {
+        guard value != map.renderOrder else { return }
+        map.snapshot()
+        map.setRenderOrder(value)
+        reloadGeometry()
+        commitChange()
+    }
+
+    func setStaggerAxis(_ value: MapStaggerAxis) {
+        guard value != map.staggerAxis else { return }
+        map.snapshot()
+        map.setStaggerAxis(value)
+        reloadGeometry()
+        commitChange()
+    }
+
+    func setStaggerIndex(_ value: MapStaggerIndex) {
+        guard value != map.staggerIndex else { return }
+        map.snapshot()
+        map.setStaggerIndex(value)
+        reloadGeometry()
+        commitChange()
+    }
+
+    /// Top-left screen pixel of a cell's tile image.
+    func cellOrigin(_ x: Int, _ y: Int) -> (x: Int, y: Int) {
+        map.cellOrigin(x: x, y: y)
+    }
+
+    /// Centre of a cell's tile image.
+    func cellCenter(_ x: Int, _ y: Int) -> (x: Int, y: Int) {
+        map.cellCenter(x: x, y: y)
+    }
+
+    /// Whole-map pixel -> cell. Returns nil off the artboard unless `clamp`.
+    func cell(atPixel pixel: (x: Int, y: Int), clamp: Bool = false) -> (x: Int, y: Int)? {
+        let hit = map.pixelToCell(x: Double(pixel.x), y: Double(pixel.y))
+        if clamp {
+            let cx = min(max(0, hit.x), max(0, width - 1))
+            let cy = min(max(0, hit.y), max(0, height - 1))
+            return (cx, cy)
+        }
+        guard hit.inside else { return nil }
+        return (hit.x, hit.y)
     }
 
     var isActiveLayerTile: Bool {
@@ -472,9 +546,8 @@ final class TileMapModel: ObservableObject {
             if selection.width == 1 && selection.height == 1 {
                 // A plain click on an object layer selects an object instead.
                 if isObjectActive {
-                    let px = CGFloat(selection.x * map.cellWidth + map.cellWidth / 2)
-                    let py = CGFloat(selection.y * map.cellHeight + map.cellHeight / 2)
-                    selectObject(at: px, y: py)
+                    let center = map.cellCenter(x: selection.x, y: selection.y)
+                    selectObject(at: CGFloat(center.x), y: CGFloat(center.y))
                 }
             }
         }
@@ -666,19 +739,40 @@ final class TileMapModel: ObservableObject {
         commitChange()
     }
 
+    /// Clamped pixel bounds of a cell selection in the composite. For isometric
+    /// maps this is the parallelogram's axis-aligned bounding box.
+    func compositeCropBounds(_ rect: MapCellRect) -> (x: Int, y: Int, width: Int, height: Int) {
+        let corners = [
+            (rect.x, rect.y),
+            (rect.x + rect.width - 1, rect.y),
+            (rect.x, rect.y + rect.height - 1),
+            (rect.x + rect.width - 1, rect.y + rect.height - 1),
+        ]
+        var minX = Int.max, minY = Int.max, maxX = Int.min, maxY = Int.min
+        for corner in corners {
+            let origin = map.cellOrigin(x: corner.0, y: corner.1)
+            minX = min(minX, origin.x)
+            minY = min(minY, origin.y)
+            maxX = max(maxX, origin.x + map.cellWidth)
+            maxY = max(maxY, origin.y + map.cellHeight)
+        }
+        let startX = max(0, minX)
+        let startY = max(0, minY)
+        let width = min(map.pixelWidth, maxX) - startX
+        let height = min(map.pixelHeight, maxY) - startY
+        return (startX, startY, max(0, width), max(0, height))
+    }
+
     func cropOfComposite(_ rect: MapCellRect) -> [UInt8] {
         let pixels = map.compositeRGBA()
         let fullW = map.pixelWidth
-        let cropW = rect.width * map.cellWidth
-        let cropH = rect.height * map.cellHeight
-        guard fullW > 0, cropW > 0, cropH > 0 else { return [] }
-        var out = [UInt8](repeating: 0, count: cropW * cropH * 4)
-        let startX = rect.x * map.cellWidth
-        let startY = rect.y * map.cellHeight
-        for row in 0..<cropH {
-            let src = ((startY + row) * fullW + startX) * 4
-            let dst = row * cropW * 4
-            for i in 0..<cropW * 4 {
+        let bounds = compositeCropBounds(rect)
+        guard fullW > 0, bounds.width > 0, bounds.height > 0 else { return [] }
+        var out = [UInt8](repeating: 0, count: bounds.width * bounds.height * 4)
+        for row in 0..<bounds.height {
+            let src = ((bounds.y + row) * fullW + bounds.x) * 4
+            let dst = row * bounds.width * 4
+            for i in 0..<bounds.width * 4 {
                 out[dst + i] = pixels[src + i]
             }
         }
@@ -686,9 +780,10 @@ final class TileMapModel: ObservableObject {
     }
 
     private func croppedCompositePNG(_ rect: MapCellRect) -> Data? {
+        let bounds = compositeCropBounds(rect)
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
         let rgba = cropOfComposite(rect)
-        guard let cg = makeCGImage(pixels: rgba, width: rect.width * map.cellWidth,
-                                   height: rect.height * map.cellHeight) else { return nil }
+        guard let cg = makeCGImage(pixels: rgba, width: bounds.width, height: bounds.height) else { return nil }
         let rep = NSBitmapImageRep(cgImage: cg)
         return rep.representation(using: .png, properties: [:])
     }
@@ -723,8 +818,9 @@ final class TileMapModel: ObservableObject {
 
     private func beginObjectTool(x: Int, y: Int) {
         guard isObjectActive else { return }
-        let px = Double(x) * Double(map.cellWidth)
-        let py = Double(y) * Double(map.cellHeight)
+        let center = map.cellCenter(x: x, y: y)
+        let px = Double(center.x)
+        let py = Double(center.y)
         if let hit = object(at: CGPoint(x: px, y: py)) {
             selectedObjectID = hit.id
             objectDrag = (hit.id, px, py, .move)
@@ -740,8 +836,9 @@ final class TileMapModel: ObservableObject {
 
     private func continueObjectTool(x: Int, y: Int) {
         guard let drag = objectDrag else { return }
-        let px = Double(x) * Double(map.cellWidth)
-        let py = Double(y) * Double(map.cellHeight)
+        let center = map.cellCenter(x: x, y: y)
+        let px = Double(center.x)
+        let py = Double(center.y)
         let objects = objectsOnActiveLayer()
         guard let row = objects.first(where: { $0.id == drag.objectID }) else { return }
         switch drag.mode {
@@ -784,6 +881,7 @@ final class TileMapModel: ObservableObject {
     func undo() {
         if map.undo() {
             reloadLayers()
+            reloadGeometry()
             registerTilesets()
             commitChange()
         }
@@ -792,6 +890,7 @@ final class TileMapModel: ObservableObject {
     func redo() {
         if map.redo() {
             reloadLayers()
+            reloadGeometry()
             registerTilesets()
             commitChange()
         }
@@ -911,6 +1010,9 @@ final class TileMapModel: ObservableObject {
             "pixel_width": map.pixelWidth,
             "pixel_height": map.pixelHeight,
             "active_layer": activeLayer,
+            "orientation": map.orientation.rawValue,
+            "orientation_name": map.orientation.label,
+            "render_order": map.renderOrder.label,
         ]
         state["layers"] = layers.map { layer -> [String: Any] in
             ["index": layer.index, "name": layer.name, "visible": layer.visible,
@@ -1076,6 +1178,28 @@ final class TileMapModel: ObservableObject {
             map.snapshot()
             map.resize(width: w, height: h)
             return ["columns": map.columns, "rows": map.rows]
+
+        case "map_set_orientation":
+            let raw = try string("orientation").lowercased()
+            let value: MapOrientation
+            switch raw {
+            case "orthogonal": value = .orthogonal
+            case "isometric": value = .isometric
+            case "staggered", "isometric_staggered": value = .staggered
+            default: throw AgentOpError("'map_set_orientation' expects orthogonal, isometric or staggered")
+            }
+            map.snapshot()
+            map.setOrientation(value)
+            reloadGeometry()
+            return ["orientation": value.label, "pixel_width": map.pixelWidth, "pixel_height": map.pixelHeight]
+
+        case "map_set_tileset_offset":
+            let index = try int("index")
+            guard map.setTilesetTileOffset(index, x: try int("x"), y: try int("y")) else {
+                throw AgentOpError("tileset \(index) is out of range")
+            }
+            registerTilesets()
+            return ["index": index]
 
         case "map_add_object":
             let target = try layer()

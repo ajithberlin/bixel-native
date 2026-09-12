@@ -27,7 +27,7 @@ struct MapLeftDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.map.canUndo)
-                .help("Undo (⌘Z)")
+                .toolHoverEffect(name: "Undo", shortcut: "⌘Z", details: "Revert the last map edit or tile stroke", cornerRadius: 6)
 
                 Button { model.redo() } label: {
                     Image(systemName: "arrow.uturn.forward")
@@ -37,7 +37,7 @@ struct MapLeftDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.map.canRedo)
-                .help("Redo (⇧⌘Z)")
+                .toolHoverEffect(name: "Redo", shortcut: "⇧⌘Z", details: "Re-apply the previously undone tile edit", cornerRadius: 6)
             }
 
             if !model.brush.pattern.isEmpty {
@@ -56,7 +56,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Flip horizontal (X)")
+                    .toolHoverEffect(name: "Flip Horizontal", shortcut: "X", details: "Mirror armed tile brush horizontally", cornerRadius: 4)
+
                     Button { model.flipBrushV() } label: {
                         Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down")
                             .font(.system(size: 11))
@@ -64,7 +65,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Flip vertical (Y)")
+                    .toolHoverEffect(name: "Flip Vertical", shortcut: "Y", details: "Mirror armed tile brush vertically", cornerRadius: 4)
+
                     Button { model.rotateBrushCW() } label: {
                         Image(systemName: "rotate.right")
                             .font(.system(size: 12))
@@ -72,7 +74,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Rotate clockwise (C)")
+                    .toolHoverEffect(name: "Rotate Clockwise", shortcut: "C", details: "Rotate tile brush 90° clockwise", cornerRadius: 4)
+
                     Button { model.clearBrush() } label: {
                         Image(systemName: "xmark.circle")
                             .font(.system(size: 11))
@@ -80,7 +83,7 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Clear brush")
+                    .toolHoverEffect(name: "Clear Brush", details: "Disarm the current tile pattern brush", cornerRadius: 4)
                 }
             }
 
@@ -93,7 +96,7 @@ struct MapLeftDock: View {
                     .frame(width: 34, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Map properties")
+            .toolHoverEffect(name: "Map Properties", details: "View and edit map metadata, dimensions, and custom properties", cornerRadius: 6)
 
             Button { pickImageLayer() } label: {
                 Image(systemName: "photo.badge.plus")
@@ -102,7 +105,7 @@ struct MapLeftDock: View {
                     .frame(width: 34, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Add an image as a layer (drag one from Assets, or pick a file)")
+            .toolHoverEffect(name: "Add Image Layer", details: "Import an image asset as a background or reference layer", cornerRadius: 6)
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 6)
@@ -116,7 +119,7 @@ struct MapLeftDock: View {
         .shadow(color: .black.opacity(0.45), radius: 20, y: 6)
         .sheet(isPresented: $showProperties) {
             MapPropertiesEditor(model: model, target: .map)
-                .frame(width: 320, height: 380)
+                .frame(width: 340, height: 540)
         }
     }
 
@@ -188,12 +191,13 @@ struct TilesetPanel: View {
                     defaultTileWidth: model.map.cellWidth,
                     defaultTileHeight: model.map.cellHeight,
                     onCancel: { addSheet = nil },
-                    onConfirm: { tw, th, margin, spacing in
-                        commitTileset(source, tw: tw, th: th, margin: margin, spacing: spacing)
+                    onConfirm: { tw, th, margin, spacing, offsetX, offsetY in
+                        commitTileset(source, tw: tw, th: th, margin: margin, spacing: spacing,
+                                      offsetX: offsetX, offsetY: offsetY)
                         addSheet = nil
                     }
                 )
-                .frame(width: 440, height: 460)
+                .frame(width: 440, height: 540)
             }
         }
     }
@@ -553,7 +557,8 @@ struct TilesetPanel: View {
                                 rgba: image.rgba, width: image.width, height: image.height)
     }
 
-    private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int) {
+    private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int,
+                               offsetX: Int = 0, offsetY: Int = 0) {
         guard let rel = store.persistImageAsset(data: source.data, name: source.name) else {
             store.error = "Could not copy the tileset into the project."
             return
@@ -565,6 +570,9 @@ struct TilesetPanel: View {
                                                  rgba: source.rgba,
                                                  imageWidth: source.width, imageHeight: source.height,
                                                  tileWidth: tw, tileHeight: th, margin: margin, spacing: spacing)
+            if offsetX != 0 || offsetY != 0 {
+                model.map.setTilesetTileOffset(index, x: offsetX, y: offsetY)
+            }
             model.attachTilesetImage(index, cgImage: source.cgImage)
             model.commitChange()
             activeTileset = max(0, tilesetList.count - 1)
@@ -911,12 +919,14 @@ private struct AddTilesetSheet: View {
     let defaultTileWidth: Int
     let defaultTileHeight: Int
     let onCancel: () -> Void
-    let onConfirm: (Int, Int, Int, Int) -> Void
+    let onConfirm: (Int, Int, Int, Int, Int, Int) -> Void
 
     @State private var tileWidth = 16
     @State private var tileHeight = 16
     @State private var margin = 0
     @State private var spacing = 0
+    @State private var offsetX = 0
+    @State private var offsetY = 0
 
     private var slicing: (columns: Int, tiles: Int) {
         let tw = max(1, tileWidth), th = max(1, tileHeight)
@@ -960,12 +970,26 @@ private struct AddTilesetSheet: View {
                 stepperRow("Spacing", value: $spacing, in: 0...64)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Draw offset (tileoffset)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                HStack(spacing: 10) {
+                    offsetField("X", value: $offsetX)
+                    offsetField("Y", value: $offsetY)
+                    Spacer()
+                }
+                Text("Shift every tile when compositing. Isometric art often uses Y = −tile height ÷ 2.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
                     .help("Cancel adding the tileset")
-                Button("Add tileset") { onConfirm(tileWidth, tileHeight, margin, spacing) }
+                Button("Add tileset") { onConfirm(tileWidth, tileHeight, margin, spacing, offsetX, offsetY) }
                     .buttonStyle(.borderedProminent)
                     .disabled(slicing.tiles == 0)
                     .keyboardShortcut(.defaultAction)
@@ -984,6 +1008,17 @@ private struct AddTilesetSheet: View {
             Text(title).font(.system(size: 12))
             Spacer()
             Stepper(value: value, in: range) { Text("\(value.wrappedValue)").frame(width: 36, alignment: .trailing) }
+        }
+    }
+
+    private func offsetField(_ title: String, value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+            Stepper(value: value, in: -512...512) {
+                Text("\(value.wrappedValue)").frame(width: 34, alignment: .trailing)
+            }
         }
     }
 }
@@ -1589,6 +1624,9 @@ struct MapPropertiesEditor: View {
                 Button("Save") { save() }.buttonStyle(.borderedProminent).controlSize(.small)
                     .help("Save these properties to the map")
             }
+            if target == .map {
+                projectionSection
+            }
             if props.isEmpty {
                 Text("No custom properties yet.")
                     .font(.caption)
@@ -1616,6 +1654,60 @@ struct MapPropertiesEditor: View {
 
     private func reload() {
         props = model.map.properties(target: target.code, layer: target.layerIndex, objectID: target.objectID)
+    }
+
+    @ViewBuilder
+    private var projectionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Projection")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Picker("Orientation", selection: Binding(
+                get: { model.orientation },
+                set: { model.setOrientation($0) }
+            )) {
+                ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.menu)
+            .help("Orthogonal, isometric diamond or isometric staggered layout")
+
+            if model.orientation.isIsometric {
+                Picker("Render order", selection: Binding(
+                    get: { model.renderOrder },
+                    set: { model.setRenderOrder($0) }
+                )) {
+                    ForEach(MapRenderOrder.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .help("Painter's order for overlapping isometric tiles")
+            }
+
+            if model.orientation == .staggered {
+                HStack(spacing: 12) {
+                    Picker("Axis", selection: Binding(
+                        get: { model.staggerAxis },
+                        set: { model.setStaggerAxis($0) }
+                    )) {
+                        ForEach(MapStaggerAxis.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Index", selection: Binding(
+                        get: { model.staggerIndex },
+                        set: { model.setStaggerIndex($0) }
+                    )) {
+                        ForEach(MapStaggerIndex.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                }
+                .help("Which rows/columns are offset by half a tile")
+            }
+
+            Text("Isometric maps project diamond tiles — use a 2:1 tile size (e.g. 32×16) and a negative tile offset for tall art.")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider().overlay(StudioTheme.hairline)
+        }
     }
 
     private func save() {

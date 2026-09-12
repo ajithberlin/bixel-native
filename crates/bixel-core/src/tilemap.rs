@@ -309,6 +309,402 @@ pub fn mask_to_index(mask: u8, count: usize) -> usize {
     }
 }
 
+// -------------------------------------------------------------- orientation
+//
+// Tiled-compatible projection math shared by the map editor and the composite
+// renderer. The formulas mirror libtiled's `IsometricRenderer` /
+// `StaggeredRenderer` so files authored in Tiled land in the same screen
+// coordinates. `Staggered` is Tiled's isometric-staggered layout (diamond
+// tiles on a half-offset grid); `Hexagonal` is parse-only and not rendered.
+
+/// Tiled map orientation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientation {
+    Orthogonal,
+    Isometric,
+    Staggered,
+    Hexagonal,
+}
+
+impl Orientation {
+    pub fn as_tiled(self) -> &'static str {
+        match self {
+            Orientation::Orthogonal => "orthogonal",
+            Orientation::Isometric => "isometric",
+            Orientation::Staggered => "staggered",
+            Orientation::Hexagonal => "hexagonal",
+        }
+    }
+
+    /// Parse the Tiled `orientation` string. `isometric_staggered` is accepted
+    /// as an alias for Tiled's `staggered` layout (used by some exporters).
+    pub fn from_tiled(s: &str) -> Option<Self> {
+        match s {
+            "orthogonal" => Some(Orientation::Orthogonal),
+            "isometric" => Some(Orientation::Isometric),
+            "staggered" | "isometric_staggered" | "isometric-staggered" => Some(Orientation::Staggered),
+            "hexagonal" => Some(Orientation::Hexagonal),
+            _ => None,
+        }
+    }
+
+    pub fn is_isometric(self) -> bool {
+        matches!(self, Orientation::Isometric | Orientation::Staggered)
+    }
+}
+
+/// Painter's-algorithm order for overlapping isometric tiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderOrder {
+    RightDown,
+    RightUp,
+    LeftDown,
+    LeftUp,
+}
+
+impl RenderOrder {
+    pub fn as_tiled(self) -> &'static str {
+        match self {
+            RenderOrder::RightDown => "right-down",
+            RenderOrder::RightUp => "right-up",
+            RenderOrder::LeftDown => "left-down",
+            RenderOrder::LeftUp => "left-up",
+        }
+    }
+
+    pub fn from_tiled(s: &str) -> Self {
+        match s {
+            "right-up" => RenderOrder::RightUp,
+            "left-down" => RenderOrder::LeftDown,
+            "left-up" => RenderOrder::LeftUp,
+            _ => RenderOrder::RightDown,
+        }
+    }
+}
+
+/// Axis along which staggered rows/columns are offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaggerAxis {
+    X,
+    Y,
+}
+
+impl StaggerAxis {
+    pub fn as_tiled(self) -> &'static str {
+        match self {
+            StaggerAxis::X => "x",
+            StaggerAxis::Y => "y",
+        }
+    }
+    pub fn from_tiled(s: &str) -> Self {
+        if s == "x" {
+            StaggerAxis::X
+        } else {
+            StaggerAxis::Y
+        }
+    }
+}
+
+/// Which rows/columns get the half-tile offset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaggerIndex {
+    Odd,
+    Even,
+}
+
+impl StaggerIndex {
+    pub fn as_tiled(self) -> &'static str {
+        match self {
+            StaggerIndex::Odd => "odd",
+            StaggerIndex::Even => "even",
+        }
+    }
+    pub fn from_tiled(s: &str) -> Self {
+        if s == "even" {
+            StaggerIndex::Even
+        } else {
+            StaggerIndex::Odd
+        }
+    }
+}
+
+/// Everything the projection math needs about a map. Cheap to copy; build one
+/// per operation with [`MapGeometry::new`].
+#[derive(Debug, Clone, Copy)]
+pub struct MapGeometry {
+    pub orientation: Orientation,
+    pub columns: usize,
+    pub rows: usize,
+    pub tile_width: usize,
+    pub tile_height: usize,
+    pub stagger_axis: StaggerAxis,
+    pub stagger_index: StaggerIndex,
+}
+
+impl MapGeometry {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        orientation: Orientation,
+        columns: usize,
+        rows: usize,
+        tile_width: usize,
+        tile_height: usize,
+        stagger_axis: StaggerAxis,
+        stagger_index: StaggerIndex,
+    ) -> Self {
+        MapGeometry {
+            orientation,
+            columns,
+            rows,
+            tile_width: tile_width.max(1),
+            tile_height: tile_height.max(1),
+            stagger_axis,
+            stagger_index,
+        }
+    }
+
+    fn tw(&self) -> i64 {
+        self.tile_width as i64
+    }
+    fn th(&self) -> i64 {
+        self.tile_height as i64
+    }
+    fn stagger_even(&self) -> bool {
+        self.stagger_index == StaggerIndex::Even
+    }
+    fn do_stagger_x(&self, x: i64) -> bool {
+        self.stagger_axis == StaggerAxis::X && ((x & 1) != 0) ^ self.stagger_even()
+    }
+    fn do_stagger_y(&self, y: i64) -> bool {
+        self.stagger_axis == StaggerAxis::Y && ((y & 1) != 0) ^ self.stagger_even()
+    }
+
+    /// Whole-map pixel bounds. Isometric and staggered canvases are sized to
+    /// contain every tile image, including the half-tile stagger margins.
+    pub fn pixel_size(&self) -> (usize, usize) {
+        let (w, h) = (self.columns as i64, self.rows as i64);
+        let (tw, th) = (self.tw(), self.th());
+        let (px, py) = match self.orientation {
+            Orientation::Orthogonal | Orientation::Hexagonal => (w * tw, h * th),
+            Orientation::Isometric => ((w + h + 1) * tw / 2, (w + h) * th / 2),
+            Orientation::Staggered => match self.stagger_axis {
+                StaggerAxis::Y => ((2 * w + 1) * tw / 2, (h + 1) * th / 2),
+                StaggerAxis::X => ((w + 1) * tw / 2, (2 * h + 1) * th / 2),
+            },
+        };
+        (px.max(0) as usize, py.max(0) as usize)
+    }
+
+    /// Top-left corner of a cell's tile image in whole-map screen pixels.
+    pub fn tile_origin(&self, cx: i64, cy: i64) -> (i64, i64) {
+        let (tw, th) = (self.tw(), self.th());
+        match self.orientation {
+            Orientation::Orthogonal | Orientation::Hexagonal => (cx * tw, cy * th),
+            Orientation::Isometric => {
+                let origin_x = self.rows as i64 * tw / 2;
+                ((cx - cy) * tw / 2 + origin_x, (cx + cy) * th / 2)
+            }
+            Orientation::Staggered => match self.stagger_axis {
+                StaggerAxis::Y => {
+                    let mut x = cx * tw;
+                    if self.do_stagger_y(cy) {
+                        x += tw / 2;
+                    }
+                    (x, cy * th / 2)
+                }
+                StaggerAxis::X => {
+                    let mut y = cy * th;
+                    if self.do_stagger_x(cx) {
+                        y += th / 2;
+                    }
+                    (cx * tw / 2, y)
+                }
+            },
+        }
+    }
+
+    /// Centre of a cell's tile image in whole-map screen pixels.
+    pub fn tile_center(&self, cx: i64, cy: i64) -> (i64, i64) {
+        let (x, y) = self.tile_origin(cx, cy);
+        (x + self.tw() / 2, y + self.th() / 2)
+    }
+
+    /// Whole-map screen pixel -> integer cell coordinate (may fall outside the
+    /// map bounds; callers clamp).
+    pub fn pixel_to_cell(&self, px: f64, py: f64) -> (i64, i64) {
+        let (tw, th) = (self.tw() as f64, self.th() as f64);
+        match self.orientation {
+            Orientation::Orthogonal | Orientation::Hexagonal => {
+                ((px / tw).floor() as i64, (py / th).floor() as i64)
+            }
+            Orientation::Isometric => {
+                let origin_x = self.rows as i64 as f64 * tw / 2.0;
+                let x = (px - origin_x) / (tw / 2.0);
+                let y = py / (th / 2.0);
+                (
+                    ((x + y - 1.0) / 2.0).floor() as i64,
+                    ((y - x + 1.0) / 2.0).floor() as i64,
+                )
+            }
+            Orientation::Staggered => self.staggered_pixel_to_cell(px, py),
+        }
+    }
+
+    fn staggered_pixel_to_cell(&self, px: f64, py: f64) -> (i64, i64) {
+        let (tw, th) = (self.tw() as f64, self.th() as f64);
+        let even = self.stagger_even();
+        match self.stagger_axis {
+            StaggerAxis::Y => {
+                let aligned_y = py - if even { th / 2.0 } else { 0.0 };
+                let mut rx = (px / tw).floor() as i64;
+                let ry = (aligned_y / th).floor() as i64;
+                let rel_x = px - rx as f64 * tw;
+                let rel_y = aligned_y - ry as f64 * th;
+                let mut iy = ry * 2;
+                if even {
+                    iy += 1;
+                }
+                let y_pos = rel_x * (th / tw);
+                let side = th / 2.0;
+                if side - y_pos > rel_y {
+                    let (a, b) = self.stag_top_left(rx, iy);
+                    rx = a;
+                    iy = b;
+                }
+                if -side + y_pos > rel_y {
+                    let (a, b) = self.stag_top_right(rx, iy);
+                    rx = a;
+                    iy = b;
+                }
+                if side + y_pos < rel_y {
+                    let (a, b) = self.stag_bottom_left(rx, iy);
+                    rx = a;
+                    iy = b;
+                }
+                if side * 3.0 - y_pos < rel_y {
+                    let (a, b) = self.stag_bottom_right(rx, iy);
+                    rx = a;
+                    iy = b;
+                }
+                (rx, iy)
+            }
+            StaggerAxis::X => {
+                let aligned_x = px - if even { tw / 2.0 } else { 0.0 };
+                let rx = (aligned_x / tw).floor() as i64;
+                let mut ry = (py / th).floor() as i64;
+                let rel_x = aligned_x - rx as f64 * tw;
+                let rel_y = py - ry as f64 * th;
+                let mut ix = rx * 2;
+                if even {
+                    ix += 1;
+                }
+                let x_pos = rel_y * (tw / th);
+                let side = tw / 2.0;
+                if side - x_pos > rel_x {
+                    let (a, b) = self.stag_top_left(ix, ry);
+                    ix = a;
+                    ry = b;
+                }
+                if -side + x_pos > rel_x {
+                    let (a, b) = self.stag_top_right(ix, ry);
+                    ix = a;
+                    ry = b;
+                }
+                if side + x_pos < rel_x {
+                    let (a, b) = self.stag_bottom_left(ix, ry);
+                    ix = a;
+                    ry = b;
+                }
+                if side * 3.0 - x_pos < rel_x {
+                    let (a, b) = self.stag_bottom_right(ix, ry);
+                    ix = a;
+                    ry = b;
+                }
+                (ix, ry)
+            }
+        }
+    }
+
+    fn stag_top_left(&self, x: i64, y: i64) -> (i64, i64) {
+        if self.stagger_axis == StaggerAxis::Y {
+            if ((y & 1) != 0) ^ self.stagger_even() {
+                (x, y - 1)
+            } else {
+                (x - 1, y - 1)
+            }
+        } else if ((x & 1) != 0) ^ self.stagger_even() {
+            (x - 1, y)
+        } else {
+            (x - 1, y - 1)
+        }
+    }
+
+    fn stag_top_right(&self, x: i64, y: i64) -> (i64, i64) {
+        if self.stagger_axis == StaggerAxis::Y {
+            if ((y & 1) != 0) ^ self.stagger_even() {
+                (x + 1, y - 1)
+            } else {
+                (x, y - 1)
+            }
+        } else if ((x & 1) != 0) ^ self.stagger_even() {
+            (x + 1, y)
+        } else {
+            (x + 1, y - 1)
+        }
+    }
+
+    fn stag_bottom_left(&self, x: i64, y: i64) -> (i64, i64) {
+        if self.stagger_axis == StaggerAxis::Y {
+            if ((y & 1) != 0) ^ self.stagger_even() {
+                (x, y + 1)
+            } else {
+                (x - 1, y + 1)
+            }
+        } else if ((x & 1) != 0) ^ self.stagger_even() {
+            (x - 1, y + 1)
+        } else {
+            (x - 1, y)
+        }
+    }
+
+    fn stag_bottom_right(&self, x: i64, y: i64) -> (i64, i64) {
+        if self.stagger_axis == StaggerAxis::Y {
+            if ((y & 1) != 0) ^ self.stagger_even() {
+                (x + 1, y + 1)
+            } else {
+                (x, y + 1)
+            }
+        } else if ((x & 1) != 0) ^ self.stagger_even() {
+            (x + 1, y + 1)
+        } else {
+            (x + 1, y)
+        }
+    }
+
+    /// Visit every cell in painter's order (back to front). For orthogonal maps
+    /// the order is a no-op row-major walk; isometric/staggered use it to keep
+    /// tall tiles overlapping correctly.
+    pub fn for_each_cell<F: FnMut(usize, usize)>(&self, order: RenderOrder, mut f: F) {
+        let (w, h) = (self.columns, self.rows);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let (x_rev, y_rev) = match order {
+            RenderOrder::RightDown => (false, false),
+            RenderOrder::RightUp => (false, true),
+            RenderOrder::LeftDown => (true, false),
+            RenderOrder::LeftUp => (true, true),
+        };
+        for yi in 0..h {
+            let cy = if y_rev { h - 1 - yi } else { yi };
+            for xi in 0..w {
+                let cx = if x_rev { w - 1 - xi } else { xi };
+                f(cx, cy);
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------ minimap
 
 pub fn mini_scale(map_w: usize, map_h: usize, box_w: usize, box_h: usize, pad: usize) -> f64 {

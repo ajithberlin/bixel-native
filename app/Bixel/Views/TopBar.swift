@@ -21,6 +21,7 @@ struct TopBar: View {
     @Binding var showTimeline: Bool
     @Binding var showAssets: Bool
     var onNewDocument: (() -> Void)? = nil
+    var onShowHelp: (() -> Void)? = nil
     /// Non-nil when the active document is a `.map` opened in the designer.
     var mapModel: TileMapModel? = nil
     var onImportTiledMap: (() -> Void)? = nil
@@ -73,19 +74,28 @@ struct TopBar: View {
                 )
             }
             .buttonStyle(.plain)
-            .help("Return to Bixel Home Gallery")
+            .toolHoverEffect(
+                name: "Home Gallery",
+                details: "Return to Bixel project gallery and home dashboard",
+                cornerRadius: 6
+            )
 
             // Actions (Wrench)
-            Button {
-                showActions.toggle()
-            } label: {
+            ToolHoverButton(
+                isSelected: showActions,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "Actions & Canvas Settings",
+                tooltipDescription: "Canvas sizing, grid guide, onion skin, zoom, and export commands",
+                width: 28,
+                height: 28,
+                action: {
+                    showActions.toggle()
+                }
+            ) { isSel, _ in
                 Image(systemName: "wrench")
                     .font(.system(size: 15, weight: .medium))
-                    .foregroundColor(showActions ? StudioTheme.accent : Color.white.opacity(0.85))
-                    .frame(width: 26, height: 26)
+                    .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
             }
-            .buttonStyle(.plain)
-            .help("Actions & canvas settings")
             .popover(isPresented: $showActions, arrowEdge: .bottom) {
                 ActionsPopover(
                     model: model,
@@ -94,34 +104,47 @@ struct TopBar: View {
                     onShowProjects: onShowProjects,
                     onNewDocument: onNewDocument,
                     mapModel: mapModel,
-                    onImportTiledMap: onImportTiledMap
+                    onImportTiledMap: onImportTiledMap,
+                    onShowHelp: onShowHelp
                 )
             }
 
             if !isMap {
                 // Selection (Lasso)
-                Button {
-                    model.selectTool((model.tool == .selection) ? .pencil : .selection)
-                } label: {
+                ToolHoverButton(
+                    isSelected: model.tool == .selection,
+                    selectedColor: StudioTheme.accent,
+                    tooltipName: "Selection Tool",
+                    shortcut: "V",
+                    tooltipDescription: "Select pixel regions freehand or rectangularly to edit, move, or transform",
+                    width: 28,
+                    height: 28,
+                    action: {
+                        model.selectTool((model.tool == .selection) ? .pencil : .selection)
+                    }
+                ) { isSel, _ in
                     Image(systemName: "lasso")
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(model.tool == .selection ? StudioTheme.accent : Color.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
+                        .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
                 }
-                .buttonStyle(.plain)
-                .help("Selection tool")
 
                 // Transform
-                Button {
-                    model.selectTool((model.tool == .transform) ? .pencil : .transform)
-                } label: {
+                ToolHoverButton(
+                    isSelected: model.tool == .transform,
+                    selectedColor: StudioTheme.accent,
+                    tooltipName: "Transform Tool",
+                    shortcut: "T",
+                    tooltipDescription: "Move, scale, stretch, flip, and rotate the active selection or layer",
+                    width: 28,
+                    height: 28,
+                    action: {
+                        model.selectTool((model.tool == .transform) ? .pencil : .transform)
+                    }
+                ) { isSel, _ in
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(model.tool == .transform ? StudioTheme.accent : Color.white.opacity(0.85))
-                        .frame(width: 28, height: 28)
+                        .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
                 }
-                .buttonStyle(.plain)
-                .help("Transform tool")
             }
         }
     }
@@ -155,36 +178,60 @@ struct TopBar: View {
         }
     }
 
-    // MARK: Sprite right cluster (brush/smudge/eraser/layers/color)
+    // MARK: Sprite right cluster (brush/smudge/eraser/layers/color/timeline/assets/ai/help)
 
     private var spriteRightCluster: some View {
-        HStack(spacing: 16) {
-            Button { model.selectTool(.pencil) } label: {
+        HStack(spacing: 14) {
+            ToolHoverButton(
+                isSelected: model.tool == .pencil,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "Paint Brush (Pencil)",
+                shortcut: "B",
+                tooltipDescription: "Draw individual pixels or strokes with current palette color and brush size",
+                width: 28,
+                height: 28,
+                action: {
+                    model.selectTool(.pencil)
+                }
+            ) { isSel, _ in
                 Image(systemName: "paintbrush.pointed")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundColor(model.tool == .pencil ? StudioTheme.accent : Color.white.opacity(0.85))
-                    .frame(width: 28, height: 28)
+                    .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
             }
-            .buttonStyle(.plain)
-            .help("Paint brush")
 
-            Button { model.selectTool(.smudge) } label: {
+            ToolHoverButton(
+                isSelected: model.tool == .smudge,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "Smudge Tool",
+                shortcut: "S",
+                tooltipDescription: "Blend and smear adjacent pixels together with smooth organic texture",
+                width: 28,
+                height: 28,
+                action: {
+                    model.selectTool(.smudge)
+                }
+            ) { isSel, _ in
                 Image(systemName: "hand.draw")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(model.tool == .smudge ? StudioTheme.accent : Color.white.opacity(0.85))
-                    .frame(width: 28, height: 28)
+                    .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
             }
-            .buttonStyle(.plain)
-            .help("Smudge tool")
 
-            Button { model.selectTool(.eraser) } label: {
+            ToolHoverButton(
+                isSelected: model.tool == .eraser,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "Eraser Tool",
+                shortcut: "E",
+                tooltipDescription: "Erase pixels on the active layer back to transparency",
+                width: 28,
+                height: 28,
+                action: {
+                    model.selectTool(.eraser)
+                }
+            ) { isSel, _ in
                 Image(systemName: "eraser")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(model.tool == .eraser ? StudioTheme.accent : Color.white.opacity(0.85))
-                    .frame(width: 28, height: 28)
+                    .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
             }
-            .buttonStyle(.plain)
-            .help("Eraser")
 
             layersToggle
             colorToggle(isSpriteColor: true)
@@ -193,15 +240,16 @@ struct TopBar: View {
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
+            helpButton
         }
     }
 
     // MARK: Map right cluster (tool palette)
 
     private func mapRightCluster(_ mapModel: TileMapModel) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             ForEach(MapTool.toolbar) { tool in
-                mapTool(mapModel, tool, tool.symbol, "\(tool.label) (\(shortcut(for: tool)))")
+                mapTool(mapModel, tool, tool.symbol)
             }
 
             Divider().frame(height: 20).overlay(StudioTheme.hairlineStrong)
@@ -211,6 +259,7 @@ struct TopBar: View {
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
+            helpButton
         }
     }
 
@@ -229,117 +278,155 @@ struct TopBar: View {
         }
     }
 
-    private func mapTool(_ mapModel: TileMapModel, _ tool: MapTool, _ symbol: String, _ help: String) -> some View {
-        Button {
-            mapModel.tool = tool
-        } label: {
+    private func mapToolDescription(for tool: MapTool) -> String {
+        switch tool {
+        case .stamp: return "Place active tile or tile pattern onto the current tilemap layer"
+        case .terrain: return "Paint autotile terrain with automatic corner and border transitions"
+        case .eraser: return "Erase tiles on the active map layer"
+        case .bucket: return "Flood-fill contiguous matching tiles with the selected tile brush"
+        case .rectFill: return "Drag to fill a rectangular area with the selected tile pattern"
+        case .line: return "Draw a straight line of tiles between two points"
+        case .select: return "Select a region of tiles to copy, stamp, or manipulate"
+        case .move: return "Pan and reposition tile layers or selections"
+        case .tilePicker: return "Sample an existing tile from the map into your brush"
+        case .wand: return "Select all matching adjacent tiles"
+        }
+    }
+
+    private func mapTool(_ mapModel: TileMapModel, _ tool: MapTool, _ symbol: String) -> some View {
+        ToolHoverButton(
+            isSelected: mapModel.tool == tool,
+            selectedColor: StudioTheme.accent,
+            tooltipName: "\(tool.label)",
+            shortcut: shortcut(for: tool),
+            tooltipDescription: mapToolDescription(for: tool),
+            width: 26,
+            height: 26,
+            action: {
+                mapModel.tool = tool
+            }
+        ) { isSel, _ in
             Image(systemName: symbol)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundColor(mapModel.tool == tool ? StudioTheme.accent : Color.white.opacity(0.85))
-                .frame(width: 26, height: 26)
-                .background(
-                    mapModel.tool == tool ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
-                )
+                .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
         }
-        .buttonStyle(.plain)
-        .help(help)
     }
 
     private var layersToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                showLayers.toggle()
-                if showLayers { showColor = false }
+        ToolHoverButton(
+            isSelected: showLayers,
+            selectedColor: StudioTheme.procreateBlue,
+            tooltipName: "Layers Panel",
+            shortcut: "L",
+            tooltipDescription: "Manage drawing layers, blend modes, visibility, and opacity",
+            width: 28,
+            height: 28,
+            action: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showLayers.toggle()
+                    if showLayers { showColor = false }
+                }
             }
-        } label: {
+        ) { isSel, _ in
             Image(systemName: "square.2.layers.3d")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(showLayers ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
-                .frame(width: 28, height: 28)
-                .background(
-                    showLayers ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
-                )
+                .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
         }
-        .buttonStyle(.plain)
-        .help("Layers panel")
     }
 
     private var assetLibraryToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                showAssets.toggle()
+        ToolHoverButton(
+            isSelected: showAssets,
+            selectedColor: StudioTheme.procreateBlue,
+            tooltipName: "Project Assets",
+            tooltipDescription: "Browse project documents, source images, tilesets, and generated assets",
+            width: 28,
+            height: 28,
+            action: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showAssets.toggle()
+                }
             }
-        } label: {
+        ) { isSel, _ in
             Image(systemName: "shippingbox")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(showAssets ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
-                .frame(width: 28, height: 28)
-                .background(
-                    showAssets ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
-                )
+                .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
         }
-        .buttonStyle(.plain)
-        .help("Project assets")
-        .accessibilityLabel(showAssets ? "Hide project assets" : "Show project assets")
     }
 
     private var animationAssistToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                showTimeline.toggle()
+        ToolHoverButton(
+            isSelected: showTimeline,
+            selectedColor: StudioTheme.procreateBlue,
+            tooltipName: "Animation Assist",
+            shortcut: "Space",
+            tooltipDescription: "Open timeline bar to create frames, adjust FPS, onion skinning, and play animation",
+            width: 28,
+            height: 28,
+            action: {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    showTimeline.toggle()
+                }
             }
-        } label: {
+        ) { isSel, _ in
             Image(systemName: "film.stack")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(showTimeline ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
-                .frame(width: 28, height: 28)
-                .background(
-                    showTimeline ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
-                )
+                .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
         }
-        .buttonStyle(.plain)
-        .help("Animation Assist")
-        .accessibilityLabel(showTimeline ? "Hide Animation Assist" : "Show Animation Assist")
     }
 
     @ViewBuilder
     private func colorToggle(isSpriteColor: Bool) -> some View {
-        if isSpriteColor {
-            Button {
+        ToolHoverButton(
+            isSelected: showColor,
+            selectedColor: StudioTheme.procreateBlue,
+            tooltipName: isSpriteColor ? "Color Palette & Disc" : "Tileset Palette",
+            tooltipDescription: isSpriteColor ? "Pick active color, adjust HSB/RGB sliders, and select swatches" : "Browse tiles and select tile brush pattern",
+            width: 28,
+            height: 28,
+            action: {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     showColor.toggle()
                     if showColor { showLayers = false }
                 }
-            } label: {
+            }
+        ) { isSel, isHov in
+            if isSpriteColor {
                 ZStack {
                     Circle()
                         .fill(currentColor)
                         .frame(width: 24, height: 24)
                     Circle()
-                        .strokeBorder(showColor ? StudioTheme.procreateBlue : Color.white.opacity(0.35), lineWidth: showColor ? 2.5 : 1)
+                        .strokeBorder(isSel ? StudioTheme.procreateBlue : (isHov ? Color.white.opacity(0.7) : Color.white.opacity(0.35)), lineWidth: isSel ? 2.5 : 1)
                         .frame(width: 26, height: 26)
                 }
-                .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .help("Colors")
-        } else {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    showColor.toggle()
-                    if showColor { showLayers = false }
-                }
-            } label: {
+            } else {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(showColor ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
-                    .frame(width: 28, height: 28)
-                    .background(
-                        showColor ? RoundedRectangle(cornerRadius: 6).fill(StudioTheme.accentSoft) : nil
-                    )
+                    .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
             }
-            .buttonStyle(.plain)
-            .help("Tileset palette")
+        }
+    }
+
+    private var helpButton: some View {
+        ToolHoverButton(
+            isSelected: false,
+            tooltipName: "Tools Reference & Guide",
+            shortcut: "⌘?",
+            tooltipDescription: "View detailed documentation, how-to guides, and shortcuts for all Bixel tools",
+            width: 28,
+            height: 28,
+            action: {
+                if let onShowHelp {
+                    onShowHelp()
+                } else {
+                    NotificationCenter.default.post(name: .studioShowHelp, object: nil)
+                }
+            }
+        ) { _, isHov in
+            Image(systemName: "questionmark.circle")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundColor(isHov ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
         }
     }
 
@@ -386,7 +473,12 @@ private struct AICopilotButton: View {
             .frame(width: 34, height: 34)
         }
         .buttonStyle(.plain)
-        .help("AI Copilot & Adjustments")
+        .toolHoverEffect(
+            name: "AI Copilot & Adjustments",
+            shortcut: "⌘K",
+            details: "AI pixel art generation, next frame prediction, and assistant chat",
+            cornerRadius: 17
+        )
         .accessibilityLabel(isPresented ? "Hide AI Copilot" : "Show AI Copilot")
         .onAppear { startAnimationIfNeeded() }
         .onChange(of: reduceMotion) { _ in startAnimationIfNeeded() }
@@ -413,6 +505,7 @@ struct ActionsPopover: View {
     var onNewDocument: (() -> Void)?
     var mapModel: TileMapModel? = nil
     var onImportTiledMap: (() -> Void)? = nil
+    var onShowHelp: (() -> Void)? = nil
 
     @State private var tab: ActionTab = .canvas
 
@@ -641,6 +734,18 @@ struct ActionsPopover: View {
             }
             .buttonStyle(.plain)
             .help("Open the project gallery")
+
+            Button {
+                if let onShowHelp {
+                    onShowHelp()
+                } else {
+                    post(.studioShowHelp)
+                }
+            } label: {
+                Label("Tools Guide & Help…", systemImage: "questionmark.circle")
+            }
+            .buttonStyle(.plain)
+            .help("Open detailed tools reference, guide, and shortcuts")
 
             Divider().overlay(StudioTheme.hairline)
 

@@ -80,6 +80,11 @@ struct BixelApp: App {
                 Button("Zoom to Fit") { post(.studioZoomFit) }
                     .keyboardShortcut("0", modifiers: .command)
             }
+            CommandGroup(replacing: .help) {
+                Button("Bixel Tools Reference & Guide…") { post(.studioShowHelp) }
+                    .keyboardShortcut("?", modifiers: .command)
+                Button("Quick Shortcuts Reference…") { post(.studioShowHelp) }
+            }
         }
         Settings {
             SettingsView()

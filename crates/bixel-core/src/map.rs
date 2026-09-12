@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use serde_json::{json, Map, Value};
 
-use crate::tilemap::{self, Pattern, TileLayer};
+use crate::tilemap::{self, MapGeometry, Pattern, TileLayer};
+
+pub use crate::tilemap::{Orientation, RenderOrder, StaggerAxis, StaggerIndex};
 
 // Tiled GID flag bits (high bits of a raw GID).
 pub const GID_H_FLIP: u32 = 0x8000_0000;
@@ -54,6 +56,10 @@ pub struct Tileset {
     pub spacing: u32,
     pub columns: u32,
     pub tile_count: u32,
+    /// Per-tileset pixel offset applied when drawing each tile (Tiled
+    /// `tileoffset`). Commonly `(0, -tile_height/2)` for isometric art whose
+    /// diamond sits in the upper half of the tile image.
+    pub tile_offset: (i32, i32),
     /// RGBA pixels (`image_width*image_height*4`). Not serialized; uploaded by
     /// the host after load so the file stays a relative-path reference. Stored
     /// behind an `Arc` so undo/redo snapshots share the buffer instead of
@@ -82,6 +88,7 @@ impl Default for Tileset {
             spacing: 0,
             columns: 0,
             tile_count: 0,
+            tile_offset: (0, 0),
             pixels: Arc::new(Vec::new()),
             properties: Vec::new(),
             autotile: Vec::new(),
@@ -316,6 +323,10 @@ struct MapState {
     height: usize,
     tile_width: usize,
     tile_height: usize,
+    orientation: Orientation,
+    render_order: RenderOrder,
+    stagger_axis: StaggerAxis,
+    stagger_index: StaggerIndex,
     tilesets: Vec<Tileset>,
     layers: Vec<MapLayer>,
     next_layer_id: u32,
@@ -331,6 +342,10 @@ pub struct TileMap {
     pub height: usize,
     pub tile_width: usize,
     pub tile_height: usize,
+    pub orientation: Orientation,
+    pub render_order: RenderOrder,
+    pub stagger_axis: StaggerAxis,
+    pub stagger_index: StaggerIndex,
     pub tilesets: Vec<Tileset>,
     pub layers: Vec<MapLayer>,
     pub next_layer_id: u32,
@@ -362,6 +377,10 @@ impl TileMap {
             height,
             tile_width,
             tile_height,
+            orientation: Orientation::Orthogonal,
+            render_order: RenderOrder::RightDown,
+            stagger_axis: StaggerAxis::Y,
+            stagger_index: StaggerIndex::Odd,
             tilesets: Vec::new(),
             layers: Vec::new(),
             next_layer_id: 1,
@@ -377,10 +396,23 @@ impl TileMap {
     }
 
     pub fn pixel_width(&self) -> usize {
-        self.width * self.tile_width
+        self.geometry().pixel_size().0
     }
     pub fn pixel_height(&self) -> usize {
-        self.height * self.tile_height
+        self.geometry().pixel_size().1
+    }
+
+    /// Projection parameters for the current orientation.
+    pub fn geometry(&self) -> MapGeometry {
+        MapGeometry::new(
+            self.orientation,
+            self.width,
+            self.height,
+            self.tile_width,
+            self.tile_height,
+            self.stagger_axis,
+            self.stagger_index,
+        )
     }
 
     pub fn validate_dims(&self) -> Result<(), String> {
@@ -405,6 +437,10 @@ impl TileMap {
             height: self.height,
             tile_width: self.tile_width,
             tile_height: self.tile_height,
+            orientation: self.orientation,
+            render_order: self.render_order,
+            stagger_axis: self.stagger_axis,
+            stagger_index: self.stagger_index,
             tilesets: self.tilesets.clone(),
             layers: self.layers.clone(),
             next_layer_id: self.next_layer_id,
@@ -419,6 +455,10 @@ impl TileMap {
         self.height = state.height;
         self.tile_width = state.tile_width;
         self.tile_height = state.tile_height;
+        self.orientation = state.orientation;
+        self.render_order = state.render_order;
+        self.stagger_axis = state.stagger_axis;
+        self.stagger_index = state.stagger_index;
         self.tilesets = state.tilesets;
         self.layers = state.layers;
         self.next_layer_id = state.next_layer_id;
@@ -708,12 +748,28 @@ impl TileMap {
             spacing,
             columns,
             tile_count,
+            tile_offset: (0, 0),
             pixels: Arc::new(Vec::new()),
             properties: Vec::new(),
             autotile: Vec::new(),
             extra: Map::new(),
         });
         Ok(self.tilesets.len() - 1)
+    }
+
+    /// Set a tileset's draw offset (Tiled `tileoffset`), in pixels.
+    pub fn set_tileset_tile_offset(&mut self, index: usize, x: i32, y: i32) -> bool {
+        match self.tilesets.get_mut(index) {
+            Some(ts) => {
+                ts.tile_offset = (x, y);
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn tileset_tile_offset(&self, index: usize) -> Option<(i32, i32)> {
+        self.tilesets.get(index).map(|ts| ts.tile_offset)
     }
 
     /// Remove a tileset, clearing cells that referenced it and re-basing the
@@ -1210,26 +1266,39 @@ impl TileMap {
                         continue;
                     }
                     let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
-                    for (i, gid) in data.layer.data.iter().enumerate() {
+                    let geo = self.geometry();
+                    // Painter's order matters for overlapping isometric tiles.
+                    geo.for_each_cell(self.render_order, |cx, cy| {
+                        let i = cy * self.width + cx;
+                        let Some(&gid) = data.layer.data.get(i) else {
+                            return;
+                        };
                         if gid & GID_MASK == 0 {
-                            continue;
+                            return;
                         }
-                        let Some((ts_idx, local, flags)) = self.gid_lookup(*gid) else {
-                            continue;
+                        let Some((ts_idx, local, flags)) = self.gid_lookup(gid) else {
+                            return;
                         };
                         let Some(ts) = self.tilesets.get(ts_idx) else {
-                            continue;
+                            return;
                         };
                         if !ts.tile_rgba(local, &mut tile_buf) {
-                            continue;
+                            return;
                         }
-                        let cx = i % self.width;
-                        let cy = i / self.width;
+                        let (ox, oy) = geo.tile_origin(cx as i64, cy as i64);
                         blit_tile(
-                            &mut out, map_px_w, cx, cy, tw, th, flags, alpha,
+                            &mut out,
+                            map_px_w,
+                            map_px_h,
+                            ox + ts.tile_offset.0 as i64,
+                            oy + ts.tile_offset.1 as i64,
+                            tw,
+                            th,
+                            flags,
+                            alpha,
                             &tile_buf,
                         );
-                    }
+                    });
                 }
                 MapLayer::Image(data) => {
                     if !data.visible || data.opacity <= 0.0 {
@@ -1275,19 +1344,21 @@ impl TileMap {
     /// under typed output so real Tiled keeps fields Bixel does not model.
     pub fn to_tiled_value(&self) -> Value {
         let mut root = self.extra.clone();
-        merge_json(&mut root, json!({
-            "type": "map",
-            "version": "1.10",
-            "orientation": "orthogonal",
-            "renderorder": "right-down",
-            "infinite": false,
-            "width": self.width,
-            "height": self.height,
-            "tilewidth": self.tile_width,
-            "tileheight": self.tile_height,
-            "nextlayerid": self.next_layer_id,
-            "nextobjectid": self.next_object_id,
-        }));
+        root.insert("type".into(), json!("map"));
+        root.insert("version".into(), json!("1.10"));
+        root.insert("orientation".into(), json!(self.orientation.as_tiled()));
+        root.insert("renderorder".into(), json!(self.render_order.as_tiled()));
+        root.insert("infinite".into(), json!(false));
+        root.insert("width".into(), json!(self.width));
+        root.insert("height".into(), json!(self.height));
+        root.insert("tilewidth".into(), json!(self.tile_width));
+        root.insert("tileheight".into(), json!(self.tile_height));
+        root.insert("nextlayerid".into(), json!(self.next_layer_id));
+        root.insert("nextobjectid".into(), json!(self.next_object_id));
+        if matches!(self.orientation, Orientation::Staggered | Orientation::Hexagonal) {
+            root.insert("staggeraxis".into(), json!(self.stagger_axis.as_tiled()));
+            root.insert("staggerindex".into(), json!(self.stagger_index.as_tiled()));
+        }
         if !self.properties.is_empty() {
             root.insert("properties".into(), properties_json(&self.properties));
         }
@@ -1317,6 +1388,28 @@ impl TileMap {
             ));
         }
 
+        let orientation = match get("orientation").and_then(Value::as_str) {
+            None => Orientation::Orthogonal,
+            Some(s) => Orientation::from_tiled(s).ok_or_else(|| {
+                format!("Unsupported map orientation {s:?}; expected orthogonal, isometric or staggered.")
+            })?,
+        };
+        if orientation == Orientation::Hexagonal {
+            return Err("Hexagonal maps are not supported yet; use orthogonal, isometric or staggered.".into());
+        }
+        let render_order = get("renderorder")
+            .and_then(Value::as_str)
+            .map(RenderOrder::from_tiled)
+            .unwrap_or(RenderOrder::RightDown);
+        let stagger_axis = get("staggeraxis")
+            .and_then(Value::as_str)
+            .map(StaggerAxis::from_tiled)
+            .unwrap_or(StaggerAxis::Y);
+        let stagger_index = get("staggerindex")
+            .and_then(Value::as_str)
+            .map(StaggerIndex::from_tiled)
+            .unwrap_or(StaggerIndex::Odd);
+
         let mut tilesets: Vec<Tileset> = Vec::new();
         for ts in get("tilesets").and_then(Value::as_array).cloned().unwrap_or_default() {
             let mut parsed = Tileset::default();
@@ -1331,6 +1424,12 @@ impl TileMap {
             parsed.spacing = ts.get("spacing").and_then(Value::as_u64).unwrap_or(0) as u32;
             parsed.columns = ts.get("columns").and_then(Value::as_u64).unwrap_or(0) as u32;
             parsed.tile_count = ts.get("tilecount").and_then(Value::as_u64).unwrap_or(0) as u32;
+            if let Some(offset) = ts.get("tileoffset") {
+                parsed.tile_offset = (
+                    offset.get("x").and_then(Value::as_i64).unwrap_or(0) as i32,
+                    offset.get("y").and_then(Value::as_i64).unwrap_or(0) as i32,
+                );
+            }
             parsed.properties = props_from_json(ts.get("properties"));
             if (parsed.columns == 0 || parsed.tile_count == 0) && parsed.image_width > 0 {
                 let (c, n) = Self::slice_tileset_math(
@@ -1347,6 +1446,7 @@ impl TileMap {
             parsed.extra = preserve(&ts, &[
                 "firstgid", "name", "image", "imagewidth", "imageheight",
                 "tilewidth", "tileheight", "margin", "spacing", "columns", "tilecount", "properties",
+                "tileoffset",
             ]);
             // Recover the Bixel autotile table carried as a tileset property.
             if let Some(autotile) = parsed
@@ -1527,6 +1627,7 @@ impl TileMap {
             "type", "version", "orientation", "renderorder", "infinite",
             "width", "height", "tilewidth", "tileheight", "nextlayerid",
             "nextobjectid", "properties", "tilesets", "layers",
+            "staggeraxis", "staggerindex",
         ]);
 
         let map = TileMap {
@@ -1534,6 +1635,10 @@ impl TileMap {
             height,
             tile_width,
             tile_height,
+            orientation,
+            render_order,
+            stagger_axis,
+            stagger_index,
             tilesets,
             layers,
             next_layer_id,
@@ -1565,6 +1670,12 @@ fn tileset_json(ts: &Tileset) -> Value {
         "columns": ts.columns,
         "tilecount": ts.tile_count,
     }));
+    if ts.tile_offset != (0, 0) {
+        obj.insert(
+            "tileoffset".into(),
+            json!({ "x": ts.tile_offset.0, "y": ts.tile_offset.1 }),
+        );
+    }
     let mut props = ts.properties.clone();
     if ts.autotile.iter().any(Option::is_some) {
         props.push(Property {
@@ -1719,13 +1830,17 @@ fn merge_json(base: &mut Map<String, Value>, extra: Value) {
     }
 }
 
-/// Nearest-neighbour source-over blit of one tile into the map, honouring the
-/// Tiled flip flags and per-layer opacity.
+/// Nearest-neighbour source-over blit of one tile into the map at pixel
+/// `(x0, y0)`, honouring the Tiled flip flags and per-layer opacity. The
+/// position may be negative (isometric diamonds overhang the canvas edges), so
+/// pixels are clipped to the destination bounds.
+#[allow(clippy::too_many_arguments)]
 fn blit_tile(
     out: &mut [u8],
     map_px_w: usize,
-    cx: usize,
-    cy: usize,
+    map_px_h: usize,
+    x0: i64,
+    y0: i64,
     tw: usize,
     th: usize,
     flags: u32,
@@ -1735,10 +1850,16 @@ fn blit_tile(
     let flip_h = flags & GID_H_FLIP != 0;
     let flip_v = flags & GID_V_FLIP != 0;
     let flip_d = flags & GID_D_FLIP != 0;
-    let x0 = cx * tw;
-    let y0 = cy * th;
     for y in 0..th {
+        let dy = y0 + y as i64;
+        if dy < 0 || dy >= map_px_h as i64 {
+            continue;
+        }
         for x in 0..tw {
+            let dx = x0 + x as i64;
+            if dx < 0 || dx >= map_px_w as i64 {
+                continue;
+            }
             // Map destination pixel → source pixel given the flip flags
             // (diagonal first, then horizontal/vertical — Tiled's order).
             let (mut sx, mut sy) = (x, y);
@@ -1759,9 +1880,7 @@ fn blit_tile(
             if a == 0 {
                 continue;
             }
-            let dx = x0 + x;
-            let dy = y0 + y;
-            let dst = (dy * map_px_w + dx) * 4;
+            let dst = (dy as usize * map_px_w + dx as usize) * 4;
             blend_pixel(out, dst, tile_buf[src], tile_buf[src + 1], tile_buf[src + 2], a);
         }
     }

@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
+    @State private var showHelpDocument = false
     @State private var loadingProject: StudioProject? = nil
     @State private var showLoadingAd = false
     @State private var pendingPostAction: (() -> Void)? = nil
@@ -91,6 +92,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onReceive(NotificationCenter.default.publisher(for: .studioUnlockLifetime)) { _ in showPaywall = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioCustomerCenter)) { _ in showCustomerCenter = true }
+                .onReceive(NotificationCenter.default.publisher(for: .studioShowHelp)) { _ in showHelpDocument = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioRestorePurchases)) { _ in
                     Task { await subscriptionManager.restorePurchases() }
                 }
@@ -163,6 +165,7 @@ struct ContentView: View {
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .sheet(isPresented: $showPaywall) { PaywallContainerView() }
         .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
+        .sheet(isPresented: $showHelpDocument) { ToolsHelpView() }
         .sheet(item: $generatedImageDraft, onDismiss: handleGeneratedImageReviewDismissed) { draft in
             AIGeneratedImageReviewView(
                 draft: draft,
@@ -495,7 +498,8 @@ struct ContentView: View {
                     showAI: $showAI,
                     showTimeline: $showTimeline,
                     showAssets: $showAssets,
-                    onNewDocument: { showNewDocument = true }
+                    onNewDocument: { showNewDocument = true },
+                    onShowHelp: { showHelpDocument = true }
                 )
 
                 EyedropperBannerOverlay(model: model)
@@ -645,6 +649,7 @@ struct ContentView: View {
                 showTimeline: $showTimeline,
                 showAssets: $showAssets,
                 onNewDocument: { showNewDocument = true },
+                onShowHelp: { showHelpDocument = true },
                 mapModel: mapModel,
                 onImportTiledMap: {
                     let panel = NSOpenPanel()
@@ -660,6 +665,7 @@ struct ContentView: View {
     }
 }
 extension Notification.Name {
+    static let studioShowHelp = Notification.Name("studio.showHelp")
     static let studioUndo = Notification.Name("studio.undo")
     static let studioRedo = Notification.Name("studio.redo")
     static let studioZoomIn = Notification.Name("studio.zoomIn")

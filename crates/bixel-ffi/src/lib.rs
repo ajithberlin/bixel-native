@@ -1674,7 +1674,7 @@ pub unsafe extern "C" fn bixel_storage_read_bytes(
 // as `BixelDoc`: opaque `Arc<Mutex<TileMap>>`, bulk data via caller buffers,
 // strings freed with `bixel_string_free`.
 
-use bixel_core::map::{MapLayer, Property, TileMap};
+use bixel_core::map::{MapLayer, Orientation, Property, RenderOrder, StaggerAxis, StaggerIndex, TileMap};
 
 // ------------------------------------------------------------- lifecycle
 
@@ -1767,6 +1767,178 @@ pub unsafe extern "C" fn bixel_map_pixel_height(ptr: *const BixelMap) -> u32 {
     unsafe { map_ref(ptr) }.lock().unwrap().pixel_height() as u32
 }
 
+// ------------------------------------------------------------ orientation
+
+/// Orientation code: 0 = orthogonal, 1 = isometric, 2 = staggered, 3 = hexagonal.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_orientation(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().orientation {
+        Orientation::Orthogonal => 0,
+        Orientation::Isometric => 1,
+        Orientation::Staggered => 2,
+        Orientation::Hexagonal => 3,
+    }
+}
+
+/// Only orthogonal (0), isometric (1) and staggered (2) are renderable; returns
+/// false for hexagonal (3) or an unknown code.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_orientation(ptr: *mut BixelMap, code: u8) -> bool {
+    let orientation = match code {
+        0 => Orientation::Orthogonal,
+        1 => Orientation::Isometric,
+        2 => Orientation::Staggered,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().orientation = orientation;
+    true
+}
+
+/// Render order code: 0 = right-down, 1 = right-up, 2 = left-down, 3 = left-up.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_render_order(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().render_order {
+        RenderOrder::RightDown => 0,
+        RenderOrder::RightUp => 1,
+        RenderOrder::LeftDown => 2,
+        RenderOrder::LeftUp => 3,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_render_order(ptr: *mut BixelMap, code: u8) -> bool {
+    let order = match code {
+        0 => RenderOrder::RightDown,
+        1 => RenderOrder::RightUp,
+        2 => RenderOrder::LeftDown,
+        3 => RenderOrder::LeftUp,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().render_order = order;
+    true
+}
+
+/// Stagger axis code: 0 = x, 1 = y.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_stagger_axis(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().stagger_axis {
+        StaggerAxis::X => 0,
+        StaggerAxis::Y => 1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_stagger_axis(ptr: *mut BixelMap, code: u8) -> bool {
+    let axis = match code {
+        0 => StaggerAxis::X,
+        1 => StaggerAxis::Y,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().stagger_axis = axis;
+    true
+}
+
+/// Stagger index code: 0 = odd, 1 = even.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_stagger_index(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().stagger_index {
+        StaggerIndex::Odd => 0,
+        StaggerIndex::Even => 1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_stagger_index(ptr: *mut BixelMap, code: u8) -> bool {
+    let index = match code {
+        0 => StaggerIndex::Odd,
+        1 => StaggerIndex::Even,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().stagger_index = index;
+    true
+}
+
+/// Bulk geometry description for the host (orientation, render order, stagger
+/// settings and projected pixel bounds).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_geometry_json(ptr: *const BixelMap) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let value = serde_json::json!({
+        "orientation": map.orientation.as_tiled(),
+        "renderOrder": map.render_order.as_tiled(),
+        "staggerAxis": map.stagger_axis.as_tiled(),
+        "staggerIndex": map.stagger_index.as_tiled(),
+        "columns": map.width,
+        "rows": map.height,
+        "cellWidth": map.tile_width,
+        "cellHeight": map.tile_height,
+        "pixelWidth": map.pixel_width(),
+        "pixelHeight": map.pixel_height(),
+    });
+    out_cstr(value.to_string())
+}
+
+/// Top-left screen pixel of a cell's tile image (orientation-aware).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_origin(ptr: *const BixelMap, cx: i32, cy: i32, out_x: *mut i64, out_y: *mut i64) {
+    if out_x.is_null() || out_y.is_null() {
+        return;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let (x, y) = map.geometry().tile_origin(cx as i64, cy as i64);
+    unsafe {
+        *out_x = x;
+        *out_y = y;
+    }
+}
+
+/// Whole-map screen pixel -> integer cell. Returns false when the point is
+/// outside the map bounds (the raw cell is still written for clamping).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_pixel_to_cell(
+    ptr: *const BixelMap,
+    px: f64,
+    py: f64,
+    out_cx: *mut i32,
+    out_cy: *mut i32,
+) -> bool {
+    if out_cx.is_null() || out_cy.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let (cx, cy) = map.geometry().pixel_to_cell(px, py);
+    let inside = cx >= 0 && cy >= 0 && (cx as usize) < map.width && (cy as usize) < map.height;
+    unsafe {
+        *out_cx = cx as i32;
+        *out_cy = cy as i32;
+    }
+    inside
+}
+
+/// Set a tileset's draw offset (Tiled `tileoffset`) in pixels.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_tileset_tile_offset(ptr: *mut BixelMap, index: u32, x: i32, y: i32) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().set_tileset_tile_offset(index as usize, x, y)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_tileset_tile_offset(ptr: *const BixelMap, index: u32, out_x: *mut i32, out_y: *mut i32) -> bool {
+    if out_x.is_null() || out_y.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    match map.tileset_tile_offset(index as usize) {
+        Some((x, y)) => {
+            unsafe {
+                *out_x = x;
+                *out_y = y;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
 // ------------------------------------------------------------ tilesets
 
 #[no_mangle]
@@ -1829,6 +2001,8 @@ pub unsafe extern "C" fn bixel_map_tilesets_json(ptr: *const BixelMap) -> *mut c
                 "spacing": ts.spacing,
                 "columns": ts.columns,
                 "tileCount": ts.tile_count,
+                "tileOffsetX": ts.tile_offset.0,
+                "tileOffsetY": ts.tile_offset.1,
             })
         })
         .collect();

@@ -95,7 +95,7 @@ struct TileMapCanvasView: NSViewRepresentable {
         fileprivate func cellCoordinate(_ point: CGPoint, in view: MapCanvas, clamp: Bool = false) -> (x: Int, y: Int)? {
             guard let pixel = viewport.viewToDoc(point, viewSize: view.bounds.size,
                                                  width: model.map.pixelWidth, height: model.map.pixelHeight, clamp: clamp) else { return nil }
-            return (pixel.x / max(1, model.map.cellWidth), pixel.y / max(1, model.map.cellHeight))
+            return model.cell(atPixel: pixel, clamp: clamp)
         }
 
         fileprivate func cellOrigin(_ cell: (x: Int, y: Int), in view: MapCanvas) -> (x: Int, y: Int) {
@@ -121,6 +121,7 @@ final class MapCanvas: NSView {
     private var lastGridZoom: CGFloat = -1
     private var lastGridColumns = -1
     private var lastGridRows = -1
+    private var lastOrientation: MapOrientation = .orthogonal
     private var didDrawContent = false
     private var lastDrawnRevision = -1
     private var isUpdatingGeometry = false
@@ -260,7 +261,9 @@ final class MapCanvas: NSView {
         geometryRefreshScheduled = true
         DispatchQueue.main.async { [weak self] in
             self?.geometryRefreshScheduled = false
-            self?.updateOverlays()
+            // Orientation/resize changes alter the projected pixel bounds, so
+            // recompute the artboard frame as well as the overlays.
+            self?.updateArtboardGeometry()
         }
     }
 
@@ -275,6 +278,12 @@ final class MapCanvas: NSView {
         let model = coordinator.model
         let docW = model.map.pixelWidth
         let docH = model.map.pixelHeight
+
+        // A projection change drastically alters the artboard bounds; refit.
+        if lastOrientation != model.orientation {
+            lastOrientation = model.orientation
+            viewport.zoomToFit(viewSize: bounds.size, canvasWidth: docW, height: docH)
+        }
 
         let origin = viewport.artboardOrigin(viewSize: bounds.size, canvasWidth: docW, height: docH)
         let artboardFrame = CGRect(x: origin.x, y: origin.y, width: CGFloat(docW) * viewport.zoom,
@@ -313,21 +322,78 @@ final class MapCanvas: NSView {
 
     private func makeGridPath(model: TileMapModel, zoom: CGFloat) -> CGPath {
         let path = CGMutablePath()
-        let step = CGFloat(model.map.cellWidth) * zoom
-        let totalW = CGFloat(model.map.pixelWidth) * zoom
-        let totalH = CGFloat(model.map.pixelHeight) * zoom
-        var x = step
-        while x < totalW {
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: totalH))
-            x += step
+        let cellW = CGFloat(model.map.cellWidth)
+        let cellH = CGFloat(model.map.cellHeight)
+        if model.orientation == .orthogonal {
+            let step = cellW * zoom
+            let totalW = CGFloat(model.map.pixelWidth) * zoom
+            let totalH = CGFloat(model.map.pixelHeight) * zoom
+            var x = step
+            while x < totalW {
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: totalH))
+                x += step
+            }
+            var y = step
+            while y < totalH {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: totalW, y: y))
+                y += step
+            }
+            return path
         }
-        var y = step
-        while y < totalH {
-            path.move(to: CGPoint(x: 0, y: y))
-            path.addLine(to: CGPoint(x: totalW, y: y))
-            y += step
+        // Isometric / staggered: outline each cell's diamond. Capped so huge
+        // maps never build a million-segment path.
+        let columns = model.map.columns
+        let rows = model.map.rows
+        guard columns * rows <= 65_536 else { return path }
+        let tw = cellW * zoom
+        let th = cellH * zoom
+        for cy in 0..<rows {
+            for cx in 0..<columns {
+                let origin = model.cellOrigin(cx, cy)
+                let ox = CGFloat(origin.x) * zoom
+                let oy = CGFloat(origin.y) * zoom
+                let top = CGPoint(x: ox + tw / 2, y: oy)
+                let right = CGPoint(x: ox + tw, y: oy + th / 2)
+                let bottom = CGPoint(x: ox + tw / 2, y: oy + th)
+                let left = CGPoint(x: ox, y: oy + th / 2)
+                path.move(to: top)
+                path.addLine(to: right)
+                path.addLine(to: bottom)
+                path.addLine(to: left)
+                path.closeSubpath()
+            }
         }
+        return path
+    }
+
+    /// Screen path covering a rectangular cell region (diamond parallelogram for
+    /// isometric/staggered maps, an axis-aligned rect otherwise).
+    private func cellRegionPath(x: Int, y: Int, width: Int, height: Int, model: TileMapModel, zoom: CGFloat) -> CGPath {
+        if model.orientation == .orthogonal {
+            return CGPath(rect: CGRect(x: CGFloat(x * model.map.cellWidth) * zoom,
+                                       y: CGFloat(y * model.map.cellHeight) * zoom,
+                                       width: CGFloat(width * model.map.cellWidth) * zoom,
+                                       height: CGFloat(height * model.map.cellHeight) * zoom), transform: nil)
+        }
+        let tw = CGFloat(model.map.cellWidth)
+        let th = CGFloat(model.map.cellHeight)
+        let x1 = x + max(0, width - 1)
+        let y1 = y + max(0, height - 1)
+        let topLeft = model.cellOrigin(x, y)
+        let topRight = model.cellOrigin(x1, y)
+        let bottomRight = model.cellOrigin(x1, y1)
+        let bottomLeft = model.cellOrigin(x, y1)
+        func point(_ origin: (x: Int, y: Int), _ dx: CGFloat, _ dy: CGFloat) -> CGPoint {
+            CGPoint(x: (CGFloat(origin.x) + dx) * zoom, y: (CGFloat(origin.y) + dy) * zoom)
+        }
+        let path = CGMutablePath()
+        path.move(to: point(topLeft, tw / 2, 0))
+        path.addLine(to: point(topRight, tw, th / 2))
+        path.addLine(to: point(bottomRight, tw / 2, th))
+        path.addLine(to: point(bottomLeft, 0, th / 2))
+        path.closeSubpath()
         return path
     }
 
@@ -361,11 +427,9 @@ final class MapCanvas: NSView {
         // Selection marquee (tile selection or wand region).
         if let rect = model.selection, model.activeIsTile {
             selectionLayer.isHidden = false
-            let scaled = CGRect(x: CGFloat(rect.x * model.map.cellWidth) * zoom,
-                                y: CGFloat(rect.y * model.map.cellHeight) * zoom,
-                                width: CGFloat(rect.width * model.map.cellWidth) * zoom,
-                                height: CGFloat(rect.height * model.map.cellHeight) * zoom)
-            selectionLayer.path = CGPath(rect: scaled, transform: nil)
+            selectionLayer.path = cellRegionPath(x: rect.x, y: rect.y,
+                                                 width: rect.width, height: rect.height,
+                                                 model: model, zoom: zoom)
         } else if model.tool == .select, model.isObjectActive {
             selectionLayer.isHidden = false
             selectionLayer.path = nil
@@ -411,15 +475,13 @@ final class MapCanvas: NSView {
         // Paste / brush ghost anchored at the hovered cell.
         let showBrush = !model.brush.pattern.isEmpty
         let showPaste = model.hasPasteGhost && !model.brush.pattern.isEmpty
-        if (showBrush || showPaste), model.activeIsTile, let hover = model.hoverPixel {
-            let cellX = hover.x / max(1, model.map.cellWidth)
-            let cellY = hover.y / max(1, model.map.cellHeight)
+        if (showBrush || showPaste), model.activeIsTile, let hover = model.hoverPixel,
+           let cell = model.cell(atPixel: hover, clamp: true) {
             ghostLayer.isHidden = false
-            let scaled = CGRect(x: CGFloat(cellX * model.map.cellWidth) * zoom,
-                                y: CGFloat(cellY * model.map.cellHeight) * zoom,
-                                width: CGFloat(model.brush.pattern.width * model.map.cellWidth) * zoom,
-                                height: CGFloat(model.brush.pattern.height * model.map.cellHeight) * zoom)
-            ghostLayer.path = CGPath(rect: scaled, transform: nil)
+            ghostLayer.path = cellRegionPath(x: cell.x, y: cell.y,
+                                             width: model.brush.pattern.width,
+                                             height: model.brush.pattern.height,
+                                             model: model, zoom: zoom)
         } else {
             ghostLayer.isHidden = true
             ghostLayer.path = nil
@@ -631,9 +693,8 @@ final class MapCanvas: NSView {
             if model.isObjectActive { model.deleteObject() } else { model.deleteSelection() }
         }
         if event.keyCode == 36, model.hasPasteGhost {
-            if let hover = model.hoverPixel {
-                model.commitPaste(at: hover.x / max(1, model.map.cellWidth),
-                                  y: hover.y / max(1, model.map.cellHeight))
+            if let hover = model.hoverPixel, let cell = model.cell(atPixel: hover, clamp: true) {
+                model.commitPaste(at: cell.x, y: cell.y)
             }
         }
     }

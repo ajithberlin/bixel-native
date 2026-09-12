@@ -13,6 +13,7 @@ struct LeftBrushDock: View {
     var viewport: CanvasViewport? = nil
 
     @State private var isDraggingEyedropper = false
+    @State private var isModifyHovered = false
 
     private var isEyedropperActive: Bool {
         model.tool == .eyedropper || model.eyedropperSession?.isActive == true
@@ -68,7 +69,12 @@ struct LeftBrushDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.document.canUndo)
-                .help("Undo (⌘Z)")
+                .toolHoverEffect(
+                    name: "Undo",
+                    shortcut: "⌘Z",
+                    details: "Revert the last drawing stroke, edit, or layer change",
+                    cornerRadius: 6
+                )
 
                 Button { model.redo() } label: {
                     Image(systemName: "arrow.uturn.forward")
@@ -78,7 +84,12 @@ struct LeftBrushDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.document.canRedo)
-                .help("Redo (⇧⌘Z)")
+                .toolHoverEffect(
+                    name: "Redo",
+                    shortcut: "⇧⌘Z",
+                    details: "Re-apply the previously undone drawing stroke or edit",
+                    cornerRadius: 6
+                )
             }
         }
     }
@@ -90,13 +101,13 @@ struct LeftBrushDock: View {
             ZStack {
                 // Outer container background
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(isEyedropperActive ? StudioTheme.accentSoft : Color.white.opacity(0.08))
+                    .fill(isEyedropperActive ? StudioTheme.accentSoft : (isModifyHovered ? Color.white.opacity(0.16) : Color.white.opacity(0.08)))
                     .frame(width: 24, height: 24)
 
                 // Outer border
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .strokeBorder(
-                        isEyedropperActive ? StudioTheme.accent : Color.white.opacity(0.35),
+                        isEyedropperActive ? StudioTheme.accent : (isModifyHovered ? Color.white.opacity(0.65) : Color.white.opacity(0.35)),
                         lineWidth: isEyedropperActive ? 1.5 : 1.0
                     )
                     .frame(width: 24, height: 24)
@@ -104,15 +115,21 @@ struct LeftBrushDock: View {
                 // Inner rounded rectangle icon (Procreate modify button icon)
                 RoundedRectangle(cornerRadius: 3.5, style: .continuous)
                     .strokeBorder(
-                        isEyedropperActive ? StudioTheme.accent : Color.white.opacity(0.65),
+                        isEyedropperActive ? StudioTheme.accent : (isModifyHovered ? .white : Color.white.opacity(0.65)),
                         lineWidth: 1.2
                     )
                     .frame(width: 12, height: 12)
             }
             .shadow(color: isEyedropperActive ? StudioTheme.accent.opacity(0.4) : .clear, radius: 4)
+            .scaleEffect(isModifyHovered ? 1.08 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isModifyHovered)
         }
         .buttonStyle(.plain)
-        .help("Modify / Eyedropper: tap to toggle or drag onto canvas to pick color")
+        .onHover { hovering in
+            isModifyHovered = hovering
+            if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        .help("Quick Eyedropper / Modify (I)\nTap to toggle eyedropper, or drag onto canvas with live 9x magnifying loupe to sample colors")
         .highPriorityGesture(
             DragGesture(minimumDistance: 4, coordinateSpace: .named("CanvasCoordinateSpace"))
                 .onChanged { gesture in
@@ -152,6 +169,7 @@ struct ProcreateVerticalSlider: View {
     let title: String
 
     @State private var isDragging = false
+    @State private var isHovered = false
 
     private var fraction: CGFloat {
         CGFloat((value - range.lowerBound) / (range.upperBound - range.lowerBound))
@@ -168,14 +186,14 @@ struct ProcreateVerticalSlider: View {
             ZStack(alignment: .top) {
                 // Background Track
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.12))
+                    .fill(Color.white.opacity(isHovered ? 0.18 : 0.12))
                     .frame(width: 22, height: trackHeight)
 
                 // Fill level
                 VStack {
                     Spacer()
                     Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.22))
+                        .fill(Color.white.opacity(isHovered ? 0.28 : 0.22))
                         .frame(width: 22, height: max(6, trackHeight * fraction))
                 }
                 .frame(width: 22, height: trackHeight)
@@ -183,13 +201,17 @@ struct ProcreateVerticalSlider: View {
 
                 // Draggable Thumb Knob
                 Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.92))
+                    .fill(isHovered ? Color.white : Color.white.opacity(0.92))
                     .frame(width: thumbWidth, height: thumbHeight)
                     .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                    .scaleEffect(isHovered ? 1.08 : 1.0)
+                    .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isHovered)
                     .offset(y: thumbY)
             }
             .frame(width: geo.size.width)
             .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .help("Brush \(title) Slider\n\(title == "Size" ? "Drag to adjust stroke diameter from 1px to 64px" : "Drag to adjust stroke alpha transparency from 0% to 100%")")
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in

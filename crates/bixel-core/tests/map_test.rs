@@ -5,9 +5,10 @@
 //! produced by the real Tiled editor must round-trip losslessly.
 
 use bixel_core::map::{
-    GID_D_FLIP, GID_H_FLIP, GID_V_FLIP, TileMap, MAX_MAP_DIM,
+    GID_D_FLIP, GID_H_FLIP, GID_V_FLIP, Orientation, RenderOrder, StaggerAxis, StaggerIndex,
+    TileMap, MAX_MAP_DIM,
 };
-use bixel_core::tilemap::Pattern;
+use bixel_core::tilemap::{MapGeometry, Pattern};
 use serde_json::Value;
 
 /// 32×32 two-tile RGBA sheet: tile 0 solid red, tile 1 solid green.
@@ -508,4 +509,102 @@ fn image_layer_round_trips_through_tiled_json() {
     assert!((layer.opacity - 0.5).abs() < 1e-6);
     // Pixels are not serialized; the host uploads them after load.
     assert!(layer.pixels.is_empty());
+}
+
+#[test]
+fn isometric_and_staggered_projection_round_trip() {
+    let iso = MapGeometry::new(
+        Orientation::Isometric, 4, 4, 32, 16, StaggerAxis::Y, StaggerIndex::Odd,
+    );
+    for cy in 0..4i64 {
+        for cx in 0..4i64 {
+            let (ox, oy) = iso.tile_origin(cx, cy);
+            let (rx, ry) = iso.pixel_to_cell((ox + 16) as f64, (oy + 8) as f64);
+            assert_eq!((rx, ry), (cx, cy), "isometric cell {cx},{cy}");
+        }
+    }
+
+    for index in [StaggerIndex::Odd, StaggerIndex::Even] {
+        let st = MapGeometry::new(
+            Orientation::Staggered, 4, 4, 32, 16, StaggerAxis::Y, index,
+        );
+        for cy in 0..4i64 {
+            for cx in 0..4i64 {
+                let (ox, oy) = st.tile_origin(cx, cy);
+                let (rx, ry) = st.pixel_to_cell((ox + 16) as f64, (oy + 8) as f64);
+                assert_eq!((rx, ry), (cx, cy), "staggered {index:?} cell {cx},{cy}");
+            }
+        }
+    }
+}
+
+#[test]
+fn isometric_pixel_size_and_composite_placement() {
+    let mut map = TileMap::new(2, 2, 32, 16);
+    map.orientation = Orientation::Isometric;
+    assert_eq!((map.pixel_width(), map.pixel_height()), (80, 32));
+
+    let img = solid_image(32, 16, 255, 0, 0);
+    let ts = map
+        .add_tileset("t", "assets/t.png", 32, 16, 32, 16, 0, 0)
+        .unwrap();
+    map.set_tileset_pixels(ts, &img);
+    map.set_tile(0, 0, 0, 1); // top cell → image origin (32, 0)
+    map.set_tile(0, 1, 1, 1); // bottom cell → image origin (32, 16)
+
+    let out = map.composite();
+    let w = map.pixel_width();
+    let px = |x: usize, y: usize| (y * w + x) * 4;
+    assert_eq!(out[px(32, 0)], 255);
+    assert_eq!(out[px(32, 0) + 3], 255);
+    // Left of the projected tile is untouched.
+    assert_eq!(out[px(31, 0) + 3], 0);
+    assert_eq!(out[px(32, 16) + 3], 255);
+}
+
+#[test]
+fn orientation_and_tileoffset_round_trip() {
+    let mut map = TileMap::new(3, 3, 32, 16);
+    map.orientation = Orientation::Isometric;
+    map.render_order = RenderOrder::LeftUp;
+    map.add_tileset("t", "assets/t.png", 64, 32, 32, 16, 0, 0).unwrap();
+    map.set_tileset_tile_offset(0, 0, -8);
+    assert_eq!(map.tileset_tile_offset(0), Some((0, -8)));
+
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["orientation"], "isometric");
+    assert_eq!(value["renderorder"], "left-up");
+    assert_eq!(value["tilesets"][0]["tileoffset"]["y"], -8);
+
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert_eq!(back.orientation, Orientation::Isometric);
+    assert_eq!(back.render_order, RenderOrder::LeftUp);
+    assert_eq!(back.tilesets[0].tile_offset, (0, -8));
+}
+
+#[test]
+fn staggered_round_trip_and_hexagonal_rejected() {
+    let mut map = TileMap::new(4, 3, 32, 16);
+    map.orientation = Orientation::Staggered;
+    map.stagger_axis = StaggerAxis::Y;
+    map.stagger_index = StaggerIndex::Even;
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["orientation"], "staggered");
+    assert_eq!(value["staggeraxis"], "y");
+    assert_eq!(value["staggerindex"], "even");
+
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert_eq!(back.orientation, Orientation::Staggered);
+    assert_eq!(back.stagger_index, StaggerIndex::Even);
+
+    // `isometric_staggered` is accepted as an alias for Tiled's staggered layout.
+    let alias = r#"{"type":"map","orientation":"isometric_staggered","width":2,"height":2,
+        "tilewidth":32,"tileheight":16,"tilesets":[],"layers":[]}"#;
+    assert_eq!(TileMap::from_tiled_json(alias).unwrap().orientation, Orientation::Staggered);
+
+    let hex = r#"{"type":"map","orientation":"hexagonal","width":2,"height":2,
+        "tilewidth":16,"tileheight":16,"tilesets":[],"layers":[]}"#;
+    assert!(TileMap::from_tiled_json(hex).is_err());
 }

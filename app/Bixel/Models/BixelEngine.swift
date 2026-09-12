@@ -665,7 +665,64 @@ struct MapTilesetInfo: Codable {
     var spacing: Int
     var columns: Int
     var tileCount: Int
+    var tileOffsetX: Int = 0
+    var tileOffsetY: Int = 0
 }
+
+/// Map projection modes supported by the editor (mirrors `tilemap::Orientation`).
+enum MapOrientation: Int, CaseIterable, Identifiable {
+    case orthogonal = 0
+    case isometric = 1
+    case staggered = 2
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .orthogonal: return "Orthogonal"
+        case .isometric: return "Isometric"
+        case .staggered: return "Isometric (Staggered)"
+        }
+    }
+
+    var isIsometric: Bool { self != .orthogonal }
+}
+
+/// Painter's order for overlapping isometric tiles.
+enum MapRenderOrder: Int, CaseIterable, Identifiable {
+    case rightDown = 0
+    case rightUp = 1
+    case leftDown = 2
+    case leftUp = 3
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .rightDown: return "Right Down"
+        case .rightUp: return "Right Up"
+        case .leftDown: return "Left Down"
+        case .leftUp: return "Left Up"
+        }
+    }
+}
+
+/// Axis along which staggered rows/columns are offset.
+enum MapStaggerAxis: Int, CaseIterable, Identifiable {
+    case x = 0
+    case y = 1
+    var id: Int { rawValue }
+    var label: String { self == .x ? "X" : "Y" }
+}
+
+/// Which rows/columns receive the half-tile offset.
+enum MapStaggerIndex: Int, CaseIterable, Identifiable {
+    case odd = 0
+    case even = 1
+    var id: Int { rawValue }
+    var label: String { self == .odd ? "Odd" : "Even" }
+}
+
 
 /// One row for the map layers panel (tile, object or image layer).
 struct MapLayerRow: Codable, Identifiable {
@@ -745,6 +802,78 @@ final class TileMap: @unchecked Sendable {
     var rows: Int { Int(bixel_map_cell_count_y(handle)) }
     var pixelWidth: Int { Int(bixel_map_pixel_width(handle)) }
     var pixelHeight: Int { Int(bixel_map_pixel_height(handle)) }
+
+    // MARK: Orientation / projection
+
+    var orientation: MapOrientation {
+        MapOrientation(rawValue: Int(bixel_map_orientation(handle))) ?? .orthogonal
+    }
+
+    @discardableResult
+    func setOrientation(_ orientation: MapOrientation) -> Bool {
+        bixel_map_set_orientation(handle, UInt8(orientation.rawValue))
+    }
+
+    var renderOrder: MapRenderOrder {
+        MapRenderOrder(rawValue: Int(bixel_map_render_order(handle))) ?? .rightDown
+    }
+
+    @discardableResult
+    func setRenderOrder(_ order: MapRenderOrder) -> Bool {
+        bixel_map_set_render_order(handle, UInt8(order.rawValue))
+    }
+
+    var staggerAxis: MapStaggerAxis {
+        MapStaggerAxis(rawValue: Int(bixel_map_stagger_axis(handle))) ?? .y
+    }
+
+    @discardableResult
+    func setStaggerAxis(_ axis: MapStaggerAxis) -> Bool {
+        bixel_map_set_stagger_axis(handle, UInt8(axis.rawValue))
+    }
+
+    var staggerIndex: MapStaggerIndex {
+        MapStaggerIndex(rawValue: Int(bixel_map_stagger_index(handle))) ?? .odd
+    }
+
+    @discardableResult
+    func setStaggerIndex(_ index: MapStaggerIndex) -> Bool {
+        bixel_map_set_stagger_index(handle, UInt8(index.rawValue))
+    }
+
+    /// Top-left screen pixel of a cell's tile image (orientation-aware).
+    func cellOrigin(x: Int, y: Int) -> (x: Int, y: Int) {
+        var ox: Int64 = 0
+        var oy: Int64 = 0
+        bixel_map_cell_origin(handle, Int32(x), Int32(y), &ox, &oy)
+        return (Int(ox), Int(oy))
+    }
+
+    /// Centre of a cell's tile image (used to anchor object creation).
+    func cellCenter(x: Int, y: Int) -> (x: Int, y: Int) {
+        let origin = cellOrigin(x: x, y: y)
+        return (origin.x + cellWidth / 2, origin.y + cellHeight / 2)
+    }
+
+    /// Whole-map screen pixel -> integer cell. `inside` is false off the map.
+    func pixelToCell(x: Double, y: Double) -> (x: Int, y: Int, inside: Bool) {
+        var cx: Int32 = 0
+        var cy: Int32 = 0
+        let inside = bixel_map_pixel_to_cell(handle, x, y, &cx, &cy)
+        return (Int(cx), Int(cy), inside)
+    }
+
+    @discardableResult
+    func setTilesetTileOffset(_ index: Int, x: Int, y: Int) -> Bool {
+        bixel_map_set_tileset_tile_offset(handle, UInt32(index), Int32(x), Int32(y))
+    }
+
+    func tilesetTileOffset(_ index: Int) -> (x: Int, y: Int)? {
+        var x: Int32 = 0
+        var y: Int32 = 0
+        guard bixel_map_tileset_tile_offset(handle, UInt32(index), &x, &y) else { return nil }
+        return (Int(x), Int(y))
+    }
 
     // MARK: Tilesets
 
