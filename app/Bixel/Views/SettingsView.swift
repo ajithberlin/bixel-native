@@ -127,6 +127,7 @@ private struct LegacyAppSettingsOpener: View {
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case provider
+    case remote
     case skills
     case mcp
     case general
@@ -137,6 +138,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .provider: return "Provider"
+        case .remote: return "Devices"
         case .skills: return "Skills"
         case .mcp: return "MCP Servers"
         case .general: return "General"
@@ -147,6 +149,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .provider: return "sparkles"
+        case .remote: return "ipad.and.iphone"
         case .skills: return "square.stack.3d.up"
         case .mcp: return "server.rack"
         case .general: return "gearshape"
@@ -157,6 +160,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .provider: return StudioTheme.accent
+        case .remote: return StudioTheme.procreateBlue
         case .skills: return StudioTheme.bixelGreen
         case .mcp: return .orange
         case .general: return .gray
@@ -166,12 +170,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     /// Panes that are functional on the current platform. Skills (Python/shell)
     /// and MCP servers (stdio subprocesses) require a desktop agent, so they are
-    /// macOS-only; iPad keeps Provider, General, and About.
+    /// macOS-only; iPad keeps Provider, Devices, General, and About.
     static var visible: [SettingsPane] {
         #if os(macOS)
         return allCases
         #else
-        return [.provider, .general, .about]
+        return [.provider, .remote, .general, .about]
         #endif
     }
 }
@@ -205,6 +209,7 @@ struct SettingsView: View {
             Group {
                 switch pane ?? .provider {
                 case .provider: ProviderSettingsPane().padding(20)
+                case .remote: RemoteSettingsPane()
                 case .skills: SkillsSettingsPane()
                 case .mcp: MCPSettingsPane()
                 case .general: GeneralSettingsPane()

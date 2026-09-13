@@ -24,6 +24,14 @@
 	<string>ca-app-pub-5686188892396495~6976293226</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_bixel-remote._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Bixel uses the camera to scan the pairing QR code shown on your Mac.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Bixel connects to your Mac on the local network to sync projects and share the AI assistant.</string>
 	<key>RevenueCatAPIKey</key>
 	<string>appl_RxyNleGUVFCdwNVZemafcSzICuv</string>
 </dict>
