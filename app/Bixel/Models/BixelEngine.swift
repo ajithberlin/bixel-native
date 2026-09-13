@@ -1269,3 +1269,133 @@ enum ProjectStorage {
         }
     }
 }
+
+// MARK: - Project sync gateway
+
+/// Swift face of the Rust `sync` core: content-addressed manifests, three-way
+/// reconciliation plans, and the shared blob store. All reconciliation logic
+/// lives in `bixel_core::sync`; this only marshals JSON and the two-call blob
+/// read. Transports (Bonjour/WebSocket) layer on top.
+enum ProjectSync {
+    struct FileEntry: Codable, Hashable {
+        let hash: String
+        let bytes: UInt64
+        var updatedUnix: UInt64 = 0
+    }
+
+    struct Manifest: Codable, Hashable {
+        var schema: UInt32 = 1
+        var projectID: String
+        var revision: UInt64 = 0
+        var device: String = ""
+        var updatedUnix: UInt64 = 0
+        var files: [String: FileEntry] = [:]
+    }
+
+    struct Conflict: Codable, Hashable {
+        let path: String
+        let localHash: String?
+        let remoteHash: String?
+        let baseHash: String?
+    }
+
+    struct Plan: Codable, Hashable {
+        let pull: [String]
+        let push: [String]
+        let deleteLocal: [String]
+        let deleteRemote: [String]
+        let conflicts: [Conflict]
+
+        var isEmpty: Bool {
+            pull.isEmpty && push.isEmpty && deleteLocal.isEmpty && deleteRemote.isEmpty && conflicts.isEmpty
+        }
+    }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+
+    /// Decode the `{value:...}` / `{error:...}` envelope every `bixel_sync_*`
+    /// function returns.
+    private static func value(from ptr: UnsafeMutablePointer<CChar>?) throws -> Any? {
+        guard let ptr else { throw StorageError.message("Sync request failed.") }
+        defer { bixel_string_free(ptr) }
+        let result = try JSONSerialization.jsonObject(with: Data(String(cString: ptr).utf8)) as? [String: Any]
+        if let error = result?["error"] as? String { throw StorageError.message(error) }
+        return result?["value"]
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, _ value: Any?) throws -> T {
+        let data = try JSONSerialization.data(withJSONObject: value ?? [:])
+        return try decoder.decode(T.self, from: data)
+    }
+
+    /// Scan a project into a content-addressed manifest.
+    static func manifest(projectRoot: URL, projectID: String) throws -> Manifest {
+        let raw = try value(from: bixel_sync_manifest(projectRoot.path, projectID))
+        return try decode(Manifest.self, raw)
+    }
+
+    /// Three-way reconcile. `base` is the last common manifest (`nil` on a
+    /// first-ever sync).
+    static func plan(base: Manifest?, local: Manifest, remote: Manifest) throws -> Plan {
+        let baseJSON: String
+        if let base {
+            baseJSON = try String(data: encoder.encode(base), encoding: .utf8) ?? ""
+        } else {
+            baseJSON = ""
+        }
+        let localJSON = String(data: try encoder.encode(local), encoding: .utf8) ?? "{}"
+        let remoteJSON = String(data: try encoder.encode(remote), encoding: .utf8) ?? "{}"
+        let raw = try value(from: bixel_sync_plan(baseJSON, localJSON, remoteJSON))
+        return try decode(Plan.self, raw)
+    }
+
+    /// Persist a project's manifest atomically.
+    static func writeManifest(projectRoot: URL, manifest: Manifest) throws {
+        let json = String(data: try encoder.encode(manifest), encoding: .utf8) ?? "{}"
+        let ptr = bixel_sync_write_manifest(projectRoot.path, json)
+        if let ptr {
+            defer { bixel_string_free(ptr) }
+            throw StorageError.message(String(cString: ptr))
+        }
+    }
+
+    /// Preserved-peer filename for a conflict (never auto-merges documents).
+    static func conflictName(path: String, device: String, timestamp: UInt64 = UInt64(Date().timeIntervalSince1970)) -> String {
+        guard let ptr = bixel_sync_conflict_name(path, device, timestamp) else { return path }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
+    /// Store bytes in the shared content-addressed store; returns `blake3:<hex>`.
+    static func storeBlob(projectsRoot: URL, data: Data) throws -> String {
+        let raw = try data.withUnsafeBytes { buffer in
+            try value(from: bixel_sync_store_blob(projectsRoot.path, buffer.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt64(data.count)))
+        }
+        guard let hash = raw as? String else { throw StorageError.message("Could not store blob.") }
+        return hash
+    }
+
+    /// Read a blob by hash; nil when absent locally.
+    static func readBlob(projectsRoot: URL, hash: String) throws -> Data? {
+        let length = bixel_sync_read_blob(projectsRoot.path, hash, nil, 0)
+        if length == -2 { return nil }
+        guard length >= 0 else { throw StorageError.message("Could not read blob \(hash).") }
+        if length == 0 { return Data() }
+        var buffer = [UInt8](repeating: 0, count: Int(length))
+        let written = buffer.withUnsafeMutableBufferPointer { ptr in
+            bixel_sync_read_blob(projectsRoot.path, hash, ptr.baseAddress, UInt64(ptr.count))
+        }
+        guard written == length else { throw StorageError.message("Could not read blob \(hash).") }
+        return Data(buffer)
+    }
+}

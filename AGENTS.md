@@ -68,6 +68,7 @@ Module → original Python/JS source (porting reference):
 | `paths.rs` | `core/paths.py` |
 | `project.rs` | `core/projects.py` |
 | `sources.rs` | `core/sources.py` |
+| `sync.rs` | *(new — Mac↔iPad project replication: blake3 content-addressed manifests, three-way diff/conflict planning, shared blob store)* |
 | `clipboard.rs` | `core/clipboard.py` |
 | `config.rs` | `core/config.py` |
 | `audits.rs` | `core/audits.py` |

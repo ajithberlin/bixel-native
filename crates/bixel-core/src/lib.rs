@@ -21,6 +21,8 @@
 //! * [`paths`] — app-home resolution, project roots and the path jail.
 //! * [`project`] — project create/list/load/delete + active-project state.
 //! * [`sources`] — in-place source references (folders/files opened directly).
+//! * [`sync`] — Mac ↔ iPad project replication: content-addressed manifests,
+//!   three-way diff/conflict planning, and a shared blob store.
 //! * [`config`] — AI provider configuration and API-token storage.
 //! * [`clipboard`] — per-project asset clip tray.
 //! * [`audits`] — persisted, dated validation reports.
@@ -43,6 +45,7 @@ pub mod paths;
 pub mod project;
 pub mod sheet;
 pub mod sources;
+pub mod sync;
 pub mod tilemap;
 pub mod timeline;
 

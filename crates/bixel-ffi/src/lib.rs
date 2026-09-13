@@ -1677,6 +1677,153 @@ pub unsafe extern "C" fn bixel_storage_read_bytes(
     }
 }
 
+// ------------------------------------------------------------------- sync
+//
+// Mac ↔ iPad project replication core: content-addressed manifests and the
+// three-way reconciliation plan. Pure JSON over the ABI; the network transport
+// and UI live in Swift. Regenerable caches are excluded from manifests and
+// conflicting files are never auto-merged (the caller preserves both copies).
+
+/// Scan a project directory into a content-addressed manifest. Returns
+/// `{value:<manifest>}` or `{error:...}`; free with `bixel_string_free`.
+#[no_mangle]
+pub extern "C" fn bixel_sync_manifest(
+    project_root: *const c_char,
+    project_id: *const c_char,
+) -> *mut c_char {
+    let root = std::path::PathBuf::from(arg_str(project_root));
+    let result = bixel_core::sync::scan_manifest(&root, &arg_str(project_id));
+    out_cstr(
+        match result {
+            Ok(manifest) => serde_json::json!({ "value": manifest }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Compute the reconciliation plan from `base` (null/empty for a first sync),
+/// `local`, and `remote` manifests. Returns `{value:<plan>}` or `{error:...}`.
+#[no_mangle]
+pub extern "C" fn bixel_sync_plan(
+    base_json: *const c_char,
+    local_json: *const c_char,
+    remote_json: *const c_char,
+) -> *mut c_char {
+    use bixel_core::sync::{plan, Manifest};
+    let parse = |text: String| -> Result<Manifest, String> {
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    };
+    let result = (|| {
+        let local = parse(arg_str(local_json))?;
+        let remote = parse(arg_str(remote_json))?;
+        let base_text = arg_str(base_json);
+        let base = if base_text.trim().is_empty() || base_text.trim() == "null" {
+            None
+        } else {
+            Some(parse(base_text)?)
+        };
+        Ok::<_, String>(plan(base.as_ref(), &local, &remote))
+    })();
+    out_cstr(
+        match result {
+            Ok(plan) => serde_json::json!({ "value": plan }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Atomically persist a manifest under the project root. Returns null on
+/// success or an owned error string.
+#[no_mangle]
+pub extern "C" fn bixel_sync_write_manifest(
+    project_root: *const c_char,
+    manifest_json: *const c_char,
+) -> *mut c_char {
+    let result =
+        serde_json::from_str::<bixel_core::sync::Manifest>(&arg_str(manifest_json))
+            .map_err(|e| e.to_string())
+            .and_then(|manifest| {
+                bixel_core::sync::write_manifest(
+                    std::path::Path::new(&arg_str(project_root)),
+                    &manifest,
+                )
+            });
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Conflict filename for a path (`documents/a.json` →
+/// `documents/a.conflict-ipad-42.json`). Returns an owned string.
+#[no_mangle]
+pub extern "C" fn bixel_sync_conflict_name(
+    path: *const c_char,
+    device: *const c_char,
+    timestamp: u64,
+) -> *mut c_char {
+    out_cstr(bixel_core::sync::conflict_name(
+        &arg_str(path),
+        &arg_str(device),
+        timestamp,
+    ))
+}
+
+/// Store bytes in the shared content-addressed blob store (idempotent).
+/// Returns `{value:"blake3:<hex>"}` or `{error:...}`.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_sync_store_blob(
+    projects_root: *const c_char,
+    bytes: *const u8,
+    len: u64,
+) -> *mut c_char {
+    if bytes.is_null() || len > isize::MAX as u64 {
+        return out_cstr(r#"{"error":"Invalid blob buffer"}"#.into());
+    }
+    let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    let result = bixel_core::sync::store_blob(
+        std::path::Path::new(&arg_str(projects_root)),
+        data,
+    );
+    out_cstr(
+        match result {
+            Ok(hash) => serde_json::json!({ "value": hash }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Two-call blob read. Returns bytes written, the required length when `out` is
+/// null/too small, `-2` when the blob is missing, or `-1` on error.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_sync_read_blob(
+    projects_root: *const c_char,
+    hash: *const c_char,
+    out: *mut u8,
+    out_len: u64,
+) -> i64 {
+    if out_len > isize::MAX as u64 {
+        return -1;
+    }
+    match bixel_core::sync::read_blob(
+        std::path::Path::new(&arg_str(projects_root)),
+        &arg_str(hash),
+    ) {
+        Ok(Some(bytes)) => {
+            if out.is_null() || (out_len as usize) < bytes.len() {
+                return bytes.len() as i64;
+            }
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+            bytes.len() as i64
+        }
+        Ok(None) => -2,
+        Err(_) => -1,
+    }
+}
+
 // ----------------------------------------------------------------- tile map
 //
 // The TileMap designer (`.map` documents are Tiled 1.10 JSON). Same contract
