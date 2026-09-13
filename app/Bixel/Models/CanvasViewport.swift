@@ -78,6 +78,26 @@ final class CanvasViewport: ObservableObject {
         return (px, py)
     }
 
+    // MARK: - Unbounded (infinite map) coordinates
+
+    /// View point (y-up) of document pixel (0, 0) for an unbounded canvas.
+    func unboundedOrigin(viewSize: CGSize) -> CGPoint {
+        CGPoint(x: (viewSize.width - rightInset) / 2 + pan.x,
+                y: viewSize.height / 2 + pan.y)
+    }
+
+    /// Document pixel (may be negative/fractional) → view point (y-up).
+    func docToView(x: Double, y: Double, viewSize: CGSize) -> CGPoint {
+        let origin = unboundedOrigin(viewSize: viewSize)
+        return CGPoint(x: origin.x + CGFloat(x) * zoom, y: origin.y - CGFloat(y) * zoom)
+    }
+
+    /// View point (y-up) → document pixel (may be negative/fractional).
+    func viewToDocF(_ point: CGPoint, viewSize: CGSize) -> (x: Double, y: Double) {
+        let origin = unboundedOrigin(viewSize: viewSize)
+        return (Double((point.x - origin.x) / zoom), Double((origin.y - point.y) / zoom))
+    }
+
     // MARK: - Zoom
 
     func zoomToFit(viewSize: CGSize, canvasWidth w: Int, height h: Int) {

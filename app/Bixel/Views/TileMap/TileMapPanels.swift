@@ -14,7 +14,6 @@ import Combine
 
 struct MapLeftDock: View {
     @ObservedObject var model: TileMapModel
-    @State private var showProperties = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -89,15 +88,6 @@ struct MapLeftDock: View {
 
             Divider().frame(width: 26).overlay(StudioTheme.hairline)
 
-            Button { showProperties = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.85))
-                    .frame(width: 34, height: 32)
-            }
-            .buttonStyle(.plain)
-            .toolHoverEffect(name: "Map Properties", details: "View and edit map metadata, dimensions, and custom properties", cornerRadius: 6)
-
             Button { pickImageLayer() } label: {
                 Image(systemName: "photo.badge.plus")
                     .font(.system(size: 14, weight: .medium))
@@ -117,10 +107,6 @@ struct MapLeftDock: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
         .shadow(color: .black.opacity(0.45), radius: 20, y: 6)
-        .sheet(isPresented: $showProperties) {
-            MapPropertiesEditor(model: model, target: .map)
-                .frame(width: 340, height: 540)
-        }
     }
 
     private func pickImageLayer() {
@@ -1033,7 +1019,7 @@ struct MapLayersPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Map Layers")
+                Text("Scene Layers")
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(Color.white.opacity(0.92))
                 Spacer()
@@ -1490,17 +1476,20 @@ struct MiniMapOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Map")
+                Text("Scene")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
-                Text("\(model.width)×\(model.height) cells")
+                Text(model.isInfinite ? "Infinite" : "\(model.width)×\(model.height) cells")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
             }
             GeometryReader { geo in
-                let mapW = CGFloat(model.map.pixelWidth)
-                let mapH = CGFloat(model.map.pixelHeight)
+                let content = model.isInfinite ? model.contentPixelBounds() : nil
+                let contentX = CGFloat(content?.x ?? 0)
+                let contentY = CGFloat(content?.y ?? 0)
+                let mapW = CGFloat(content?.width ?? model.map.pixelWidth)
+                let mapH = CGFloat(content?.height ?? model.map.pixelHeight)
                 let inner = geo.size
                 let scale = min(inner.width / max(1, mapW), inner.height / max(1, mapH))
                 let imgW = mapW * scale
@@ -1510,14 +1499,15 @@ struct MiniMapOverlay: View {
                 ZStack {
                     Color.clear
                         .background(CheckerboardView(cell: 4))
-                    if let cg = model.compositeCGImage() {
+                    if let cg = model.compositeCGImage(), imgW > 0, imgH > 0 {
                         Image(nsImage: NSImage(cgImage: cg, size: .zero))
                             .resizable()
                             .interpolation(.none)
                             .frame(width: imgW, height: imgH)
                             .position(x: ox + imgW / 2, y: oy + imgH / 2)
                     }
-                    viewportRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH, imgW: imgW, imgH: imgH)
+                    viewportRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH, imgW: imgW, imgH: imgH,
+                                 contentX: contentX, contentY: contentY)
                         .position(x: ox + imgW / 2, y: oy + imgH / 2)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -1526,7 +1516,7 @@ struct MiniMapOverlay: View {
                         let x = value.location.x - ox
                         let y = value.location.y - oy
                         guard x >= 0, y >= 0, x <= imgW, y <= imgH else { return }
-                        jump(toDocX: x / scale, y: y / scale)
+                        jump(toDocX: x / scale + contentX, y: y / scale + contentY)
                     }
                 )
             }
@@ -1540,20 +1530,10 @@ struct MiniMapOverlay: View {
     }
 
     @ViewBuilder
-    private func viewportRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat, imgW: CGFloat, imgH: CGFloat) -> some View {
-        let viewSize = viewport.lastViewSize
-        if viewSize.width <= 0 { EmptyView() } else {
-            // Visible viewport rectangle in document pixel space (y-up AppKit).
-            let vw = min(mapW, viewSize.width / viewport.zoom)
-            let vh = min(mapH, viewSize.height / viewport.zoom)
-            // Artboard origin in view points; top-left doc corner in view space.
-            let origin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
-            let leftDoc = max(0, -origin.x / viewport.zoom)
-            let topDoc = max(0, (viewSize.height - (origin.y + mapH * viewport.zoom)) / viewport.zoom)
-            let rightDoc = min(mapW, leftDoc + vw)
-            let bottomDoc = min(mapH, topDoc + vh)
-            let rect = CGRect(x: ox + leftDoc * scale, y: oy + topDoc * scale,
-                              width: (rightDoc - leftDoc) * scale, height: (bottomDoc - topDoc) * scale)
+    private func viewportRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat,
+                              imgW: CGFloat, imgH: CGFloat, contentX: CGFloat, contentY: CGFloat) -> some View {
+        if let rect = visibleMapRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH,
+                                     contentX: contentX, contentY: contentY) {
             Rectangle()
                 .strokeBorder(StudioTheme.accent.opacity(0.9), lineWidth: 1)
                 .frame(width: rect.width, height: rect.height)
@@ -1561,8 +1541,43 @@ struct MiniMapOverlay: View {
         }
     }
 
+    /// Visible viewport rectangle in minimap coordinates, or nil when empty.
+    private func visibleMapRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat,
+                                contentX: CGFloat, contentY: CGFloat) -> CGRect? {
+        let viewSize = viewport.lastViewSize
+        guard viewSize.width > 0 else { return nil }
+        let leftDoc: CGFloat
+        let topDoc: CGFloat
+        let rightDoc: CGFloat
+        let bottomDoc: CGFloat
+        if model.isInfinite {
+            let tl = viewport.viewToDocF(CGPoint(x: 0, y: viewSize.height), viewSize: viewSize)
+            let br = viewport.viewToDocF(CGPoint(x: viewSize.width, y: 0), viewSize: viewSize)
+            leftDoc = max(contentX, CGFloat(tl.x))
+            topDoc = max(contentY, CGFloat(tl.y))
+            rightDoc = min(contentX + mapW, CGFloat(br.x))
+            bottomDoc = min(contentY + mapH, CGFloat(br.y))
+        } else {
+            let vw = min(mapW, viewSize.width / viewport.zoom)
+            let vh = min(mapH, viewSize.height / viewport.zoom)
+            let origin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+            leftDoc = max(0, -origin.x / viewport.zoom)
+            topDoc = max(0, (viewSize.height - (origin.y + mapH * viewport.zoom)) / viewport.zoom)
+            rightDoc = min(mapW, leftDoc + vw)
+            bottomDoc = min(mapH, topDoc + vh)
+        }
+        guard rightDoc > leftDoc, bottomDoc > topDoc else { return nil }
+        return CGRect(x: ox + (leftDoc - contentX) * scale, y: oy + (topDoc - contentY) * scale,
+                      width: (rightDoc - leftDoc) * scale, height: (bottomDoc - topDoc) * scale)
+    }
+
     private func jump(toDocX px: CGFloat, y py: CGFloat) {
         let zoom = viewport.zoom
+        if model.isInfinite {
+            // Centre the tapped world point in the view.
+            viewport.pan = CGPoint(x: -px * zoom, y: py * zoom)
+            return
+        }
         let mapW = CGFloat(model.map.pixelWidth)
         let mapH = CGFloat(model.map.pixelHeight)
         viewport.pan = CGPoint(x: zoom * (mapW / 2 - px), y: zoom * (py - mapH / 2))
@@ -1624,9 +1639,6 @@ struct MapPropertiesEditor: View {
                 Button("Save") { save() }.buttonStyle(.borderedProminent).controlSize(.small)
                     .help("Save these properties to the map")
             }
-            if target == .map {
-                projectionSection
-            }
             if props.isEmpty {
                 Text("No custom properties yet.")
                     .font(.caption)
@@ -1654,60 +1666,6 @@ struct MapPropertiesEditor: View {
 
     private func reload() {
         props = model.map.properties(target: target.code, layer: target.layerIndex, objectID: target.objectID)
-    }
-
-    @ViewBuilder
-    private var projectionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Projection")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.secondary)
-            Picker("Orientation", selection: Binding(
-                get: { model.orientation },
-                set: { model.setOrientation($0) }
-            )) {
-                ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.menu)
-            .help("Orthogonal, isometric diamond or isometric staggered layout")
-
-            if model.orientation.isIsometric {
-                Picker("Render order", selection: Binding(
-                    get: { model.renderOrder },
-                    set: { model.setRenderOrder($0) }
-                )) {
-                    ForEach(MapRenderOrder.allCases) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .help("Painter's order for overlapping isometric tiles")
-            }
-
-            if model.orientation == .staggered {
-                HStack(spacing: 12) {
-                    Picker("Axis", selection: Binding(
-                        get: { model.staggerAxis },
-                        set: { model.setStaggerAxis($0) }
-                    )) {
-                        ForEach(MapStaggerAxis.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    Picker("Index", selection: Binding(
-                        get: { model.staggerIndex },
-                        set: { model.setStaggerIndex($0) }
-                    )) {
-                        ForEach(MapStaggerIndex.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                }
-                .help("Which rows/columns are offset by half a tile")
-            }
-
-            Text("Isometric maps project diamond tiles — use a 2:1 tile size (e.g. 32×16) and a negative tile offset for tall art.")
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Divider().overlay(StudioTheme.hairline)
-        }
     }
 
     private func save() {

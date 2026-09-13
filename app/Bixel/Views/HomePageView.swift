@@ -349,8 +349,8 @@ struct HomePageView: View {
                         }
                     }
 
-                    heroQuickButton(title: "New Map", subtitle: "Stamp and design", icon: "map") {
-                        if let project = store.createProject(name: "New Map", mode: .map, width: 40, height: 25) {
+                    heroQuickButton(title: "New Scene", subtitle: "Stamp and design", icon: "map") {
+                        if let project = store.createProject(name: "New Scene", mode: .map, width: 0, height: 0, infinite: true, orientation: .isometric) {
                             onOpenProject(project)
                         }
                     }
@@ -1226,7 +1226,7 @@ struct RecentProjectCard: View {
         case .normal:
             return (StudioTheme.tagSpriteBg, StudioTheme.tagSpriteText, "Normal")
         case .map:
-            return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Map")
+            return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Scene")
         }
     }
 }
@@ -1476,6 +1476,7 @@ struct NewProjectQuickDialog: View {
     @State private var width = 32
     @State private var height = 32
     @State private var cellSize = 16
+    @State private var sceneOrientation: MapOrientation = .orthogonal
 
     private static let squarePresets: [Int] = [16, 32, 48, 64, 128, 256]
     private static let screenPresets: [(w: Int, h: Int, label: String)] = [
@@ -1566,8 +1567,8 @@ struct NewProjectQuickDialog: View {
                         targetMode: .normal
                     )
                     modeSelectionCard(
-                        title: "Tilemap Designer",
-                        subtitle: "Grid cells & stamping",
+                        title: "Scene Designer",
+                        subtitle: "Infinite grid & stamping",
                         icon: "square.grid.3x3.fill",
                         targetMode: .map
                     )
@@ -1615,17 +1616,14 @@ struct NewProjectQuickDialog: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.defaultAction)
-                .disabled(width < 1 || height < 1)
+                .disabled(mode == .normal && (width < 1 || height < 1))
             }
         }
         .padding(22)
         .frame(width: 480)
         .background(StudioTheme.homeDark)
         .onChange(of: mode) { value in
-            if value == .map {
-                width = 40
-                height = 25
-            } else if width == 40 && height == 25 {
+            if value == .normal {
                 width = 32
                 height = 32
             }
@@ -1695,14 +1693,18 @@ struct NewProjectQuickDialog: View {
 
     private var mapDimensionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                dimensionField(label: "Columns", value: $width, unit: "tiles")
-                Text("×")
-                    .font(.system(size: 16, weight: .bold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scene Type")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(StudioTheme.textSecondary)
-                    .padding(.top, 18)
-                dimensionField(label: "Rows", value: $height, unit: "tiles")
-                Spacer()
+                Picker("", selection: $sceneOrientation) {
+                    ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Tile Size")
                         .font(.system(size: 10, weight: .medium))
@@ -1715,20 +1717,16 @@ struct NewProjectQuickDialog: View {
                         }
                     }
                 }
+                Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Map Size Presets")
-                    .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 6) {
+                Image(systemName: "infinity")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.bixelGreen)
+                Text("Infinite scene — no size to pick. Pan and paint anywhere; saved as Tiled infinite JSON with chunks.")
+                    .font(.system(size: 10))
                     .foregroundColor(StudioTheme.textSecondary)
-                HStack(spacing: 6) {
-                    ForEach(Self.mapPresets, id: \.label) { p in
-                        presetPill(label: p.label, isSelected: width == p.cols && height == p.rows) {
-                            width = p.cols
-                            height = p.rows
-                        }
-                    }
-                }
             }
         }
     }
@@ -1842,11 +1840,11 @@ struct NewProjectQuickDialog: View {
                 .foregroundColor(StudioTheme.bixelGreen)
 
             if mode == .map {
-                Text("\(width) × \(height) tiles • \(cellSize)px grid")
+                Text("Infinite scene • \(cellSize)px tiles")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(StudioTheme.textSecondary)
                 Spacer()
-                Text("\(width * cellSize) × \(height * cellSize) px total")
+                Text(sceneOrientation.label)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(StudioTheme.textDisabled)
             } else {
@@ -1892,8 +1890,9 @@ struct NewProjectQuickDialog: View {
         let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
         if mode == .map {
             if let project = store.createProject(name: projName, mode: .map,
-                                                 width: max(1, width), height: max(1, height),
-                                                 cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
+                                                 width: 0, height: 0,
+                                                 cellWidth: max(1, cellSize), cellHeight: max(1, cellSize),
+                                                 infinite: true, orientation: sceneOrientation) {
                 onCreated(project)
             }
         } else if let project = store.createProject(name: projName, mode: .normal, width: max(1, width), height: max(1, height)) {

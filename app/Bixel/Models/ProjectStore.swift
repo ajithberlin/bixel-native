@@ -57,7 +57,8 @@ final class ProjectStore: ObservableObject {
 
     @discardableResult
     func createProject(name: String, mode: WorkspaceMode = .normal, width: Int = 32, height: Int = 32,
-                       pixels: [UInt8]? = nil, cellWidth: Int = 16, cellHeight: Int = 16) -> StudioProject? {
+                       pixels: [UInt8]? = nil, cellWidth: Int = 16, cellHeight: Int = 16,
+                       infinite: Bool = false, orientation: MapOrientation = .orthogonal) -> StudioProject? {
         guard !assistant.busy else { return nil }
         do {
             let id = UUID().uuidString
@@ -66,13 +67,17 @@ final class ProjectStore: ObservableObject {
             let base = root.appendingPathComponent(project.id)
 
             if mode == .map {
-                // A Map project opens straight into the Tilemap Designer: width
-                // and height are treated as cells at the given cell size.
+                // A Scene opens straight into the tilemap designer. Infinite
+                // scenes have no size; finite ones use width/height as cells.
                 let doc = WorkspaceDocument(name: name, mode: .map,
-                                            width: max(1, width), height: max(1, height),
-                                            cellWidth: cellWidth, cellHeight: cellHeight)
-                let mapModel = TileMapModel(width: doc.width, height: doc.height,
-                                            tileWidth: doc.cellWidth, tileHeight: doc.cellHeight)
+                                            width: infinite ? 0 : max(1, width),
+                                            height: infinite ? 0 : max(1, height),
+                                            cellWidth: cellWidth, cellHeight: cellHeight,
+                                            infinite: infinite, orientation: orientation.tiled)
+                let mapModel = infinite
+                    ? TileMapModel(infiniteOrientation: orientation, tileWidth: cellWidth, tileHeight: cellHeight)
+                    : TileMapModel(width: doc.width, height: doc.height,
+                                   tileWidth: doc.cellWidth, tileHeight: doc.cellHeight)
                 try mapModel.map.save(base: base, path: doc.path)
                 var nextCatalog = WorkspaceCatalog()
                 nextCatalog.documents = [doc]
@@ -363,8 +368,12 @@ final class ProjectStore: ObservableObject {
             if let error = item.validationError { throw StorageError.message(error) }
             try flush()
             if item.mode == .map {
-                let model = TileMapModel(width: item.width, height: item.height,
-                                         tileWidth: item.cellWidth, tileHeight: item.cellHeight)
+                let orientation = MapOrientation(tiled: item.orientation)
+                let model = item.infinite
+                    ? TileMapModel(infiniteOrientation: orientation,
+                                   tileWidth: item.cellWidth, tileHeight: item.cellHeight)
+                    : TileMapModel(width: item.width, height: item.height,
+                                   tileWidth: item.cellWidth, tileHeight: item.cellHeight)
                 try model.map.save(base: base, path: item.path)
                 var next = catalog
                 next.documents.append(item); next.activeDocumentID = item.id

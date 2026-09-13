@@ -608,3 +608,53 @@ fn staggered_round_trip_and_hexagonal_rejected() {
         "tilewidth":16,"tileheight":16,"tilesets":[],"layers":[]}"#;
     assert!(TileMap::from_tiled_json(hex).is_err());
 }
+
+#[test]
+fn infinite_isometric_origin_is_absolute() {
+    let mut geo = MapGeometry::new(
+        Orientation::Isometric, 10, 10, 32, 16, StaggerAxis::Y, StaggerIndex::Odd,
+    );
+    geo.infinite = true;
+    let before = geo.tile_origin(3, 4);
+    // Growing the storage must not shift existing content.
+    geo.rows = 500;
+    geo.columns = 500;
+    assert_eq!(geo.tile_origin(3, 4), before);
+}
+
+#[test]
+fn infinite_map_grows_and_round_trips_chunks() {
+    let mut map = TileMap::new_infinite(16, 16, Orientation::Orthogonal);
+    assert!(map.infinite);
+    let img = solid_image(16, 16, 255, 0, 0);
+    let ts = map.add_tileset("t", "assets/t.png", 16, 16, 16, 16, 0, 0).unwrap();
+    map.set_tileset_pixels(ts, &img);
+
+    // Paint at negative and positive world coordinates.
+    assert!(map.set_tile(0, -5, -3, 1));
+    assert!(map.set_tile(0, 10, 12, 1));
+    assert_eq!(map.get_tile(0, -5, -3), 1);
+    assert_eq!(map.get_tile(0, 10, 12), 1);
+    assert_eq!(map.get_tile(0, 100, 100), 0);
+    assert_eq!(map.content_cell_bounds(), Some((-5, -3, 10, 12)));
+
+    // Region composite renders the painted tile at its world position.
+    let out = map.composite_region(10 * 16, 12 * 16, 16, 16);
+    assert_eq!(out.len(), 16 * 16 * 4);
+    assert_eq!((out[0], out[1], out[2], out[3]), (255, 0, 0, 255));
+
+    // Serialized as a Tiled infinite map with chunks.
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["infinite"], true);
+    assert_eq!(value["width"], 0);
+    assert_eq!(value["height"], 0);
+    assert!(value["layers"][0]["chunks"].is_array());
+
+    // Round-trips world coordinates through the chunked format.
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert!(back.infinite);
+    assert_eq!(back.get_tile(0, -5, -3), 1);
+    assert_eq!(back.get_tile(0, 10, 12), 1);
+    assert_eq!(back.content_cell_bounds(), Some((-5, -3, 10, 12)));
+}

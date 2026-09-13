@@ -5,7 +5,7 @@ enum WorkspaceMode: String, Codable, CaseIterable, Identifiable {
     case map
 
     var id: String { rawValue }
-    var title: String { self == .map ? "Map" : "Normal" }
+    var title: String { self == .map ? "Scene" : "Normal" }
     var symbol: String { self == .map ? "map" : "square.dashed" }
     var usesCells: Bool { self == .map }
     var supportsAnimationAssist: Bool { self == .normal }
@@ -15,22 +15,32 @@ struct WorkspaceDocument: Codable, Identifiable {
     var id = UUID().uuidString
     var name: String
     var mode: WorkspaceMode
-    /// Pixels for normal documents; cells for map documents.
+    /// Pixels for normal documents; cells for finite map documents.
     var width: Int
     var height: Int
     var cellWidth: Int = 16
     var cellHeight: Int = 16
+    /// Tiled `"infinite"`: unbounded scene with chunked storage (map documents).
+    var infinite: Bool = false
+    /// Tiled orientation string for map documents ("orthogonal"/"isometric"/"staggered").
+    var orientation: String = "orthogonal"
     var sourcePath: String? = nil
     var pixelWidth: Int { safeProduct(width, mode.usesCells ? cellWidth : 1) }
     var pixelHeight: Int { safeProduct(height, mode.usesCells ? cellHeight : 1) }
     var path: String { "documents/\(id).json" }
     var summary: String {
-        mode.usesCells ? "\(width) × \(height) cells · \(cellWidth) × \(cellHeight) px each" : "\(pixelWidth) × \(pixelHeight) px"
+        if mode.usesCells {
+            return infinite
+                ? "Infinite scene · \(cellWidth) × \(cellHeight) px tiles"
+                : "\(width) × \(height) cells · \(cellWidth) × \(cellHeight) px each"
+        }
+        return "\(pixelWidth) × \(pixelHeight) px"
     }
     var supportsAnimationAssist: Bool { mode.supportsAnimationAssist }
 
     init(id: String = UUID().uuidString, name: String, mode: WorkspaceMode = .normal,
          width: Int, height: Int, cellWidth: Int = 16, cellHeight: Int = 16,
+         infinite: Bool = false, orientation: String = "orthogonal",
          sourcePath: String? = nil) {
         self.id = id
         self.name = name
@@ -39,11 +49,13 @@ struct WorkspaceDocument: Codable, Identifiable {
         self.height = height
         self.cellWidth = cellWidth
         self.cellHeight = cellHeight
+        self.infinite = infinite
+        self.orientation = orientation
         self.sourcePath = sourcePath
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, mode, kind, width, height, cellWidth, cellHeight, sourcePath
+        case id, name, mode, kind, width, height, cellWidth, cellHeight, infinite, orientation, sourcePath
     }
 
     init(from decoder: Decoder) throws {
@@ -60,6 +72,8 @@ struct WorkspaceDocument: Codable, Identifiable {
         height = try container.decode(Int.self, forKey: .height)
         cellWidth = try container.decodeIfPresent(Int.self, forKey: .cellWidth) ?? 16
         cellHeight = try container.decodeIfPresent(Int.self, forKey: .cellHeight) ?? 16
+        infinite = try container.decodeIfPresent(Bool.self, forKey: .infinite) ?? false
+        orientation = try container.decodeIfPresent(String.self, forKey: .orientation) ?? "orthogonal"
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
     }
 
@@ -72,12 +86,16 @@ struct WorkspaceDocument: Codable, Identifiable {
         try container.encode(height, forKey: .height)
         try container.encode(cellWidth, forKey: .cellWidth)
         try container.encode(cellHeight, forKey: .cellHeight)
+        try container.encode(infinite, forKey: .infinite)
+        try container.encode(orientation, forKey: .orientation)
         try container.encodeIfPresent(sourcePath, forKey: .sourcePath)
     }
 
     var validationError: String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give this document a name." }
-        if width < 1 || height < 1 || cellWidth < 1 || cellHeight < 1 || pixelWidth < 1 || pixelHeight < 1 || pixelWidth > 4096 || pixelHeight > 4096 {
+        if mode == .map && infinite {
+            if cellWidth < 1 || cellHeight < 1 { return "Use a positive tile size." }
+        } else if width < 1 || height < 1 || cellWidth < 1 || cellHeight < 1 || pixelWidth < 1 || pixelHeight < 1 || pixelWidth > 4096 || pixelHeight > 4096 {
             return "Use positive sizes up to 4096 × 4096 total pixels."
         }
         if !id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) || id.isEmpty { return "Invalid document identifier." }

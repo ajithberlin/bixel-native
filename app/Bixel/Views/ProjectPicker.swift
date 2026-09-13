@@ -48,9 +48,10 @@ struct ProjectPicker: View {
     @State private var customWidth = 48
     @State private var customHeight = 48
     @State private var mode: WorkspaceMode = .normal
+    @State private var mapOrientation: MapOrientation = .orthogonal
 
     private var canvasSize: (width: Int, height: Int) {
-        if mode == .map { return (40, 25) }
+        if mode == .map { return (0, 0) }
         return template.isCustom ? (customWidth, customHeight) : (template.width, template.height)
     }
 
@@ -94,9 +95,22 @@ struct ProjectPicker: View {
                 .font(.caption).foregroundColor(StudioTheme.textSecondary)
             Picker("Project type", selection: $mode) {
                 Text("Normal").tag(WorkspaceMode.normal)
-                Text("Map").tag(WorkspaceMode.map)
+                Text("Scene").tag(WorkspaceMode.map)
             }
             .pickerStyle(.segmented)
+            if mode == .map {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene type").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                    Picker("", selection: $mapOrientation) {
+                        ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    Text("Infinite scene — pan and paint anywhere.")
+                        .font(.caption2)
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+            }
             HStack {
                 TextField("Project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
                 Button("Create project", action: create).buttonStyle(.borderedProminent).disabled(!canCreate)
@@ -156,14 +170,16 @@ struct ProjectPicker: View {
     private var canCreate: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !assistant.busy
-            && canvasSize.width >= 1 && canvasSize.height >= 1
-            && canvasSize.width <= 4096 && canvasSize.height <= 4096
+            && (mode == .map || (canvasSize.width >= 1 && canvasSize.height >= 1
+            && canvasSize.width <= 4096 && canvasSize.height <= 4096))
     }
 
     private func create() {
         guard canCreate else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let created = store.createProject(name: trimmedName, mode: mode, width: canvasSize.width, height: canvasSize.height) {
+        if let created = store.createProject(name: trimmedName, mode: mode,
+                                             width: canvasSize.width, height: canvasSize.height,
+                                             infinite: mode == .map, orientation: mapOrientation) {
             dismiss()
             onSelectProject?(created)
         } else {

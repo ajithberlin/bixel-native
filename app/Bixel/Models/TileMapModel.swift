@@ -135,6 +135,9 @@ final class TileMapModel: ObservableObject {
     var width: Int { map.columns }
     var height: Int { map.rows }
 
+    /// True for an unbounded Tiled infinite scene (chunked storage).
+    var isInfinite: Bool { map.isInfinite }
+
     var isObjectActive: Bool {
         activeLayer < layers.count && layers[activeLayer].type == "object"
     }
@@ -143,6 +146,14 @@ final class TileMapModel: ObservableObject {
 
     init(width: Int, height: Int, tileWidth: Int = 16, tileHeight: Int = 16) {
         self.map = TileMap(width: width, height: height, tileWidth: tileWidth, tileHeight: tileHeight)
+        reloadLayers()
+        reloadGeometry()
+        registerTilesets()
+    }
+
+    /// Create an unbounded Tiled infinite scene (chunked on save). No size.
+    init(infiniteOrientation orientation: MapOrientation, tileWidth: Int = 16, tileHeight: Int = 16) {
+        self.map = TileMap(infiniteTileWidth: tileWidth, tileHeight: tileHeight, orientation: orientation)
         reloadLayers()
         reloadGeometry()
         registerTilesets()
@@ -253,6 +264,28 @@ final class TileMapModel: ObservableObject {
         }
         guard hit.inside else { return nil }
         return (hit.x, hit.y)
+    }
+
+    /// Projected cell for a pixel, even far outside finite bounds (infinite maps).
+    func rawCell(atPixel pixel: (x: Int, y: Int)) -> (x: Int, y: Int) {
+        let hit = map.pixelToCell(x: Double(pixel.x), y: Double(pixel.y))
+        return (hit.x, hit.y)
+    }
+
+    /// World-pixel bounds of the content (infinite maps), matching the
+    /// whole-content composite returned by `compositeRGBA()`.
+    func contentPixelBounds() -> (x: Int, y: Int, width: Int, height: Int)? {
+        guard let cb = map.contentBounds else { return nil }
+        let corners = [(cb.minX, cb.minY), (cb.maxX, cb.minY), (cb.minX, cb.maxY), (cb.maxX, cb.maxY)]
+        var minX = Int.max, minY = Int.max, maxX = Int.min, maxY = Int.min
+        for corner in corners {
+            let origin = map.cellOrigin(x: corner.0, y: corner.1)
+            minX = min(minX, origin.x)
+            minY = min(minY, origin.y)
+            maxX = max(maxX, origin.x + map.cellWidth)
+            maxY = max(maxY, origin.y + map.cellHeight)
+        }
+        return (minX, minY, max(0, maxX - minX), max(0, maxY - minY))
     }
 
     var isActiveLayerTile: Bool {
@@ -481,7 +514,7 @@ final class TileMapModel: ObservableObject {
     // MARK: - Painting gestures (cells)
 
     func beginStroke(x: Int, y: Int) {
-        guard x >= 0, y >= 0, x < width, y < height else { return }
+        if !isInfinite { guard x >= 0, y >= 0, x < width, y < height else { return } }
         if hasPasteGhost {
             commitPaste(at: x, y: y)
             return
@@ -510,7 +543,7 @@ final class TileMapModel: ObservableObject {
     }
 
     func continueStroke(x: Int, y: Int) {
-        guard x >= 0, y >= 0, x < width, y < height else { return }
+        if !isInfinite { guard x >= 0, y >= 0, x < width, y < height else { return } }
         switch tool {
         case .select:
             guard let start = selection else { return }
@@ -687,17 +720,24 @@ final class TileMapModel: ObservableObject {
         guard isActiveLayerTile else { return }
         let mask = map.wandMask(layer: activeLayer, x: x, y: y)
         guard mask.contains(true) else { return }
-        var minX = width, minY = height, maxX = -1, maxY = -1
+        let cols = map.columns
+        let rows = map.rows
+        let ox = map.originX
+        let oy = map.originY
+        var minX = Int.max, minY = Int.max, maxX = Int.min, maxY = Int.min
         var idx = 0
-        for row in 0..<height {
-            for col in 0..<width {
+        for row in 0..<rows {
+            for col in 0..<cols {
                 if mask[idx] {
-                    minX = min(minX, col); maxX = max(maxX, col)
-                    minY = min(minY, row); maxY = max(maxY, row)
+                    let wx = col + ox
+                    let wy = row + oy
+                    minX = min(minX, wx); maxX = max(maxX, wx)
+                    minY = min(minY, wy); maxY = max(maxY, wy)
                 }
                 idx += 1
             }
         }
+        guard maxX >= minX, maxY >= minY else { return }
         selection = MapCellRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
         objectWillChange.send()
     }
@@ -764,6 +804,7 @@ final class TileMapModel: ObservableObject {
     }
 
     func cropOfComposite(_ rect: MapCellRect) -> [UInt8] {
+        guard !isInfinite else { return [] }
         let pixels = map.compositeRGBA()
         let fullW = map.pixelWidth
         let bounds = compositeCropBounds(rect)
@@ -897,6 +938,7 @@ final class TileMapModel: ObservableObject {
     }
 
     func resize(width: Int, height: Int) {
+        guard !isInfinite else { return }
         guard width >= 1, height >= 1 else { return }
         map.snapshot()
         map.resize(width: width, height: height)
@@ -1010,6 +1052,7 @@ final class TileMapModel: ObservableObject {
             "pixel_width": map.pixelWidth,
             "pixel_height": map.pixelHeight,
             "active_layer": activeLayer,
+            "infinite": map.isInfinite,
             "orientation": map.orientation.rawValue,
             "orientation_name": map.orientation.label,
             "render_order": map.renderOrder.label,

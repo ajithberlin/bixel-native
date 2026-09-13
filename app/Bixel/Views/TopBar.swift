@@ -580,22 +580,24 @@ struct ActionsPopover: View {
             Divider().overlay(StudioTheme.hairline)
 
             if let mapModel {
-                // Canvas / map resize + zoom controls
+                // Scene / map resize + zoom controls
                 HStack {
-                    Label("Map Size", systemImage: "aspectratio")
+                    Label(mapModel.isInfinite ? "Scene" : "Scene Size", systemImage: "aspectratio")
                         .font(.system(size: 12))
                     Spacer()
-                    Text("\(mapModel.width) × \(mapModel.height)")
+                    Text(mapModel.isInfinite ? "Infinite" : "\(mapModel.width) × \(mapModel.height)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(StudioTheme.textSecondary)
                 }
-                Button {
-                    post(.studioMapResize)
-                } label: {
-                    Label("Resize Map…", systemImage: "arrow.up.left.and.arrow.down.right")
+                if !mapModel.isInfinite {
+                    Button {
+                        post(.studioMapResize)
+                    } label: {
+                        Label("Resize Scene…", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Resize the scene dimensions")
                 }
-                .buttonStyle(.plain)
-                .help("Resize the map dimensions")
             } else {
                 HStack {
                     Label("Canvas Size", systemImage: "aspectratio")

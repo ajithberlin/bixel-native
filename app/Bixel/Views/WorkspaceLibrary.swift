@@ -324,7 +324,15 @@ struct NewWorkspaceDocument: View {
     @State private var height = 32
     @State private var cellWidth = 16
     @State private var cellHeight = 16
-    private var item: WorkspaceDocument { WorkspaceDocument(name: name, mode: mode, width: width, height: height, cellWidth: cellWidth, cellHeight: cellHeight) }
+    @State private var orientation: MapOrientation = .orthogonal
+    private var item: WorkspaceDocument {
+        if mode == .map {
+            return WorkspaceDocument(name: name, mode: .map, width: 0, height: 0,
+                                     cellWidth: cellWidth, cellHeight: cellHeight,
+                                     infinite: true, orientation: orientation.tiled)
+        }
+        return WorkspaceDocument(name: name, mode: .normal, width: width, height: height)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New document").font(.title2.bold())
@@ -333,16 +341,27 @@ struct NewWorkspaceDocument: View {
             Picker("Project type", selection: $mode) {
                 ForEach(WorkspaceMode.allCases) { Text($0.title).tag($0) }
             }
-            .help("Normal canvas or tile map document")
-            HStack {
-                dimension(mode.usesCells ? "Columns" : "Width (px)", value: $width)
-                dimension(mode.usesCells ? "Rows" : "Height (px)", value: $height)
-            }
+            .help("Normal canvas or scene document")
             if mode.usesCells {
-                HStack { dimension("Cell width (px)", value: $cellWidth); dimension("Cell height (px)", value: $cellHeight) }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene type").font(.caption)
+                    Picker("", selection: $orientation) {
+                        ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                }
+                HStack { dimension("Tile width (px)", value: $cellWidth); dimension("Tile height (px)", value: $cellHeight) }
+                Text("Infinite scene — pan and paint anywhere. Saved as Tiled infinite JSON with chunks.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                HStack {
+                    dimension("Width (px)", value: $width)
+                    dimension("Height (px)", value: $height)
+                }
+                Text("\(item.pixelWidth) × \(item.pixelHeight) pixels total").font(.caption).foregroundColor(.secondary)
             }
-            Text("\(item.pixelWidth) × \(item.pixelHeight) pixels total").font(.caption).foregroundColor(.secondary)
-            if mode == .map { Text("Paint tiles on layers with cell-aware stamping and snapping.").font(.caption) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -356,8 +375,10 @@ struct NewWorkspaceDocument: View {
             }
         }.padding(26).frame(width: 480)
         .onChange(of: mode) { value in
-            width = value == .map ? 40 : 32
-            height = value == .map ? 25 : 32
+            if value == .normal {
+                width = 32
+                height = 32
+            }
         }
     }
     private func dimension(_ title: String, value: Binding<Int>) -> some View {

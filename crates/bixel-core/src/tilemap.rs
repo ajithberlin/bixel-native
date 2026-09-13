@@ -439,6 +439,10 @@ pub struct MapGeometry {
     pub tile_height: usize,
     pub stagger_axis: StaggerAxis,
     pub stagger_index: StaggerIndex,
+    /// Infinite maps project around an absolute origin (cell 0,0) instead of
+    /// shifting the map so its bounds start at pixel 0, so content never moves
+    /// as the map grows.
+    pub infinite: bool,
 }
 
 impl MapGeometry {
@@ -460,6 +464,17 @@ impl MapGeometry {
             tile_height: tile_height.max(1),
             stagger_axis,
             stagger_index,
+            infinite: false,
+        }
+    }
+
+    /// The horizontal origin shift that keeps a finite isometric map's content
+    /// inside `[0, pixel_width]`. Infinite maps use an absolute origin.
+    fn iso_origin_x(&self) -> i64 {
+        if self.infinite {
+            0
+        } else {
+            self.rows as i64 * self.tw() / 2
         }
     }
 
@@ -501,7 +516,7 @@ impl MapGeometry {
         match self.orientation {
             Orientation::Orthogonal | Orientation::Hexagonal => (cx * tw, cy * th),
             Orientation::Isometric => {
-                let origin_x = self.rows as i64 * tw / 2;
+                let origin_x = self.iso_origin_x();
                 ((cx - cy) * tw / 2 + origin_x, (cx + cy) * th / 2)
             }
             Orientation::Staggered => match self.stagger_axis {
@@ -538,7 +553,7 @@ impl MapGeometry {
                 ((px / tw).floor() as i64, (py / th).floor() as i64)
             }
             Orientation::Isometric => {
-                let origin_x = self.rows as i64 as f64 * tw / 2.0;
+                let origin_x = self.iso_origin_x() as f64;
                 let x = (px - origin_x) / (tw / 2.0);
                 let y = py / (th / 2.0);
                 (
@@ -699,6 +714,38 @@ impl MapGeometry {
             let cy = if y_rev { h - 1 - yi } else { yi };
             for xi in 0..w {
                 let cx = if x_rev { w - 1 - xi } else { xi };
+                f(cx, cy);
+            }
+        }
+    }
+
+    /// Like [`MapGeometry::for_each_cell`] but over an inclusive world-cell
+    /// range (which may be negative on infinite maps). Used to composite only
+    /// the cells that can touch a requested pixel region.
+    pub fn for_each_cell_in<F: FnMut(i64, i64)>(
+        &self,
+        min_x: i64,
+        min_y: i64,
+        max_x: i64,
+        max_y: i64,
+        order: RenderOrder,
+        mut f: F,
+    ) {
+        if max_x < min_x || max_y < min_y {
+            return;
+        }
+        let (x_rev, y_rev) = match order {
+            RenderOrder::RightDown => (false, false),
+            RenderOrder::RightUp => (false, true),
+            RenderOrder::LeftDown => (true, false),
+            RenderOrder::LeftUp => (true, true),
+        };
+        let width = max_x - min_x + 1;
+        let height = max_y - min_y + 1;
+        for yi in 0..height {
+            let cy = if y_rev { max_y - yi } else { min_y + yi };
+            for xi in 0..width {
+                let cx = if x_rev { max_x - xi } else { min_x + xi };
                 f(cx, cy);
             }
         }

@@ -686,6 +686,23 @@ enum MapOrientation: Int, CaseIterable, Identifiable {
     }
 
     var isIsometric: Bool { self != .orthogonal }
+
+    /// Tiled `orientation` string.
+    var tiled: String {
+        switch self {
+        case .orthogonal: return "orthogonal"
+        case .isometric: return "isometric"
+        case .staggered: return "staggered"
+        }
+    }
+
+    init(tiled: String) {
+        switch tiled.lowercased() {
+        case "isometric": self = .isometric
+        case "staggered", "isometric_staggered", "isometric-staggered": self = .staggered
+        default: self = .orthogonal
+        }
+    }
 }
 
 /// Painter's order for overlapping isometric tiles.
@@ -768,6 +785,12 @@ final class TileMap: @unchecked Sendable {
                                UInt32(max(1, tileWidth)), UInt32(max(1, tileHeight)))
     }
 
+    /// Create an unbounded Tiled infinite scene (chunked on save).
+    init(infiniteTileWidth tileWidth: Int, tileHeight: Int, orientation: MapOrientation) {
+        handle = bixel_map_new_infinite(UInt32(max(1, tileWidth)), UInt32(max(1, tileHeight)),
+                                        UInt8(orientation.rawValue))
+    }
+
     init(json: String) throws {
         guard let restored = bixel_map_from_json(json) else {
             let detail = bixel_map_validate_json(json).map { ptr -> String in
@@ -802,6 +825,33 @@ final class TileMap: @unchecked Sendable {
     var rows: Int { Int(bixel_map_cell_count_y(handle)) }
     var pixelWidth: Int { Int(bixel_map_pixel_width(handle)) }
     var pixelHeight: Int { Int(bixel_map_pixel_height(handle)) }
+
+    // MARK: Infinite maps
+
+    var isInfinite: Bool { bixel_map_is_infinite(handle) }
+    var originX: Int { Int(bixel_map_origin_x(handle)) }
+    var originY: Int { Int(bixel_map_origin_y(handle)) }
+
+    /// Inclusive world-cell bounds of non-empty content (`nil` when empty).
+    var contentBounds: (minX: Int, minY: Int, maxX: Int, maxY: Int)? {
+        var a: Int32 = 0
+        var b: Int32 = 0
+        var c: Int32 = 0
+        var d: Int32 = 0
+        guard bixel_map_content_bounds(handle, &a, &b, &c, &d) else { return nil }
+        return (Int(a), Int(b), Int(c), Int(d))
+    }
+
+    /// Composite a world-pixel region into RGBA (`w * h * 4` bytes).
+    func compositeRegionRGBA(x: Int, y: Int, w: Int, h: Int) -> [UInt8] {
+        guard w > 0, h > 0 else { return [] }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buf.withUnsafeMutableBytes { raw in
+            bixel_map_composite_region(handle, Int32(x), Int32(y), UInt32(w), UInt32(h),
+                                       raw.baseAddress, UInt(raw.count))
+        }
+        return ok ? buf : []
+    }
 
     // MARK: Orientation / projection
 
@@ -951,7 +1001,7 @@ final class TileMap: @unchecked Sendable {
     @discardableResult
     func autotile(layer: Int, tileset: Int, x: Int, y: Int, w: Int, h: Int) -> Int {
         Int(bixel_map_autotile(handle, UInt32(layer), UInt32(tileset),
-                               UInt32(x), UInt32(y), UInt32(w), UInt32(h)))
+                               Int32(x), Int32(y), UInt32(w), UInt32(h)))
     }
 
     // MARK: Layers
@@ -1066,7 +1116,7 @@ final class TileMap: @unchecked Sendable {
         guard w > 0, h > 0 else { return MapTilePattern() }
         var tiles = [UInt32](repeating: 0, count: w * h)
         let written = tiles.withUnsafeMutableBufferPointer {
-            bixel_map_read_region(handle, UInt32(layer), UInt32(x), UInt32(y),
+            bixel_map_read_region(handle, UInt32(layer), Int32(x), Int32(y),
                                   UInt32(w), UInt32(h), $0.baseAddress)
         }
         if Int(written) < tiles.count { tiles.removeSubrange(Int(written)...tiles.count - 1) }
@@ -1075,7 +1125,7 @@ final class TileMap: @unchecked Sendable {
 
     @discardableResult
     func replace(layer: Int, x: Int, y: Int, w: Int, h: Int, from: UInt32, to: UInt32) -> Int {
-        Int(bixel_map_replace(handle, UInt32(layer), UInt32(x), UInt32(y), UInt32(w), UInt32(h), from, to))
+        Int(bixel_map_replace(handle, UInt32(layer), Int32(x), Int32(y), UInt32(w), UInt32(h), from, to))
     }
 
     /// Same-tile region mask (magic wand). Returns a row-major `[Bool]`.

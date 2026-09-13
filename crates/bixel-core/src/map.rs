@@ -28,6 +28,8 @@ const GID_MASK: u32 = !GID_FLAGS;
 
 /// Sane cap on map cells per side (mirrors the 4096² sprite document cap).
 pub const MAX_MAP_DIM: usize = 4096;
+/// Safety cap on the dense storage an infinite map may grow to per side.
+pub const MAX_INF_DIM: usize = 2048;
 pub const MAX_UNDO: usize = 50;
 
 fn prop_type(value: &Value) -> &'static str {
@@ -323,6 +325,9 @@ struct MapState {
     height: usize,
     tile_width: usize,
     tile_height: usize,
+    infinite: bool,
+    origin_x: i32,
+    origin_y: i32,
     orientation: Orientation,
     render_order: RenderOrder,
     stagger_axis: StaggerAxis,
@@ -338,10 +343,16 @@ struct MapState {
 /// The tile-map aggregate.
 #[derive(Debug, Clone)]
 pub struct TileMap {
+    /// Dense storage width in cells. Infinite maps grow this as content is
+    /// painted; `origin_x`/`origin_y` are the world cell of storage `(0, 0)`.
     pub width: usize,
     pub height: usize,
     pub tile_width: usize,
     pub tile_height: usize,
+    /// Tiled `"infinite"`: unbounded canvas with chunked serialization.
+    pub infinite: bool,
+    pub origin_x: i32,
+    pub origin_y: i32,
     pub orientation: Orientation,
     pub render_order: RenderOrder,
     pub stagger_axis: StaggerAxis,
@@ -377,6 +388,9 @@ impl TileMap {
             height,
             tile_width,
             tile_height,
+            infinite: false,
+            origin_x: 0,
+            origin_y: 0,
             orientation: Orientation::Orthogonal,
             render_order: RenderOrder::RightDown,
             stagger_axis: StaggerAxis::Y,
@@ -395,16 +409,54 @@ impl TileMap {
         map
     }
 
+    /// A Tiled infinite map: no fixed dimensions, chunked serialization and an
+    /// unbounded canvas that grows as content is painted. Starts with an empty
+    /// tile layer (storage `0 × 0`, growing on the first paint).
+    pub fn new_infinite(tile_width: usize, tile_height: usize, orientation: Orientation) -> Self {
+        let mut map = TileMap {
+            width: 0,
+            height: 0,
+            tile_width: tile_width.max(1),
+            tile_height: tile_height.max(1),
+            infinite: true,
+            origin_x: 0,
+            origin_y: 0,
+            orientation,
+            render_order: RenderOrder::RightDown,
+            stagger_axis: StaggerAxis::Y,
+            stagger_index: StaggerIndex::Odd,
+            tilesets: Vec::new(),
+            layers: Vec::new(),
+            next_layer_id: 1,
+            next_object_id: 1,
+            max_undo: MAX_UNDO,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            properties: Vec::new(),
+            extra: Map::new(),
+        };
+        map.add_tile_layer(None);
+        map
+    }
+
     pub fn pixel_width(&self) -> usize {
-        self.geometry().pixel_size().0
+        if self.infinite {
+            self.content_pixel_bounds().map(|b| b.2).unwrap_or(0)
+        } else {
+            self.geometry().pixel_size().0
+        }
     }
     pub fn pixel_height(&self) -> usize {
-        self.geometry().pixel_size().1
+        if self.infinite {
+            self.content_pixel_bounds().map(|b| b.3).unwrap_or(0)
+        } else {
+            self.geometry().pixel_size().1
+        }
     }
 
     /// Projection parameters for the current orientation.
     pub fn geometry(&self) -> MapGeometry {
-        MapGeometry::new(
+        let mut geo = MapGeometry::new(
             self.orientation,
             self.width,
             self.height,
@@ -412,10 +464,167 @@ impl TileMap {
             self.tile_height,
             self.stagger_axis,
             self.stagger_index,
+        );
+        geo.infinite = self.infinite;
+        geo
+    }
+
+    /// Inclusive world-cell bounds of storage (`origin .. origin + dims - 1`).
+    pub fn storage_bounds(&self) -> (i32, i32, i32, i32) {
+        if self.width == 0 || self.height == 0 {
+            return (0, 0, -1, -1);
+        }
+        (
+            self.origin_x,
+            self.origin_y,
+            self.origin_x + self.width as i32 - 1,
+            self.origin_y + self.height as i32 - 1,
         )
     }
 
+    fn in_storage(&self, x: isize, y: isize) -> bool {
+        x >= self.origin_x as isize
+            && y >= self.origin_y as isize
+            && x < self.origin_x as isize + self.width as isize
+            && y < self.origin_y as isize + self.height as isize
+    }
+
+    /// Grow the dense storage (all tile layers together) so `(x, y)` fits,
+    /// keeping a margin so a stroke doesn't reallocate per cell. Returns false
+    /// for finite maps or when the safety cap would be exceeded.
+    fn ensure_world_bounds(&mut self, x: i32, y: i32) -> bool {
+        if !self.infinite {
+            return false;
+        }
+        const MARGIN: i32 = 32;
+        let (min_x, min_y, max_x, max_y) = if self.width == 0 || self.height == 0 {
+            (x - MARGIN, y - MARGIN, x + MARGIN, y + MARGIN)
+        } else {
+            let (a, b, c, d) = self.storage_bounds();
+            (a.min(x - MARGIN), b.min(y - MARGIN), c.max(x + MARGIN), d.max(y + MARGIN))
+        };
+        let new_w = (max_x - min_x + 1) as usize;
+        let new_h = (max_y - min_y + 1) as usize;
+        if new_w > MAX_INF_DIM || new_h > MAX_INF_DIM {
+            return false;
+        }
+        let old_w = self.width;
+        let old_h = self.height;
+        let (old_ox, old_oy) = (self.origin_x, self.origin_y);
+        for layer in &mut self.layers {
+            if let MapLayer::Tile(data) = layer {
+                let mut next = vec![0u32; new_w * new_h];
+                for yy in 0..old_h {
+                    for xx in 0..old_w {
+                        let v = data.layer.data[yy * old_w + xx];
+                        if v == 0 {
+                            continue;
+                        }
+                        let gx = old_ox + xx as i32;
+                        let gy = old_oy + yy as i32;
+                        next[((gy - min_y) as usize) * new_w + (gx - min_x) as usize] = v;
+                    }
+                }
+                data.layer.width = new_w;
+                data.layer.height = new_h;
+                data.layer.data = next;
+            }
+        }
+        self.origin_x = min_x;
+        self.origin_y = min_y;
+        self.width = new_w;
+        self.height = new_h;
+        true
+    }
+
+    /// Inclusive world-cell bounds of all non-empty tile cells.
+    pub fn content_cell_bounds(&self) -> Option<(i32, i32, i32, i32)> {
+        let mut bounds: Option<(i32, i32, i32, i32)> = None;
+        for layer in &self.layers {
+            if let MapLayer::Tile(data) = layer {
+                if data.layer.width == 0 || data.layer.height == 0 {
+                    continue;
+                }
+                for (i, &gid) in data.layer.data.iter().enumerate() {
+                    if gid & GID_MASK == 0 {
+                        continue;
+                    }
+                    let x = self.origin_x + (i % data.layer.width) as i32;
+                    let y = self.origin_y + (i / data.layer.width) as i32;
+                    bounds = Some(match bounds {
+                        None => (x, y, x, y),
+                        Some((a, b, c, d)) => (a.min(x), b.min(y), c.max(x), d.max(y)),
+                    });
+                }
+            }
+        }
+        bounds
+    }
+
+    /// Pixel-space bounds `(x, y, width, height)` of everything that would be
+    /// composited. `None` for an empty infinite map.
+    pub fn content_pixel_bounds(&self) -> Option<(i64, i64, usize, usize)> {
+        let geo = self.geometry();
+        let mut min_x = i64::MAX;
+        let mut min_y = i64::MAX;
+        let mut max_x = i64::MIN;
+        let mut max_y = i64::MIN;
+        let mut any = false;
+        for layer in &self.layers {
+            match layer {
+                MapLayer::Tile(data) => {
+                    if data.layer.width == 0 || data.layer.height == 0 {
+                        continue;
+                    }
+                    for (i, &gid) in data.layer.data.iter().enumerate() {
+                        if gid & GID_MASK == 0 {
+                            continue;
+                        }
+                        let cx = self.origin_x as i64 + (i % data.layer.width) as i64;
+                        let cy = self.origin_y as i64 + (i / data.layer.width) as i64;
+                        let (ox, oy) = geo.tile_origin(cx, cy);
+                        let (dx, dy) = self
+                            .gid_lookup(gid)
+                            .and_then(|(t, _, _)| self.tilesets.get(t))
+                            .map(|ts| (ts.tile_offset.0 as i64, ts.tile_offset.1 as i64))
+                            .unwrap_or((0, 0));
+                        min_x = min_x.min(ox + dx);
+                        min_y = min_y.min(oy + dy);
+                        max_x = max_x.max(ox + dx + self.tile_width as i64);
+                        max_y = max_y.max(oy + dy + self.tile_height as i64);
+                        any = true;
+                    }
+                }
+                MapLayer::Image(data) => {
+                    if data.image_width == 0 || data.image_height == 0 {
+                        continue;
+                    }
+                    let x = data.x.floor() as i64;
+                    let y = data.y.floor() as i64;
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x + data.image_width as i64);
+                    max_y = max_y.max(y + data.image_height as i64);
+                    any = true;
+                }
+                MapLayer::Objects(_) => {}
+            }
+        }
+        if !any {
+            return None;
+        }
+        Some((min_x, min_y, (max_x - min_x).max(0) as usize, (max_y - min_y).max(0) as usize))
+    }
+
     pub fn validate_dims(&self) -> Result<(), String> {
+        if self.infinite {
+            // Infinite maps are composited region-by-region; only guard the
+            // dense storage cap.
+            if self.width > MAX_INF_DIM || self.height > MAX_INF_DIM {
+                return Err("Infinite scene exceeded its maximum editable area".into());
+            }
+            return Ok(());
+        }
         if self.width == 0 || self.height == 0 || self.width > MAX_MAP_DIM || self.height > MAX_MAP_DIM {
             return Err("Invalid map dimensions".into());
         }
@@ -437,6 +646,9 @@ impl TileMap {
             height: self.height,
             tile_width: self.tile_width,
             tile_height: self.tile_height,
+            infinite: self.infinite,
+            origin_x: self.origin_x,
+            origin_y: self.origin_y,
             orientation: self.orientation,
             render_order: self.render_order,
             stagger_axis: self.stagger_axis,
@@ -455,6 +667,9 @@ impl TileMap {
         self.height = state.height;
         self.tile_width = state.tile_width;
         self.tile_height = state.tile_height;
+        self.infinite = state.infinite;
+        self.origin_x = state.origin_x;
+        self.origin_y = state.origin_y;
         self.orientation = state.orientation;
         self.render_order = state.render_order;
         self.stagger_axis = state.stagger_axis;
@@ -884,81 +1099,157 @@ impl TileMap {
 
     // ------------------------------------------------------------ edit ops
 
+    /// Set a cell by **world** coordinate. Infinite maps grow their dense
+    /// storage to fit.
     pub fn set_tile(&mut self, layer: usize, x: isize, y: isize, gid: u32) -> bool {
+        if !self.in_storage(x, y) {
+            let fits = x >= i32::MIN as isize && x <= i32::MAX as isize
+                && y >= i32::MIN as isize && y <= i32::MAX as isize;
+            if !self.infinite || !fits || !self.ensure_world_bounds(x as i32, y as i32) {
+                return false;
+            }
+        }
+        let dx = x - self.origin_x as isize;
+        let dy = y - self.origin_y as isize;
         match self.tile_layer_mut(layer) {
-            Some(l) => tilemap::set_tile(l, x, y, gid),
+            Some(l) => tilemap::set_tile(l, dx, dy, gid),
             None => false,
         }
     }
 
+    /// Read a cell by **world** coordinate (0 outside the map).
     pub fn get_tile(&self, layer: usize, x: isize, y: isize) -> u32 {
+        if !self.in_storage(x, y) {
+            return 0;
+        }
+        let dx = x - self.origin_x as isize;
+        let dy = y - self.origin_y as isize;
         self.tile_layer(layer)
-            .map(|l| tilemap::get_tile(l, x, y))
+            .map(|l| tilemap::get_tile(l, dx, dy))
             .unwrap_or(0)
     }
 
-    /// Stamp a raw-GID pattern with its top-left at `(x, y)`; returns changed count.
-    pub fn stamp(&mut self, layer: usize, x: usize, y: usize, pattern: &Pattern, skip_empty: bool) -> usize {
-        match self.tile_layer_mut(layer) {
-            Some(l) => tilemap::write_region(l, x, y, pattern, skip_empty).len(),
-            None => 0,
-        }
-    }
-
-    pub fn fill(&mut self, layer: usize, x: isize, y: isize, gid: u32) -> usize {
-        match self.tile_layer_mut(layer) {
-            Some(l) => tilemap::flood_fill(l, x, y, gid).len(),
-            None => 0,
-        }
-    }
-
-    pub fn paint_rect(&mut self, layer: usize, x0: isize, y0: isize, x1: isize, y1: isize, gid: u32) -> usize {
-        match self.tile_layer_mut(layer) {
-            Some(l) => tilemap::paint_rect(l, x0, y0, x1, y1, gid).len(),
-            None => 0,
-        }
-    }
-
-    /// Paint a straight inclusive line between two cells.
-    pub fn paint_line(&mut self, layer: usize, x0: isize, y0: isize, x1: isize, y1: isize, gid: u32) -> usize {
-        let Some(l) = self.tile_layer_mut(layer) else {
-            return 0;
-        };
-        let a = tilemap::Cell { x: x0.max(0) as usize, y: y0.max(0) as usize };
-        let b = tilemap::Cell { x: x1.max(0) as usize, y: y1.max(0) as usize };
+    /// Stamp a raw-GID pattern with its top-left at world `(x, y)`.
+    pub fn stamp(&mut self, layer: usize, x: isize, y: isize, pattern: &Pattern, skip_empty: bool) -> usize {
         let mut changed = 0;
-        for c in tilemap::line_cells(a, b) {
-            if tilemap::set_tile(l, c.x as isize, c.y as isize, gid) {
-                changed += 1;
+        for py in 0..pattern.h {
+            for px in 0..pattern.w {
+                let raw = pattern.tiles[py * pattern.w + px];
+                if skip_empty && raw == 0 {
+                    continue;
+                }
+                if self.set_tile(layer, x + px as isize, y + py as isize, raw) {
+                    changed += 1;
+                }
             }
         }
         changed
     }
 
-    /// Copy a rectangular region as a raw-GID pattern (clamped to the map).
-    pub fn read_region(&self, layer: usize, x: usize, y: usize, w: usize, h: usize) -> Pattern {
-        let Some(l) = self.tile_layer(layer) else {
-            return Pattern { w: 0, h: 0, tiles: Vec::new() };
-        };
-        if w == 0 || h == 0 {
-            return Pattern { w: 0, h: 0, tiles: Vec::new() };
+    /// Flood fill bounded to the current dense storage, so an empty infinite
+    /// plane cannot be filled without limit.
+    pub fn fill(&mut self, layer: usize, x: isize, y: isize, gid: u32) -> usize {
+        if !self.in_storage(x, y) {
+            return 0;
         }
-        let x1 = x.saturating_add(w.saturating_sub(1)).min(l.width.saturating_sub(1));
-        let y1 = y.saturating_add(h.saturating_sub(1)).min(l.height.saturating_sub(1));
-        tilemap::read_region(l, tilemap::Rect { x0: x.min(x1), y0: y.min(y1), x1, y1 })
+        let target = self.get_tile(layer, x, y);
+        if target == gid {
+            return 0;
+        }
+        let mut changed = 0;
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec![(x, y)];
+        while let Some((cx, cy)) = stack.pop() {
+            if !self.in_storage(cx, cy) || !seen.insert((cx, cy)) {
+                continue;
+            }
+            if self.get_tile(layer, cx, cy) != target {
+                continue;
+            }
+            if self.set_tile(layer, cx, cy, gid) {
+                changed += 1;
+            }
+            stack.push((cx + 1, cy));
+            stack.push((cx - 1, cy));
+            stack.push((cx, cy + 1));
+            stack.push((cx, cy - 1));
+        }
+        changed
     }
 
-    /// Replace every tile equal to `from` by `to` across a rect.
-    pub fn replace(&mut self, layer: usize, x: usize, y: usize, w: usize, h: usize, from: u32, to: u32) -> usize {
-        let Some(l) = self.tile_layer_mut(layer) else {
-            return 0;
-        };
-        if w == 0 || h == 0 {
+    pub fn paint_rect(&mut self, layer: usize, x0: isize, y0: isize, x1: isize, y1: isize, gid: u32) -> usize {
+        let (xa, xb) = (x0.min(x1), x0.max(x1));
+        let (ya, yb) = (y0.min(y1), y0.max(y1));
+        let mut changed = 0;
+        for y in ya..=yb {
+            for x in xa..=xb {
+                if self.set_tile(layer, x, y, gid) {
+                    changed += 1;
+                }
+            }
+        }
+        changed
+    }
+
+    /// Paint a straight inclusive line between two world cells (signed).
+    pub fn paint_line(&mut self, layer: usize, x0: isize, y0: isize, x1: isize, y1: isize, gid: u32) -> usize {
+        let (mut cx, mut cy) = (x0, y0);
+        let dx = (x1 - x0).abs();
+        let dy = (y1 - y0).abs();
+        let sx = if cx < x1 { 1 } else { -1 };
+        let sy = if cy < y1 { 1 } else { -1 };
+        let mut err = dx - dy;
+        let mut changed = 0;
+        loop {
+            if self.set_tile(layer, cx, cy, gid) {
+                changed += 1;
+            }
+            if cx == x1 && cy == y1 {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 > -dy {
+                err -= dy;
+                cx += sx;
+            }
+            if e2 < dx {
+                err += dx;
+                cy += sy;
+            }
+        }
+        changed
+    }
+
+    /// Copy a rectangular world region as a raw-GID pattern. Out-of-storage
+    /// cells read as 0, so infinite maps copy cleanly past their content.
+    pub fn read_region(&self, layer: usize, x: isize, y: isize, w: usize, h: usize) -> Pattern {
+        if w == 0 || h == 0 || self.tile_layer(layer).is_none() {
+            return Pattern { w: 0, h: 0, tiles: Vec::new() };
+        }
+        let mut tiles = vec![0u32; w * h];
+        for py in 0..h {
+            for px in 0..w {
+                tiles[py * w + px] = self.get_tile(layer, x + px as isize, y + py as isize);
+            }
+        }
+        Pattern { w, h, tiles }
+    }
+
+    /// Replace every tile equal to `from` by `to` across a world rect.
+    pub fn replace(&mut self, layer: usize, x: isize, y: isize, w: usize, h: usize, from: u32, to: u32) -> usize {
+        if w == 0 || h == 0 || self.tile_layer(layer).is_none() {
             return 0;
         }
-        let x1 = x.saturating_add(w.saturating_sub(1)).min(l.width.saturating_sub(1));
-        let y1 = y.saturating_add(h.saturating_sub(1)).min(l.height.saturating_sub(1));
-        tilemap::replace_tiles(l, tilemap::Rect { x0: x.min(x1), y0: y.min(y1), x1, y1 }, &[from], to).len()
+        let mut changed = 0;
+        for py in 0..h {
+            for px in 0..w {
+                let (cx, cy) = (x + px as isize, y + py as isize);
+                if self.get_tile(layer, cx, cy) == from && self.set_tile(layer, cx, cy, to) {
+                    changed += 1;
+                }
+            }
+        }
+        changed
     }
 
     /// Raw GID row-major data of a whole tile layer (bulk FFI ferry).
@@ -966,18 +1257,25 @@ impl TileMap {
         self.tile_layer(layer).map(|l| l.data.clone()).unwrap_or_default()
     }
 
-    /// 4-way same-tile region mask: writes 1 into `mask` (len width*height)
-    /// for every cell reachable from `(x,y)` sharing its raw GID.
+    /// 4-way same-tile region mask over the dense storage: writes 1 into `mask`
+    /// (len `width*height`) for every cell reachable from world `(x, y)` sharing
+    /// its raw GID. Callers translate storage indices back to world with
+    /// [`TileMap::origin_x`] / [`TileMap::origin_y`].
     pub fn wand_mask(&self, layer: usize, x: isize, y: isize, mask: &mut [u8]) -> usize {
         let Some(l) = self.tile_layer(layer) else {
             return 0;
         };
-        if mask.len() < l.width * l.height || !tilemap::in_layer(l, x, y) {
+        if l.width == 0 || l.height == 0 {
             return 0;
         }
-        let target = tilemap::get_tile(l, x, y);
+        let dx = x - self.origin_x as isize;
+        let dy = y - self.origin_y as isize;
+        if mask.len() < l.width * l.height || !tilemap::in_layer(l, dx, dy) {
+            return 0;
+        }
+        let target = tilemap::get_tile(l, dx, dy);
         let mut count = 0;
-        let mut stack = vec![(x, y)];
+        let mut stack = vec![(dx, dy)];
         while let Some((cx, cy)) = stack.pop() {
             if !tilemap::in_layer(l, cx, cy) {
                 continue;
@@ -1007,7 +1305,7 @@ impl TileMap {
     /// 4-bit N/E/S/W membership mask. Empty slots leave the tile untouched.
     /// Returns the number of cells changed. Call after the host paints a
     /// stroke of "ground" tiles.
-    pub fn autotile(&mut self, layer: usize, tileset: usize, x: usize, y: usize, w: usize, h: usize) -> usize {
+    pub fn autotile(&mut self, layer: usize, tileset: usize, x: isize, y: isize, w: usize, h: usize) -> usize {
         if w == 0 || h == 0 || self.tilesets.get(tileset).map(|t| t.autotile.is_empty()).unwrap_or(true) {
             return 0;
         }
@@ -1015,6 +1313,12 @@ impl TileMap {
             return 0;
         };
         let (map_w, map_h) = (base.width, base.height);
+        if map_w == 0 || map_h == 0 {
+            return 0;
+        }
+        // Convert the world-coordinate region start to dense storage coords.
+        let x = (x - self.origin_x as isize).max(0) as usize;
+        let y = (y - self.origin_y as isize).max(0) as usize;
         let data = base.data.clone();
         // Membership snapshot: a cell is "ground" when it holds any tile of
         // this tileset. Computed once so all masks agree before any write.
@@ -1220,8 +1524,12 @@ impl TileMap {
 
     // ------------------------------------------------------------ resize
 
-    /// Regrid every tile layer to a new size anchored to the top-left.
+    /// Regrid every tile layer to a new size anchored to the top-left. No-op for
+    /// infinite maps, whose storage grows automatically.
     pub fn resize(&mut self, new_w: usize, new_h: usize) {
+        if self.infinite {
+            return;
+        }
         let new_w = new_w.clamp(1, MAX_MAP_DIM);
         let new_h = new_h.clamp(1, MAX_MAP_DIM);
         if new_w == self.width && new_h == self.height {
@@ -1248,28 +1556,92 @@ impl TileMap {
 
     // ------------------------------------------------------------- export
 
-    /// Flatten visible tile layers back-to-front into a whole-map RGBA buffer,
-    /// honouring per-layer opacity and the GID flip flags with nearest sampling.
+    /// Flatten visible content into a whole-map RGBA buffer. For finite maps the
+    /// buffer is `pixel_width × pixel_height`; for infinite maps it covers the
+    /// current content bounds.
     pub fn composite(&self) -> Vec<u8> {
+        if self.infinite {
+            return match self.content_pixel_bounds() {
+                Some((x, y, w, h)) => self.composite_region(x, y, w, h),
+                None => Vec::new(),
+            };
+        }
         if self.validate_dims().is_err() {
             return Vec::new();
         }
-        let (map_px_w, map_px_h) = (self.pixel_width(), self.pixel_height());
+        self.composite_region(0, 0, self.pixel_width(), self.pixel_height())
+    }
+
+    /// Composite visible content intersecting the world-pixel region
+    /// `(x0, y0, w, h)` into an RGBA buffer. Infinite maps use this to render
+    /// only what the viewport shows.
+    pub fn composite_region(&self, x0: i64, y0: i64, w: usize, h: usize) -> Vec<u8> {
+        if w == 0 || h == 0 {
+            return Vec::new();
+        }
         let tw = self.tile_width;
         let th = self.tile_height;
-        let mut out = vec![0u8; map_px_w * map_px_h * 4];
+        let mut out = vec![0u8; w * h * 4];
+        if tw == 0 || th == 0 {
+            return out;
+        }
         let mut tile_buf = vec![0u8; tw * th * 4];
+        let geo = self.geometry();
+        let x1 = x0 + w as i64;
+        let y1 = y0 + h as i64;
+
+        // World-cell range that can touch the region. Isometric/staggered use
+        // the inverse projection; expand by 2 for tall tiles and tile offsets.
+        let (mut min_cx, mut min_cy, mut max_cx, mut max_cy) = match self.orientation {
+            Orientation::Orthogonal | Orientation::Hexagonal => {
+                let tw_i = tw as i64;
+                let th_i = th as i64;
+                (
+                    x0.div_euclid(tw_i),
+                    y0.div_euclid(th_i),
+                    (x1 - 1).div_euclid(tw_i),
+                    (y1 - 1).div_euclid(th_i),
+                )
+            }
+            _ => {
+                let (mut a, mut b, mut c, mut d) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+                for (px, py) in [
+                    (x0 as f64, y0 as f64),
+                    (x1 as f64, y0 as f64),
+                    (x0 as f64, y1 as f64),
+                    (x1 as f64, y1 as f64),
+                ] {
+                    let (cx, cy) = geo.pixel_to_cell(px, py);
+                    a = a.min(cx);
+                    b = b.min(cy);
+                    c = c.max(cx);
+                    d = d.max(cy);
+                }
+                (a - 2, b - 2, c + 2, d + 2)
+            }
+        };
+        let (smin_x, smin_y, smax_x, smax_y) = self.storage_bounds();
+        if smin_x <= smax_x && smin_y <= smax_y {
+            min_cx = min_cx.max(smin_x as i64);
+            min_cy = min_cy.max(smin_y as i64);
+            max_cx = max_cx.min(smax_x as i64);
+            max_cy = max_cy.min(smax_y as i64);
+        }
+
         for layer in &self.layers {
             match layer {
                 MapLayer::Tile(data) => {
-                    if !data.visible || data.opacity <= 0.0 {
+                    if !data.visible || data.opacity <= 0.0 || data.layer.width == 0 {
                         continue;
                     }
                     let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
-                    let geo = self.geometry();
-                    // Painter's order matters for overlapping isometric tiles.
-                    geo.for_each_cell(self.render_order, |cx, cy| {
-                        let i = cy * self.width + cx;
+                    geo.for_each_cell_in(min_cx, min_cy, max_cx, max_cy, self.render_order, |cx, cy| {
+                        let dx = cx - self.origin_x as i64;
+                        let dy = cy - self.origin_y as i64;
+                        if dx < 0 || dy < 0 {
+                            return;
+                        }
+                        let i = (dy as usize) * data.layer.width + dx as usize;
                         let Some(&gid) = data.layer.data.get(i) else {
                             return;
                         };
@@ -1285,13 +1657,13 @@ impl TileMap {
                         if !ts.tile_rgba(local, &mut tile_buf) {
                             return;
                         }
-                        let (ox, oy) = geo.tile_origin(cx as i64, cy as i64);
+                        let (ox, oy) = geo.tile_origin(cx, cy);
                         blit_tile(
                             &mut out,
-                            map_px_w,
-                            map_px_h,
-                            ox + ts.tile_offset.0 as i64,
-                            oy + ts.tile_offset.1 as i64,
+                            w,
+                            h,
+                            ox + ts.tile_offset.0 as i64 - x0,
+                            oy + ts.tile_offset.1 as i64 - y0,
                             tw,
                             th,
                             flags,
@@ -1310,7 +1682,7 @@ impl TileMap {
                     }
                     let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
                     blit_image(
-                        &mut out, map_px_w, map_px_h, data.x, data.y, iw, ih, alpha,
+                        &mut out, w, h, data.x - x0 as f64, data.y - y0 as f64, iw, ih, alpha,
                         &data.pixels,
                     );
                 }
@@ -1348,9 +1720,9 @@ impl TileMap {
         root.insert("version".into(), json!("1.10"));
         root.insert("orientation".into(), json!(self.orientation.as_tiled()));
         root.insert("renderorder".into(), json!(self.render_order.as_tiled()));
-        root.insert("infinite".into(), json!(false));
-        root.insert("width".into(), json!(self.width));
-        root.insert("height".into(), json!(self.height));
+        root.insert("infinite".into(), json!(self.infinite));
+        root.insert("width".into(), json!(if self.infinite { 0 } else { self.width }));
+        root.insert("height".into(), json!(if self.infinite { 0 } else { self.height }));
         root.insert("tilewidth".into(), json!(self.tile_width));
         root.insert("tileheight".into(), json!(self.tile_height));
         root.insert("nextlayerid".into(), json!(self.next_layer_id));
@@ -1363,7 +1735,7 @@ impl TileMap {
             root.insert("properties".into(), properties_json(&self.properties));
         }
         root.insert("tilesets".into(), Value::Array(self.tilesets.iter().map(tileset_json).collect()));
-        root.insert("layers".into(), Value::Array(self.layers.iter().map(layer_json).collect()));
+        root.insert("layers".into(), Value::Array(self.layers.iter().map(|l| layer_json(l, self.infinite, self.origin_x, self.origin_y)).collect()));
         Value::Object(root)
     }
 
@@ -1382,7 +1754,18 @@ impl TileMap {
         let height = get("height").and_then(Value::as_u64).unwrap_or(0) as usize;
         let tile_width = get("tilewidth").and_then(Value::as_u64).unwrap_or(16) as usize;
         let tile_height = get("tileheight").and_then(Value::as_u64).unwrap_or(tile_width as u64) as usize;
-        if width == 0 || height == 0 || width > MAX_MAP_DIM || height > MAX_MAP_DIM {
+        let infinite = get("infinite").and_then(Value::as_bool).unwrap_or(false)
+            || get("layers")
+                .and_then(Value::as_array)
+                .map(|ls| ls.iter().any(|l| l.get("chunks").is_some()))
+                .unwrap_or(false);
+        if infinite {
+            if width > MAX_MAP_DIM || height > MAX_MAP_DIM {
+                return Err(format!(
+                    "Map dimensions are invalid ({width} x {height}); expected at most {MAX_MAP_DIM} cells per side."
+                ));
+            }
+        } else if width == 0 || height == 0 || width > MAX_MAP_DIM || height > MAX_MAP_DIM {
             return Err(format!(
                 "Map dimensions are invalid ({width} x {height}); expected 1..={MAX_MAP_DIM} cells per side."
             ));
@@ -1470,6 +1853,9 @@ impl TileMap {
         let mut layers: Vec<MapLayer> = Vec::new();
         let mut next_layer_id = 1u32;
         let mut next_object_id = 1u32;
+        // Non-empty cells of infinite tile layers, keyed by layer index. Dense
+        // storage bounds are computed once after every layer is parsed.
+        let mut infinite_cells: Vec<(usize, Vec<(i32, i32, u32)>)> = Vec::new();
         for raw in get("layers").and_then(Value::as_array).cloned().unwrap_or_default() {
             let kind = raw.get("type").and_then(Value::as_str).unwrap_or("");
             let id = raw.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -1478,6 +1864,56 @@ impl TileMap {
             let name = raw.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             match kind {
                 "tilelayer" => {
+                    let id = if id >= next_layer_id { id } else { next_layer_id };
+                    if id >= next_layer_id {
+                        next_layer_id = id + 1;
+                    }
+                    if infinite {
+                        // Infinite layers store sparse chunks; collect their
+                        // non-empty cells and allocate dense storage afterwards.
+                        let mut cells: Vec<(i32, i32, u32)> = Vec::new();
+                        for chunk in raw.get("chunks").and_then(Value::as_array).cloned().unwrap_or_default() {
+                            let cx = chunk.get("x").and_then(Value::as_i64).unwrap_or(0) as i32;
+                            let cy = chunk.get("y").and_then(Value::as_i64).unwrap_or(0) as i32;
+                            let cw = chunk.get("width").and_then(Value::as_u64).unwrap_or(16).max(1) as usize;
+                            if let Some(list) = chunk.get("data").and_then(Value::as_array) {
+                                for (i, g) in list.iter().enumerate() {
+                                    let gid = g.as_u64().unwrap_or(0) as u32;
+                                    if gid == 0 {
+                                        continue;
+                                    }
+                                    cells.push((cx + (i % cw) as i32, cy + (i / cw) as i32, gid));
+                                }
+                            } else if let Some(enc) = chunk.get("data").and_then(Value::as_str) {
+                                for (i, part) in enc
+                                    .split([',', '\n'])
+                                    .filter(|s| !s.trim().is_empty())
+                                    .enumerate()
+                                {
+                                    let gid = part.trim().parse::<u32>().unwrap_or(0);
+                                    if gid == 0 {
+                                        continue;
+                                    }
+                                    cells.push((cx + (i % cw) as i32, cy + (i / cw) as i32, gid));
+                                }
+                            }
+                        }
+                        let extra = preserve(&raw, &[
+                            "id", "name", "type", "width", "height", "data", "chunks",
+                            "visible", "opacity", "properties", "x", "y", "startx", "starty",
+                        ]);
+                        infinite_cells.push((layers.len(), cells));
+                        layers.push(MapLayer::Tile(TileLayerData {
+                            id,
+                            name,
+                            visible,
+                            opacity,
+                            layer: TileLayer::new(0, 0),
+                            properties: props_from_json(raw.get("properties")),
+                            extra,
+                        }));
+                        continue;
+                    }
                     let lw = raw.get("width").and_then(Value::as_u64).unwrap_or(width as u64) as usize;
                     let lh = raw.get("height").and_then(Value::as_u64).unwrap_or(height as u64) as usize;
                     if lw != width || lh != height {
@@ -1508,12 +1944,8 @@ impl TileMap {
                             layer.data[i] = part.trim().parse::<u32>().unwrap_or(0);
                         }
                     }
-                    let id = if id >= next_layer_id { id } else { next_layer_id };
-                    if id >= next_layer_id {
-                        next_layer_id = id + 1;
-                    }
                     let extra = preserve(&raw, &[
-                        "id", "name", "type", "width", "height", "data",
+                        "id", "name", "type", "width", "height", "data", "chunks",
                         "visible", "opacity", "properties", "x", "y",
                     ]);
                     layers.push(MapLayer::Tile(TileLayerData {
@@ -1630,11 +2062,59 @@ impl TileMap {
             "staggeraxis", "staggerindex",
         ]);
 
+        // Infinite maps: derive shared dense storage bounds from the parsed
+        // chunks, then fill each tile layer.
+        let (mut dense_w, mut dense_h, mut origin_x, mut origin_y) = (width, height, 0i32, 0i32);
+        if infinite {
+            let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+            for (_, cells) in &infinite_cells {
+                for &(x, y, _) in cells {
+                    min_x = min_x.min(x);
+                    min_y = min_y.min(y);
+                    max_x = max_x.max(x);
+                    max_y = max_y.max(y);
+                }
+            }
+            if min_x > max_x {
+                dense_w = 0;
+                dense_h = 0;
+            } else {
+                origin_x = min_x;
+                origin_y = min_y;
+                dense_w = (max_x - min_x + 1) as usize;
+                dense_h = (max_y - min_y + 1) as usize;
+                if dense_w > MAX_INF_DIM || dense_h > MAX_INF_DIM {
+                    return Err("Infinite scene is larger than the maximum editable area".into());
+                }
+            }
+            for (layer_index, cells) in infinite_cells {
+                if dense_w == 0 || dense_h == 0 {
+                    continue;
+                }
+                if let Some(MapLayer::Tile(data)) = layers.get_mut(layer_index) {
+                    let mut next = vec![0u32; dense_w * dense_h];
+                    for (x, y, gid) in cells {
+                        let dx = (x - origin_x) as usize;
+                        let dy = (y - origin_y) as usize;
+                        if dx < dense_w && dy < dense_h {
+                            next[dy * dense_w + dx] = gid;
+                        }
+                    }
+                    data.layer.width = dense_w;
+                    data.layer.height = dense_h;
+                    data.layer.data = next;
+                }
+            }
+        }
+
         let map = TileMap {
-            width,
-            height,
+            width: dense_w,
+            height: dense_h,
             tile_width,
             tile_height,
+            infinite,
+            origin_x,
+            origin_y,
             orientation,
             render_order,
             stagger_axis,
@@ -1695,22 +2175,80 @@ fn tileset_json(ts: &Tileset) -> Value {
     Value::Object(obj)
 }
 
-fn layer_json(layer: &MapLayer) -> Value {
+const CHUNK: i32 = 16;
+
+/// Tiled infinite-layer chunks (16×16, absolute cell coords, uncompressed JSON).
+fn chunks_json(origin_x: i32, origin_y: i32, width: usize, height: usize, data: &[u32]) -> Value {
+    if width == 0 || height == 0 {
+        return Value::Array(Vec::new());
+    }
+    let min_cx = origin_x.div_euclid(CHUNK);
+    let max_cx = (origin_x + width as i32 - 1).div_euclid(CHUNK);
+    let min_cy = origin_y.div_euclid(CHUNK);
+    let max_cy = (origin_y + height as i32 - 1).div_euclid(CHUNK);
+    let mut chunks = Vec::new();
+    for ccy in min_cy..=max_cy {
+        for ccx in min_cx..=max_cx {
+            let base_x = ccx * CHUNK;
+            let base_y = ccy * CHUNK;
+            let mut arr: Vec<Value> = Vec::with_capacity((CHUNK * CHUNK) as usize);
+            let mut any = false;
+            for ly in 0..CHUNK {
+                for lx in 0..CHUNK {
+                    let dx = base_x + lx - origin_x;
+                    let dy = base_y + ly - origin_y;
+                    let gid = if dx >= 0 && dy >= 0 && (dx as usize) < width && (dy as usize) < height {
+                        data[dy as usize * width + dx as usize]
+                    } else {
+                        0
+                    };
+                    if gid != 0 {
+                        any = true;
+                    }
+                    arr.push(json!(gid));
+                }
+            }
+            if any {
+                chunks.push(json!({
+                    "x": base_x,
+                    "y": base_y,
+                    "width": CHUNK,
+                    "height": CHUNK,
+                    "data": arr,
+                }));
+            }
+        }
+    }
+    Value::Array(chunks)
+}
+
+fn layer_json(layer: &MapLayer, infinite: bool, origin_x: i32, origin_y: i32) -> Value {
     match layer {
         MapLayer::Tile(data) => {
             let mut obj = data.extra.clone();
-            merge_json(&mut obj, json!({
+            let mut base = json!({
                 "id": data.id,
                 "name": data.name,
                 "type": "tilelayer",
-                "width": data.layer.width,
-                "height": data.layer.height,
                 "x": 0,
                 "y": 0,
                 "visible": data.visible,
                 "opacity": data.opacity,
-                "data": Value::Array(data.layer.data.iter().map(|g| json!(g)).collect()),
-            }));
+            });
+            if infinite {
+                base["chunks"] = chunks_json(
+                    origin_x,
+                    origin_y,
+                    data.layer.width,
+                    data.layer.height,
+                    &data.layer.data,
+                );
+            } else {
+                base["width"] = json!(data.layer.width);
+                base["height"] = json!(data.layer.height);
+                base["data"] = json!(data.layer.data.iter().map(|g| json!(g)).collect::<Vec<_>>());
+            }
+            merge_json(&mut obj, base);
             if !data.properties.is_empty() {
                 obj.insert("properties".into(), properties_json(&data.properties));
             }

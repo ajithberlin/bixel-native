@@ -1689,6 +1689,66 @@ pub extern "C" fn bixel_map_new(width: u32, height: u32, tile_width: u32, tile_h
     Box::into_raw(Box::new(real)) as *mut BixelMap
 }
 
+/// Create a Tiled infinite map: unbounded canvas, chunked serialization. The
+/// dense storage grows as content is painted.
+#[no_mangle]
+pub extern "C" fn bixel_map_new_infinite(tile_width: u32, tile_height: u32, orientation: u8) -> *mut BixelMap {
+    let orientation = match orientation {
+        1 => Orientation::Isometric,
+        2 => Orientation::Staggered,
+        _ => Orientation::Orthogonal,
+    };
+    let real = Arc::new(Mutex::new(TileMap::new_infinite(
+        tile_width.max(1) as usize,
+        tile_height.max(1) as usize,
+        orientation,
+    )));
+    Box::into_raw(Box::new(real)) as *mut BixelMap
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_is_infinite(ptr: *const BixelMap) -> bool {
+    unsafe { map_ref(ptr) }.lock().unwrap().infinite
+}
+
+/// World cell of dense storage `(0, 0)` (0 for finite maps).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_origin_x(ptr: *const BixelMap) -> i32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().origin_x
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_origin_y(ptr: *const BixelMap) -> i32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().origin_y
+}
+
+/// Inclusive world-cell bounds of non-empty content. Returns false when empty.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_content_bounds(
+    ptr: *const BixelMap,
+    out_min_x: *mut i32,
+    out_min_y: *mut i32,
+    out_max_x: *mut i32,
+    out_max_y: *mut i32,
+) -> bool {
+    if out_min_x.is_null() || out_min_y.is_null() || out_max_x.is_null() || out_max_y.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    match map.content_cell_bounds() {
+        Some((a, b, c, d)) => {
+            unsafe {
+                *out_min_x = a;
+                *out_min_y = b;
+                *out_max_x = c;
+                *out_max_y = d;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_free(ptr: *mut BixelMap) {
     if !ptr.is_null() {
@@ -1868,6 +1928,9 @@ pub unsafe extern "C" fn bixel_map_geometry_json(ptr: *const BixelMap) -> *mut c
         "renderOrder": map.render_order.as_tiled(),
         "staggerAxis": map.stagger_axis.as_tiled(),
         "staggerIndex": map.stagger_index.as_tiled(),
+        "infinite": map.infinite,
+        "originX": map.origin_x,
+        "originY": map.origin_y,
         "columns": map.width,
         "rows": map.height,
         "cellWidth": map.tile_width,
@@ -2055,11 +2118,11 @@ pub unsafe extern "C" fn bixel_map_autotile_slots(ptr: *const BixelMap, tileset:
 
 /// Re-resolve a painted region's borders; returns changed cell count.
 #[no_mangle]
-pub unsafe extern "C" fn bixel_map_autotile(ptr: *mut BixelMap, layer: u32, tileset: u32, x: u32, y: u32, w: u32, h: u32) -> u32 {
+pub unsafe extern "C" fn bixel_map_autotile(ptr: *mut BixelMap, layer: u32, tileset: u32, x: i32, y: i32, w: u32, h: u32) -> u32 {
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .autotile(layer as usize, tileset as usize, x as usize, y as usize, w as usize, h as usize) as u32
+        .autotile(layer as usize, tileset as usize, x as isize, y as isize, w as usize, h as usize) as u32
 }
 
 // ------------------------------------------------------------- layers
@@ -2257,7 +2320,7 @@ pub unsafe extern "C" fn bixel_map_stamp(
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .stamp(layer as usize, x.max(0) as usize, y.max(0) as usize, &pattern, skip_empty) as u32
+        .stamp(layer as usize, x as isize, y as isize, &pattern, skip_empty) as u32
 }
 
 #[no_mangle]
@@ -2293,8 +2356,8 @@ pub unsafe extern "C" fn bixel_map_paint_line(
 pub unsafe extern "C" fn bixel_map_read_region(
     ptr: *const BixelMap,
     layer: u32,
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     w: u32,
     h: u32,
     out: *mut u32,
@@ -2305,7 +2368,7 @@ pub unsafe extern "C" fn bixel_map_read_region(
     let pattern = unsafe { map_ref(ptr) }
         .lock()
         .unwrap()
-        .read_region(layer as usize, x as usize, y as usize, w as usize, h as usize);
+        .read_region(layer as usize, x as isize, y as isize, w as usize, h as usize);
     let count = pattern.w * pattern.h;
     if count > 0 {
         unsafe { std::ptr::copy_nonoverlapping(pattern.tiles.as_ptr(), out, count) };
@@ -2315,12 +2378,12 @@ pub unsafe extern "C" fn bixel_map_read_region(
 
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_replace(
-    ptr: *mut BixelMap, layer: u32, x: u32, y: u32, w: u32, h: u32, from: u32, to: u32,
+    ptr: *mut BixelMap, layer: u32, x: i32, y: i32, w: u32, h: u32, from: u32, to: u32,
 ) -> u32 {
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .replace(layer as usize, x as usize, y as usize, w as usize, h as usize, from, to) as u32
+        .replace(layer as usize, x as isize, y as isize, w as usize, h as usize, from, to) as u32
 }
 
 /// Magic-wand same-tile mask into a caller-owned `width*height` byte buffer.
@@ -2531,7 +2594,34 @@ pub unsafe extern "C" fn bixel_map_composite(ptr: *const BixelMap, out: *mut u8,
     true
 }
 
-/// A tile layer's GIDs as a CSV string (free with `bixel_string_free`).
+/// Composite only the world-pixel region `(x, y, w, h)` into a caller-owned
+/// RGBA buffer of `w * h * 4` bytes. Infinite maps use this to render just the
+/// visible viewport. Coordinates may be negative.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_composite_region(
+    ptr: *const BixelMap,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> bool {
+    if out.is_null() || w == 0 || h == 0 {
+        return false;
+    }
+    let expected = w as usize * h as usize * 4;
+    if out_len < expected {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let buf = map.composite_region(x as i64, y as i64, w as usize, h as usize);
+    if buf.len() != expected {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    true
+}
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -> *mut c_char {
     let csv = unsafe { map_ref(ptr) }.lock().unwrap().layer_to_csv(layer as usize);
