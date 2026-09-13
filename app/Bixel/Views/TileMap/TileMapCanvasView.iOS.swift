@@ -263,6 +263,24 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         let viewSize = bounds.size
         guard viewSize.width > 0, viewSize.height > 0 else { return }
 
+        if model.isInfinite {
+            let full = CGRect(origin: .zero, size: viewSize)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            artboardShadowLayer.isHidden = true
+            artboardShadowLayer.frame = .zero
+            artboardLayer.frame = full
+            checkerboardLayer.isHidden = true
+            checkerboardLayer.frame = .zero
+            wholeMapLayer.frame = full
+            cellGridLayer.frame = full
+            selectionLayer.frame = full
+            overlayLayer.frame = full
+            updateCellGrid()
+            CATransaction.commit()
+            return
+        }
+
         let mapW = CGFloat(model.map.pixelWidth)
         let mapH = CGFloat(model.map.pixelHeight)
         let appKitOrigin = viewport.artboardOrigin(viewSize: viewSize,
@@ -297,6 +315,11 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         isUpdatingContents = true
         defer { isUpdatingContents = false }
 
+        if coordinator.model.isInfinite {
+            renderInfiniteRegion(model: coordinator.model)
+            return
+        }
+
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
@@ -304,6 +327,65 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
             wholeMapLayer.contents = cgImage
         }
 
+        CATransaction.commit()
+    }
+
+    // MARK: - Infinite-map geometry and rendering
+
+    /// Map a world pixel to the coordinate space of the canvas layers.
+    private func canvasPoint(_ dx: Double, _ dy: Double, model: TileMapModel, viewSize: CGSize) -> CGPoint {
+        let zoom = coordinator?.viewport.zoom ?? 1
+        if model.isInfinite, let coordinator {
+            let origin = coordinator.viewport.unboundedOrigin(viewSize: viewSize)
+            return CGPoint(x: origin.x + CGFloat(dx) * zoom,
+                           y: (viewSize.height - origin.y) + CGFloat(dy) * zoom)
+        }
+        return CGPoint(x: CGFloat(dx) * zoom, y: CGFloat(dy) * zoom)
+    }
+
+    /// Convert a canvas-layer point back to world-pixel coordinates.
+    private func docFromCanvas(_ point: CGPoint, viewSize: CGSize) -> (x: Double, y: Double) {
+        guard let coordinator else { return (0, 0) }
+        let origin = coordinator.viewport.unboundedOrigin(viewSize: viewSize)
+        let zoom = coordinator.viewport.zoom
+        return (Double((point.x - origin.x) / zoom),
+                Double((point.y - (viewSize.height - origin.y)) / zoom))
+    }
+
+    /// Composite just beyond the visible world region so panning does not show
+    /// a seam at the edge of the current image.
+    private func renderInfiniteRegion(model: TileMapModel) {
+        let viewSize = bounds.size
+        guard viewSize.width > 0, viewSize.height > 0, let coordinator else { return }
+        let zoom = coordinator.viewport.zoom
+        let topLeft = docFromCanvas(.zero, viewSize: viewSize)
+        let bottomRight = docFromCanvas(CGPoint(x: viewSize.width, y: viewSize.height), viewSize: viewSize)
+        let margin = Double(max(model.map.cellWidth, model.map.cellHeight)) * 2 + 64
+        let x0 = Int((min(topLeft.x, bottomRight.x) - margin).rounded(.down))
+        let y0 = Int((min(topLeft.y, bottomRight.y) - margin).rounded(.down))
+        let x1 = Int((max(topLeft.x, bottomRight.x) + margin).rounded(.up))
+        let y1 = Int((max(topLeft.y, bottomRight.y) + margin).rounded(.up))
+        let width = max(1, x1 - x0)
+        let height = max(1, y1 - y0)
+
+        guard width * height <= 8_000_000 else {
+            wholeMapLayer.contents = nil
+            return
+        }
+        let rgba = model.map.compositeRegionRGBA(x: x0, y: y0, w: width, h: height)
+        guard !rgba.isEmpty,
+              let cgImage = makeCGImage(pixels: rgba, width: width, height: height) else {
+            wholeMapLayer.contents = nil
+            return
+        }
+
+        let origin = canvasPoint(Double(x0), Double(y0), model: model, viewSize: viewSize)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        wholeMapLayer.frame = CGRect(x: origin.x, y: origin.y,
+                                     width: CGFloat(width) * zoom,
+                                     height: CGFloat(height) * zoom)
+        wholeMapLayer.contents = cgImage
         CATransaction.commit()
     }
 
@@ -335,30 +417,136 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         let viewport = coordinator.viewport
         let zoom = viewport.zoom
 
-        guard viewport.showGrid, zoom >= 2.0 else {
+        let cellPoints = CGFloat(model.map.cellWidth) * zoom
+        guard viewport.showGrid, cellPoints >= 5 else {
             cellGridLayer.isHidden = true
             return
         }
 
-        let tw = CGFloat(model.map.cellWidth) * zoom
-        let th = CGFloat(model.map.cellHeight) * zoom
-        guard tw > 0, th > 0 else { return }
-
-        let totalW = CGFloat(model.map.pixelWidth) * zoom
-        let totalH = CGFloat(model.map.pixelHeight) * zoom
-
-        let path = CGMutablePath()
-        for x in Swift.stride(from: tw, to: totalW, by: tw) {
-            path.move(to: CGPoint(x: x, y: 0))
-            path.addLine(to: CGPoint(x: x, y: totalH))
+        let path = makeGridPath(model: model, viewSize: bounds.size, zoom: zoom)
+        guard !path.isEmpty else {
+            cellGridLayer.isHidden = true
+            return
         }
-        for y in Swift.stride(from: th, to: totalH, by: th) {
-            path.move(to: CGPoint(x: 0, y: y))
-            path.addLine(to: CGPoint(x: totalW, y: y))
-        }
-
         cellGridLayer.path = path
         cellGridLayer.isHidden = false
+    }
+
+    /// Build visible grid geometry for finite and infinite scenes. Infinite
+    /// scenes cannot use `pixelWidth`/`pixelHeight`, because those are zero for
+    /// an empty scene and only cover stored content after painting.
+    private func makeGridPath(model: TileMapModel, viewSize: CGSize, zoom: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let cellW = Double(model.map.cellWidth)
+        let cellH = Double(model.map.cellHeight)
+        guard cellW > 0, cellH > 0 else { return path }
+
+        func add(_ a: CGPoint, _ b: CGPoint) {
+            path.move(to: a)
+            path.addLine(to: b)
+        }
+
+        if model.orientation == .orthogonal {
+            let x0: Double, y0: Double, x1: Double, y1: Double
+            if model.isInfinite {
+                let topLeft = docFromCanvas(.zero, viewSize: viewSize)
+                let bottomRight = docFromCanvas(CGPoint(x: viewSize.width, y: viewSize.height), viewSize: viewSize)
+                x0 = min(topLeft.x, bottomRight.x)
+                y0 = min(topLeft.y, bottomRight.y)
+                x1 = max(topLeft.x, bottomRight.x)
+                y1 = max(topLeft.y, bottomRight.y)
+            } else {
+                x0 = 0
+                y0 = 0
+                x1 = Double(model.map.pixelWidth)
+                y1 = Double(model.map.pixelHeight)
+            }
+
+            let verticalStart: CGFloat = model.isInfinite ? 0 : 0
+            let verticalEnd: CGFloat = model.isInfinite
+                ? viewSize.height
+                : CGFloat(model.map.pixelHeight) * zoom
+            let horizontalStart: CGFloat = model.isInfinite ? 0 : 0
+            let horizontalEnd: CGFloat = model.isInfinite
+                ? viewSize.width
+                : CGFloat(model.map.pixelWidth) * zoom
+
+            var column = Int(floor(x0 / cellW))
+            let lastColumn = Int(ceil(x1 / cellW))
+            while column <= lastColumn {
+                let worldX = Double(column) * cellW
+                let screenX = canvasPoint(worldX, 0, model: model, viewSize: viewSize).x
+                add(CGPoint(x: screenX, y: verticalStart),
+                    CGPoint(x: screenX, y: verticalEnd))
+                column += 1
+            }
+
+            var row = Int(floor(y0 / cellH))
+            let lastRow = Int(ceil(y1 / cellH))
+            while row <= lastRow {
+                let worldY = Double(row) * cellH
+                let screenY = canvasPoint(0, worldY, model: model, viewSize: viewSize).y
+                add(CGPoint(x: horizontalStart, y: screenY),
+                    CGPoint(x: horizontalEnd, y: screenY))
+                row += 1
+            }
+            return path
+        }
+
+        // Isometric/staggered cells are projected diamonds/parallelograms. Only
+        // generate the cells that can be visible, with a small edge margin.
+        var minX = 0, minY = 0, maxX = -1, maxY = -1
+        if model.isInfinite {
+            let corners = [
+                CGPoint.zero,
+                CGPoint(x: viewSize.width, y: 0),
+                CGPoint(x: 0, y: viewSize.height),
+                CGPoint(x: viewSize.width, y: viewSize.height),
+            ]
+            var left = Int.max, top = Int.max, right = Int.min, bottom = Int.min
+            for corner in corners {
+                let doc = docFromCanvas(corner, viewSize: viewSize)
+                let cell = model.rawCell(atPixel: (Int(floor(doc.x)), Int(floor(doc.y))))
+                left = min(left, cell.x)
+                top = min(top, cell.y)
+                right = max(right, cell.x)
+                bottom = max(bottom, cell.y)
+            }
+            minX = left - 2
+            minY = top - 2
+            maxX = right + 2
+            maxY = bottom + 2
+        } else {
+            minX = 0
+            minY = 0
+            maxX = model.map.columns - 1
+            maxY = model.map.rows - 1
+        }
+
+        guard maxX >= minX, maxY >= minY,
+              (maxX - minX + 1) * (maxY - minY + 1) <= 65_536 else {
+            return path
+        }
+
+        let tw = CGFloat(model.map.cellWidth)
+        let th = CGFloat(model.map.cellHeight)
+        for cy in minY...maxY {
+            for cx in minX...maxX {
+                let origin = model.cellOrigin(cx, cy)
+                let point = canvasPoint(Double(origin.x), Double(origin.y),
+                                        model: model, viewSize: viewSize)
+                let top = CGPoint(x: point.x + tw * zoom / 2, y: point.y)
+                let right = CGPoint(x: point.x + tw * zoom, y: point.y + th * zoom / 2)
+                let bottom = CGPoint(x: point.x + tw * zoom / 2, y: point.y + th * zoom)
+                let left = CGPoint(x: point.x, y: point.y + th * zoom / 2)
+                path.move(to: top)
+                path.addLine(to: right)
+                path.addLine(to: bottom)
+                path.addLine(to: left)
+                path.closeSubpath()
+            }
+        }
+        return path
     }
 
     // MARK: - Gestures

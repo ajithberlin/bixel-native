@@ -16,6 +16,9 @@ import Combine
 
 struct MapLeftDock: View {
     @ObservedObject var model: TileMapModel
+    #if os(iOS)
+    @State private var isPickingImage = false
+    #endif
 
     var body: some View {
         VStack(spacing: 12) {
@@ -109,10 +112,36 @@ struct MapLeftDock: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
         .shadow(color: .black.opacity(0.45), radius: 20, y: 6)
+        #if os(iOS)
+        .fileImporter(
+            isPresented: $isPickingImage,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let access = url.startAccessingSecurityScopedResource()
+                defer {
+                    if access { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url) else {
+                    model.operationError = "Could not read that image file."
+                    return
+                }
+                _ = model.addImageLayer(data: data,
+                                        name: url.deletingPathExtension().lastPathComponent)
+            case .failure(let error):
+                model.operationError = "Could not choose that image: \(error.localizedDescription)"
+            }
+        }
+        #endif
     }
 
     private func pickImageLayer() {
-        #if os(macOS)
+        #if os(iOS)
+        isPickingImage = true
+        #elseif os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -131,6 +160,9 @@ struct TilesetPanel: View {
     @ObservedObject var store: ProjectStore
     @ObservedObject var model: TileMapModel
     @State private var addSheet: TilesetAddSheet?
+    #if os(iOS)
+    @State private var isPickingImage = false
+    #endif
     @State private var autotileEditing = false
     @State private var autotileSlotToAssign: Int?
     @State private var activeTileset = 0
@@ -197,6 +229,34 @@ struct TilesetPanel: View {
                 .frame(width: 440, height: 540)
             }
         }
+        #if os(iOS)
+        .fileImporter(
+            isPresented: $isPickingImage,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let access = url.startAccessingSecurityScopedResource()
+                defer {
+                    if access { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url) else {
+                    store.error = "Could not read that image file."
+                    return
+                }
+                if let source = prepareSource(
+                    name: url.deletingPathExtension().lastPathComponent,
+                    data: data
+                ) {
+                    addSheet = .configure(source)
+                }
+            case .failure(let error):
+                store.error = "Could not choose that image: \(error.localizedDescription)"
+            }
+        }
+        #endif
     }
 
     // MARK: Header
@@ -525,7 +585,9 @@ struct TilesetPanel: View {
     // MARK: Add tileset flow
 
     private func pickImage() {
-        #if os(macOS)
+        #if os(iOS)
+        isPickingImage = true
+        #elseif os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false

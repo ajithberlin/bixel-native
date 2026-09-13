@@ -156,13 +156,11 @@ struct HomePageView: View {
         .fileImporter(
             isPresented: $showImportFilePicker,
             allowedContentTypes: [.image, .json],
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             switch result {
             case .success(let urls):
-                if let url = urls.first {
-                    importFile(from: url)
-                }
+                importFiles(from: urls)
             case .failure(let error):
                 store.error = "Could not choose that file: \(error.localizedDescription)"
             }
@@ -1139,29 +1137,59 @@ struct HomePageView: View {
         showImportFilePicker = true
     }
 
-    private func importFile(from url: URL) {
-        let hasSecurityScope = url.startAccessingSecurityScopedResource()
-        defer {
-            if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
-        }
+    private func importFiles(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
 
-        let name = url.deletingPathExtension().lastPathComponent
-
-        var imageURL = url
-        var manifest: String?
-        if url.pathExtension.lowercased() == "json" {
-            guard let sibling = SheetImport.siblingImage(for: url) else {
-                store.error = "Choose a PNG spritesheet, or a JSON manifest next to its image."
-                return
+        let imageExtensions = Set(SheetImport.imageExtensions)
+        var accessURLs = urls
+        for url in urls {
+            let extensionName = url.pathExtension.lowercased()
+            if extensionName == "json" {
+                accessURLs.append(contentsOf: SheetImport.imageExtensions.map {
+                    url.deletingPathExtension().appendingPathExtension($0)
+                })
+            } else if imageExtensions.contains(extensionName) {
+                accessURLs.append(url.deletingPathExtension().appendingPathExtension("json"))
             }
-            imageURL = sibling
-            manifest = (try? Data(contentsOf: url)).flatMap(SheetImport.manifest(fromJSON:))
-        } else {
-            manifest = SheetImport.sidecarManifest(for: url)
+        }
+        var uniqueAccessURLs: [URL] = []
+        for url in accessURLs where !uniqueAccessURLs.contains(url) {
+            uniqueAccessURLs.append(url)
+        }
+        let scopedURLs = uniqueAccessURLs.filter { $0.startAccessingSecurityScopedResource() }
+        defer {
+            scopedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
         }
 
-        guard let data = try? Data(contentsOf: imageURL) else {
-            store.error = "Could not read that file."
+        let manifestURL = urls.first { $0.pathExtension.lowercased() == "json" }
+        let selectedImageURL = urls.first { imageExtensions.contains($0.pathExtension.lowercased()) }
+        let name = (manifestURL ?? selectedImageURL ?? urls[0])
+            .deletingPathExtension().lastPathComponent
+
+        var imageURL = selectedImageURL
+        var manifest: String?
+        if let manifestURL {
+            if imageURL == nil {
+                guard let sibling = SheetImport.siblingImage(for: manifestURL) else {
+                    store.error = "Select both the PNG spritesheet and its JSON manifest."
+                    return
+                }
+                imageURL = sibling
+            }
+            manifest = (try? Data(contentsOf: manifestURL)).flatMap(SheetImport.manifest(fromJSON:))
+        } else if let selectedImageURL {
+            manifest = SheetImport.sidecarManifest(for: selectedImageURL)
+        } else {
+            store.error = "Choose an image or a JSON manifest next to its image."
+            return
+        }
+
+        guard let imageURL, let data = try? Data(contentsOf: imageURL) else {
+            if manifestURL != nil {
+                store.error = "Could not read the spritesheet. Select both the image and JSON manifest together."
+            } else {
+                store.error = "Could not read that file."
+            }
             return
         }
 
