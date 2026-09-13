@@ -304,7 +304,12 @@ struct ContentView: View {
 
     private func performZoomFit() {
         if let map = activeMap {
-            viewport.zoomToFitCurrent(canvasWidth: map.map.pixelWidth, height: map.map.pixelHeight)
+            if map.isInfinite {
+                viewport.zoomToFitInfinite(viewSize: viewport.lastViewSize,
+                                           contentBounds: map.contentPixelBounds())
+            } else {
+                viewport.zoomToFitCurrent(canvasWidth: map.map.pixelWidth, height: map.map.pixelHeight)
+            }
         } else {
             viewport.zoomToFitCurrent(canvasWidth: model.width, height: model.height)
         }

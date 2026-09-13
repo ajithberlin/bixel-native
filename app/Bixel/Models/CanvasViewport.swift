@@ -53,6 +53,38 @@ final class CanvasViewport: ObservableObject {
         zoomToFit(viewSize: lastViewSize, canvasWidth: w, height: h)
     }
 
+    /// Zoom an infinite scene to fit its projected content and centre the
+    /// content's actual world-pixel bounds. An empty scene has no bounds to
+    /// fit, so it starts at a readable 1:1 scale around the world origin.
+    func zoomToFitInfinite(
+        viewSize: CGSize,
+        contentBounds: (x: Int, y: Int, width: Int, height: Int)?
+    ) {
+        guard viewSize.width > 40, viewSize.height > 40 else { return }
+        let availW = viewSize.width - 260 - rightInset
+        let availH = viewSize.height - 220
+        guard availW > 40, availH > 40 else { return }
+
+        guard let contentBounds,
+              contentBounds.width > 0,
+              contentBounds.height > 0 else {
+            zoom = Self.clampZoom(1)
+            pan = .zero
+            didFit = true
+            return
+        }
+
+        zoom = Self.clampZoom(min(availW / CGFloat(contentBounds.width),
+                                  availH / CGFloat(contentBounds.height)))
+        let centerX = Double(contentBounds.x) + Double(contentBounds.width) / 2
+        let centerY = Double(contentBounds.y) + Double(contentBounds.height) / 2
+        // `unboundedOrigin` already centres within the usable view. Move the
+        // world-content centre onto that origin after changing the scale.
+        pan = CGPoint(x: -CGFloat(centerX) * zoom,
+                      y: CGFloat(centerY) * zoom)
+        didFit = true
+    }
+
     static func clampZoom(_ z: CGFloat) -> CGFloat {
         min(max(z, minZoom), maxZoom)
     }
@@ -120,7 +152,8 @@ final class CanvasViewport: ObservableObject {
         let newZoom = Self.clampZoom(zoom * factor)
         guard newZoom != zoom else { return }
         if let anchor, viewSize.width > 0 {
-            let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+            let center = CGPoint(x: (viewSize.width - rightInset) / 2,
+                                 y: viewSize.height / 2)
             let rel = CGPoint(x: anchor.x - center.x, y: anchor.y - center.y)
             let ratio = newZoom / zoom
             pan = CGPoint(x: rel.x - (rel.x - pan.x) * ratio,

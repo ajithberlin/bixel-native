@@ -122,6 +122,7 @@ final class MapCanvas: NSView {
     private let gridAxisLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
     private let objectLayer = CAShapeLayer()
+    private let brushPreviewLayer = CALayer()
     private let ghostLayer = CAShapeLayer()
     private let borderLayer = CALayer()
 
@@ -217,6 +218,12 @@ final class MapCanvas: NSView {
         objectLayer.isHidden = true
         artboardLayer.addSublayer(objectLayer)
 
+        brushPreviewLayer.magnificationFilter = .nearest
+        brushPreviewLayer.minificationFilter = .nearest
+        brushPreviewLayer.opacity = 0.55
+        brushPreviewLayer.isHidden = true
+        artboardLayer.addSublayer(brushPreviewLayer)
+
         ghostLayer.strokeColor = NSColor(white: 1.0, alpha: 0.9).cgColor
         ghostLayer.lineWidth = 1.5
         ghostLayer.lineDashPattern = [2, 3]
@@ -235,9 +242,16 @@ final class MapCanvas: NSView {
         if let coordinator {
             coordinator.viewport.lastViewSize = bounds.size
             if !coordinator.viewport.didFit {
-                coordinator.viewport.zoomToFit(viewSize: bounds.size,
-                                               canvasWidth: coordinator.model.map.pixelWidth,
-                                               height: coordinator.model.map.pixelHeight)
+                if coordinator.model.isInfinite {
+                    coordinator.viewport.zoomToFitInfinite(
+                        viewSize: bounds.size,
+                        contentBounds: coordinator.model.contentPixelBounds()
+                    )
+                } else {
+                    coordinator.viewport.zoomToFit(viewSize: bounds.size,
+                                                   canvasWidth: coordinator.model.map.pixelWidth,
+                                                   height: coordinator.model.map.pixelHeight)
+                }
             }
         }
         updateArtboardGeometry()
@@ -653,9 +667,28 @@ final class MapCanvas: NSView {
                                              width: model.brush.pattern.width,
                                              height: model.brush.pattern.height,
                                              model: model, zoom: zoom)
+            // Low-opacity preview of the actual tiles under the pointer. Only
+            // orthogonal cells are axis-aligned rectangles, so the image lines
+            // up; iso/staggered keep the dashed outline.
+            if model.orientation == .orthogonal, let preview = model.brushPreviewImage() {
+                let origin = model.cellOrigin(cell.x, cell.y)
+                let p = canvasPoint(Double(origin.x), Double(origin.y), model: model, viewSize: bounds.size)
+                brushPreviewLayer.frame = CGRect(
+                    x: p.x, y: p.y,
+                    width: CGFloat(model.brush.pattern.width * model.map.cellWidth) * zoom,
+                    height: CGFloat(model.brush.pattern.height * model.map.cellHeight) * zoom
+                )
+                brushPreviewLayer.contents = preview
+                brushPreviewLayer.isHidden = false
+            } else {
+                brushPreviewLayer.isHidden = true
+                brushPreviewLayer.contents = nil
+            }
         } else {
             ghostLayer.isHidden = true
             ghostLayer.path = nil
+            brushPreviewLayer.isHidden = true
+            brushPreviewLayer.contents = nil
         }
         CATransaction.commit()
     }
@@ -743,6 +776,20 @@ final class MapCanvas: NSView {
             lineStart = point
             return
         }
+        if let coordinator, coordinator.model.tool == .move, !coordinator.model.isObjectActive {
+            let canMoveTiles: Bool
+            if let cell = coordinator.cellCoordinate(point, in: self) {
+                canMoveTiles = coordinator.model.canMoveSelection(at: cell.x, y: cell.y)
+            } else {
+                canMoveTiles = false
+            }
+            if !canMoveTiles {
+                panning = true
+                lastPanPoint = point
+                NSCursor.closedHand.set()
+                return
+            }
+        }
         if coordinator?.model.tool == .move { NSCursor.closedHand.set() }
         coordinator?.begin(at: point, in: self)
     }
@@ -819,8 +866,13 @@ final class MapCanvas: NSView {
 
     override func smartMagnify(with event: NSEvent) {
         guard let model = coordinator?.model else { return }
-        coordinator?.viewport.zoomToFit(viewSize: bounds.size,
-                                        canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+        if model.isInfinite {
+            coordinator?.viewport.zoomToFitInfinite(viewSize: bounds.size,
+                                                    contentBounds: model.contentPixelBounds())
+        } else {
+            coordinator?.viewport.zoomToFit(viewSize: bounds.size,
+                                            canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -835,8 +887,14 @@ final class MapCanvas: NSView {
             switch event.charactersIgnoringModifiers {
             case "=", "+": viewport.zoomIn()
             case "-": viewport.zoomOut()
-            case "0": viewport.zoomToFit(viewSize: bounds.size,
-                                         canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+            case "0":
+                if model.isInfinite {
+                    viewport.zoomToFitInfinite(viewSize: bounds.size,
+                                               contentBounds: model.contentPixelBounds())
+                } else {
+                    viewport.zoomToFit(viewSize: bounds.size,
+                                       canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+                }
             default: super.keyDown(with: event)
             }
             return

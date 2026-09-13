@@ -664,7 +664,9 @@ final class ProjectStore: ObservableObject {
             let name = url.deletingPathExtension().lastPathComponent
             let item = WorkspaceDocument(name: name, mode: .map,
                                          width: model.map.columns, height: model.map.rows,
-                                         cellWidth: model.map.cellWidth, cellHeight: model.map.cellHeight)
+                                         cellWidth: model.map.cellWidth, cellHeight: model.map.cellHeight,
+                                         infinite: model.map.isInfinite,
+                                         orientation: model.map.orientation.tiled)
             try model.map.save(base: base, path: item.path)
             var next = catalog
             next.documents.append(item); next.activeDocumentID = item.id

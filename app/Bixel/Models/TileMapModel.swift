@@ -272,6 +272,17 @@ final class TileMapModel: ObservableObject {
         return (hit.x, hit.y)
     }
 
+    /// Whether a Move gesture starting at this cell should manipulate the
+    /// current tile selection. Empty scene space belongs to camera panning.
+    func canMoveSelection(at x: Int, y: Int) -> Bool {
+        guard isActiveLayerTile, let rect = selection, !rect.isEmpty,
+              x >= rect.x, x < rect.x + rect.width,
+              y >= rect.y, y < rect.y + rect.height else { return false }
+        let pattern = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y,
+                                     w: rect.width, h: rect.height)
+        return pattern.tiles.contains { $0 != 0 }
+    }
+
     /// World-pixel bounds of the content (infinite maps), matching the
     /// whole-content composite returned by `compositeRGBA()`.
     func contentPixelBounds() -> (x: Int, y: Int, width: Int, height: Int)? {
@@ -432,6 +443,81 @@ final class TileMapModel: ObservableObject {
 
     func tilesetDisplayImage(_ index: Int) -> CGImage? {
         tilesetImages[index]
+    }
+
+    // MARK: - Brush preview
+
+    private var brushPreviewCache: CGImage?
+    private var brushPreviewKey = ""
+
+    /// Compose the armed brush pattern into one image (source tiles, with Tiled
+    /// orientation flags applied) for the low-opacity hover ghost, so the user
+    /// can see exactly which tile(s) will be stamped.
+    func brushPreviewImage() -> CGImage? {
+        let pattern = brush.pattern
+        guard !pattern.isEmpty else { return nil }
+        let cw = map.cellWidth
+        let ch = map.cellHeight
+        guard cw > 0, ch > 0 else { return nil }
+        let key = "\(pattern.width)x\(pattern.height)|\(cw)x\(ch)|\(tilesetList.count)|"
+            + pattern.tiles.map(String.init).joined(separator: ",")
+        if key == brushPreviewKey { return brushPreviewCache }
+        brushPreviewKey = key
+        brushPreviewCache = composeBrushPreview(pattern: pattern, cellWidth: cw, cellHeight: ch)
+        return brushPreviewCache
+    }
+
+    private func composeBrushPreview(pattern: MapTilePattern, cellWidth cw: Int, cellHeight ch: Int) -> CGImage? {
+        let w = pattern.width * cw
+        let h = pattern.height * ch
+        guard w > 0, h > 0,
+              let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        for row in 0..<pattern.height {
+            for col in 0..<pattern.width {
+                let gid = pattern.tiles[row * pattern.width + col]
+                guard let (info, local) = tilesetAndLocal(forGID: gid), local != 0,
+                      info.columns > 0, info.tileWidth > 0, info.tileHeight > 0,
+                      let source = tilesetDisplayImage(info.index) else { continue }
+                let stride = info.tileWidth + info.spacing
+                let tcol = Int(local) % info.columns
+                let trow = Int(local) / info.columns
+                let crop = CGRect(x: info.margin + tcol * stride,
+                                  y: info.margin + trow * stride,
+                                  width: info.tileWidth, height: info.tileHeight)
+                guard let tile = source.cropping(to: crop) else { continue }
+                ctx.saveGState()
+                ctx.translateBy(x: CGFloat(col * cw) + CGFloat(cw) / 2,
+                                y: CGFloat(h - (row + 1) * ch) + CGFloat(ch) / 2)
+                if gid & GIDFlag.diagonal != 0 {
+                    ctx.concatenate(CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0))
+                }
+                if gid & GIDFlag.horizontal != 0 {
+                    ctx.concatenate(CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: 0, ty: 0))
+                }
+                if gid & GIDFlag.vertical != 0 {
+                    ctx.concatenate(CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: 0))
+                }
+                ctx.draw(tile, in: CGRect(x: -CGFloat(cw) / 2, y: -CGFloat(ch) / 2,
+                                          width: CGFloat(cw), height: CGFloat(ch)))
+                ctx.restoreGState()
+            }
+        }
+        return ctx.makeImage()
+    }
+
+    /// Resolve a raw GID to its tileset and local tile id (flags stripped).
+    private func tilesetAndLocal(forGID gid: UInt32) -> (MapTilesetInfo, UInt32)? {
+        let base = gid & ~(GIDFlag.horizontal | GIDFlag.vertical | GIDFlag.diagonal)
+        guard base != 0 else { return nil }
+        var match: MapTilesetInfo?
+        for info in tilesetList {
+            if base >= info.firstGid { match = info } else { break }
+        }
+        guard let info = match, base >= info.firstGid else { return nil }
+        return (info, base - info.firstGid)
     }
 
     // MARK: - Image layers
@@ -605,7 +691,7 @@ final class TileMapModel: ObservableObject {
            x >= rect.x, x < rect.x + rect.width,
            y >= rect.y, y < rect.y + rect.height {
             let pattern = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y, w: rect.width, h: rect.height)
-            guard !pattern.isEmpty else { return }
+            guard pattern.tiles.contains(where: { $0 != 0 }) else { return }
             map.snapshot()
             map.paintRect(layer: activeLayer, x0: rect.x, y0: rect.y,
                           x1: rect.x + rect.width - 1, y1: rect.y + rect.height - 1, gid: 0)
@@ -631,7 +717,10 @@ final class TileMapModel: ObservableObject {
             let width = clipboard?.width ?? 1
             let height = clipboard?.height ?? 1
             selection = MapCellRect(x: anchorX, y: anchorY, width: width, height: height)
-            hoverPixel = (anchorX * map.cellWidth, anchorY * map.cellHeight)
+            // The map projection may offset or skew a cell (isometric and
+            // staggered scenes), so the ghost must follow the engine's
+            // orientation-aware origin rather than raw orthogonal math.
+            hoverPixel = map.cellOrigin(x: anchorX, y: anchorY)
         } else if let start = selection {
             selection = MapCellRect.between((start.x, start.y), (x, y))
         }

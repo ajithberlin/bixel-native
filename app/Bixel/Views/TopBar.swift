@@ -287,7 +287,7 @@ struct TopBar: View {
         case .rectFill: return "Drag to fill a rectangular area with the selected tile pattern"
         case .line: return "Draw a straight line of tiles between two points"
         case .select: return "Select a region of tiles to copy, stamp, or manipulate"
-        case .move: return "Pan and reposition tile layers or selections"
+        case .move: return "Drag selected tiles to reposition them, or drag empty space to pan"
         case .tilePicker: return "Sample an existing tile from the map into your brush"
         case .wand: return "Select all matching adjacent tiles"
         }
@@ -616,7 +616,13 @@ struct ActionsPopover: View {
                     .help("Zoom out")
                 Button {
                     if let mapModel {
-                        viewport.zoomToFitCurrent(canvasWidth: mapModel.map.pixelWidth, height: mapModel.map.pixelHeight)
+                        if mapModel.isInfinite {
+                            viewport.zoomToFitInfinite(viewSize: viewport.lastViewSize,
+                                                       contentBounds: mapModel.contentPixelBounds())
+                        } else {
+                            viewport.zoomToFitCurrent(canvasWidth: mapModel.map.pixelWidth,
+                                                     height: mapModel.map.pixelHeight)
+                        }
                     } else {
                         viewport.zoomToFitCurrent(canvasWidth: model.width, height: model.height)
                     }

@@ -480,6 +480,87 @@ struct EditorInteractionTests {
         precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: true, rotationHandle: true) == .rotate)
         precondition(CanvasCursorPolicy.kind(tool: .transform, insideArtboard: false, floatingBody: true) == .move,
                      "A floating source body outside the artboard must retain its move cursor")
+
+        // Infinite scene fitting must centre the actual world content, not
+        // merely reset the camera to cell (0, 0). The camera also has to keep
+        // a zoom anchor fixed when a right-side panel reduces the usable view.
+        let infiniteViewport = CanvasViewport()
+        let mapViewSize = CGSize(width: 1200, height: 800)
+        let contentBounds = (x: -320, y: 160, width: 640, height: 320)
+        infiniteViewport.zoomToFitInfinite(viewSize: mapViewSize, contentBounds: contentBounds)
+        precondition(infiniteViewport.didFit, "Fitting an infinite scene must complete even when its content is offset")
+        let contentCenter = infiniteViewport.docToView(
+            x: Double(contentBounds.x + contentBounds.width / 2),
+            y: Double(contentBounds.y + contentBounds.height / 2),
+            viewSize: mapViewSize
+        )
+        assertNear(contentCenter, CGPoint(x: mapViewSize.width / 2, y: mapViewSize.height / 2),
+                   "Infinite scene fit must centre content")
+
+        let anchoredViewport = CanvasViewport()
+        anchoredViewport.rightInset = 240
+        anchoredViewport.zoom = 2
+        let anchorSize = CGSize(width: 1200, height: 800)
+        let anchor = anchoredViewport.docToView(x: 37, y: -19, viewSize: anchorSize)
+        anchoredViewport.zoomBy(1.5, anchor: anchor, viewSize: anchorSize)
+        assertNear(anchoredViewport.docToView(x: 37, y: -19, viewSize: anchorSize), anchor,
+                   "Zoom must keep the document point below the cursor")
+
+        let emptyMapViewport = CanvasViewport()
+        let emptyMapCanvas = MapCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let emptyMapModel = TileMapModel(infiniteOrientation: .orthogonal, tileWidth: 16, tileHeight: 16)
+        let emptyMapCoordinator = TileMapCanvasView.Coordinator(model: emptyMapModel, viewport: emptyMapViewport)
+        emptyMapCanvas.coordinator = emptyMapCoordinator
+        emptyMapCanvas.layout()
+        precondition(emptyMapViewport.didFit && emptyMapViewport.zoom == 1,
+                     "An empty infinite scene must establish a stable readable initial camera")
+
+        // The Move tool is also the map navigation tool: dragging empty scene
+        // space must pan the camera instead of silently creating a selection.
+        let mapMoveModel = TileMapModel(infiniteOrientation: .orthogonal, tileWidth: 16, tileHeight: 16)
+        mapMoveModel.tool = .move
+        let mapMoveViewport = CanvasViewport()
+        mapMoveViewport.zoom = 1
+        let mapMoveCanvas = MapCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let mapMoveCoordinator = TileMapCanvasView.Coordinator(model: mapMoveModel, viewport: mapMoveViewport)
+        mapMoveCanvas.coordinator = mapMoveCoordinator
+        mapMoveCanvas.updateArtboardGeometry()
+        mapMoveCanvas.mouseDown(with: canvasMouseEvent(.leftMouseDown, point: CGPoint(x: 200, y: 200)))
+        mapMoveCanvas.mouseDragged(with: canvasMouseEvent(.leftMouseDragged, point: CGPoint(x: 248, y: 217)))
+        mapMoveCanvas.mouseUp(with: canvasMouseEvent(.leftMouseUp, point: CGPoint(x: 248, y: 217)))
+        assertNear(mapMoveViewport.pan, CGPoint(x: 48, y: 17),
+                   "Dragging empty infinite-map space with Move must pan the camera")
+        precondition(mapMoveModel.selection == nil,
+                     "Panning with Move must not create an accidental tile selection")
+
+        let selectedMoveModel = TileMapModel(infiniteOrientation: .orthogonal, tileWidth: 16, tileHeight: 16)
+        _ = selectedMoveModel.map.setTile(layer: 0, x: 0, y: 0, gid: 1)
+        selectedMoveModel.selection = MapCellRect(x: 0, y: 0, width: 1, height: 1)
+        selectedMoveModel.tool = .move
+        let selectedMoveViewport = CanvasViewport()
+        selectedMoveViewport.zoom = 1
+        let selectedMoveCanvas = MapCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let selectedMoveCoordinator = TileMapCanvasView.Coordinator(model: selectedMoveModel, viewport: selectedMoveViewport)
+        selectedMoveCanvas.coordinator = selectedMoveCoordinator
+        selectedMoveCanvas.updateArtboardGeometry()
+        selectedMoveCanvas.mouseDown(with: canvasMouseEvent(.leftMouseDown, point: CGPoint(x: 200, y: 200)))
+        selectedMoveCanvas.mouseDragged(with: canvasMouseEvent(.leftMouseDragged, point: CGPoint(x: 232, y: 200)))
+        selectedMoveCanvas.mouseUp(with: canvasMouseEvent(.leftMouseUp, point: CGPoint(x: 232, y: 200)))
+        precondition(selectedMoveModel.map.getTile(layer: 0, x: 0, y: 0) == 0 &&
+                     selectedMoveModel.map.getTile(layer: 0, x: 2, y: 0) == 1,
+                     "Dragging a selected tile with Move must reposition it instead of panning")
+
+        // A moved ghost follows the projection-aware cell origin on
+        // isometric scenes; raw x/y × tile-size is not the screen position.
+        let isoMoveModel = TileMapModel(infiniteOrientation: .isometric, tileWidth: 16, tileHeight: 16)
+        _ = isoMoveModel.map.setTile(layer: 0, x: 0, y: 0, gid: 1)
+        isoMoveModel.selection = MapCellRect(x: 0, y: 0, width: 1, height: 1)
+        isoMoveModel.tool = .move
+        isoMoveModel.beginStroke(x: 0, y: 0)
+        isoMoveModel.continueStroke(x: 1, y: 0)
+        precondition(isoMoveModel.hoverPixel?.x == isoMoveModel.cellOrigin(1, 0).x &&
+                     isoMoveModel.hoverPixel?.y == isoMoveModel.cellOrigin(1, 0).y,
+                     "Moved isometric ghosts must use projected cell origins")
         print("Editor interaction tests passed")
     }
 }
