@@ -107,6 +107,7 @@ private struct RemoteHostSettingsView: View {
 
 private struct RemoteClientSettingsView: View {
     @ObservedObject private var client = RemoteClient.shared
+    @ObservedObject private var sync = RemoteClientSyncEngine.shared
     @State private var scanning = false
     @State private var manualLink = ""
     @State private var message: String?
@@ -170,6 +171,19 @@ private struct RemoteClientSettingsView: View {
                 }
 
                 if client.state.isConnected {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            RemoteClientSyncEngine.shared.syncAll()
+                        } label: {
+                            Label(sync.isSyncing ? "Syncing…" : "Sync projects now",
+                                  systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(sync.isSyncing)
+                        Text(sync.status)
+                            .font(.system(size: 11))
+                            .foregroundColor(StudioTheme.textSecondary)
+                    }
                     Button("Disconnect", role: .destructive) { client.disconnect() }
                 }
                 if let message {

@@ -198,11 +198,15 @@ enum RemoteRouters {
         RemoteHost.shared.onMessage = { message, session in
             if message.type.hasPrefix("ai.") {
                 RemoteHostAIBridge.shared.handle(message, session: session)
+            } else if message.type.hasPrefix("sync.") {
+                RemoteHostSyncBridge.shared.handle(message, session: session)
             }
         }
         #else
         RemoteClient.shared.onMessage = { message in
-            if message.type.hasPrefix("ai.") {
+            if message.type.hasPrefix("sync.") {
+                RemoteRequestBroker.shared.resolve(message)
+            } else if message.type.hasPrefix("ai.") {
                 RemoteClientAIBridge.shared.handle(message)
             }
         }

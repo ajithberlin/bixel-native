@@ -48,12 +48,22 @@ final class ProjectStore: ObservableObject {
     var projectRoot: URL? { current.map { root.appendingPathComponent($0.id) } }
     var isMapActive: Bool { activeDocument?.mode == .map }
 
-    init(root: URL? = nil) {
-        let resolvedRoot = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    /// Canonical on-disk projects root. Shared with the remote sync engine so
+    /// the Mac can serve the same projects it shows in the UI.
+    nonisolated static var defaultRoot: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Bixel/Projects", isDirectory: true)
+    }
+
+    init(root: URL? = nil) {
+        let resolvedRoot = root ?? Self.defaultRoot
         self.root = resolvedRoot
         self.aiGallery = AIGalleryStore(root: resolvedRoot)
         EditorBridge.shared.attach(store: self)
+        // Refresh the list when the remote sync engine pulls new projects.
+        NotificationCenter.default.addObserver(forName: .bixelRemoteSyncCompleted, object: nil, queue: .main) { [weak self] _ in
+            self?.refresh()
+        }
         refresh()
         bootstrapSamplesIfEmpty()
         do {
