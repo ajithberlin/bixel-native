@@ -1338,7 +1338,35 @@ final class EditorModel: ObservableObject {
             guard response == .OK, let url = panel.url else { return }
             try? png.write(to: url)
         }
+        #elseif os(iOS)
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("frame-\(frame + 1)-\(w)x\(h)@\(scale)x.png")
+        do {
+            try png.write(to: tempURL)
+            guard let windowScene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene ?? UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let rootVC = windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return }
+            var presenter = rootVC
+            while let presented = presenter.presentedViewController { presenter = presented }
+            let activityVC = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+            if let popover = activityVC.popoverPresentationController {
+                popover.sourceView = presenter.view
+                popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 0, height: 0)
+                popover.permittedArrowDirections = []
+            }
+            presenter.present(activityVC, animated: true)
+        } catch {
+            operationError = error.localizedDescription
+        }
         #endif
+    }
+
+    /// Export all animation frames as an animated GIF.
+    func exportGIF(scale: Int = 4) {
+        AnimationExporter.exportGIF(model: self, scale: scale)
+    }
+
+    /// Export the animation as an H.264 MP4 video.
+    func exportVideo(scale: Int = 4, minimumDuration: Double = 3.0) {
+        AnimationExporter.exportVideo(model: self, scale: scale, minimumDuration: minimumDuration)
     }
 
     func undo() { if document.undo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }

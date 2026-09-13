@@ -136,6 +136,8 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // Gestures
     private var pinchRecognizer: UIPinchGestureRecognizer!
     private var panRecognizer: UIPanGestureRecognizer!
+    private var twoFingerTapRecognizer: UITapGestureRecognizer!
+    private var threeFingerTapRecognizer: UITapGestureRecognizer!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -216,6 +218,23 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         pinchRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         pinchRecognizer.delegate = self
         addGestureRecognizer(pinchRecognizer)
+
+        // Two-finger Tap: Undo
+        twoFingerTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap(_:)))
+        twoFingerTapRecognizer.numberOfTouchesRequired = 2
+        twoFingerTapRecognizer.numberOfTapsRequired = 1
+        twoFingerTapRecognizer.delegate = self
+        addGestureRecognizer(twoFingerTapRecognizer)
+
+        // Three-finger Tap: Redo
+        threeFingerTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleThreeFingerTap(_:)))
+        threeFingerTapRecognizer.numberOfTouchesRequired = 3
+        threeFingerTapRecognizer.numberOfTapsRequired = 1
+        threeFingerTapRecognizer.delegate = self
+        addGestureRecognizer(threeFingerTapRecognizer)
+
+        twoFingerTapRecognizer.require(toFail: threeFingerTapRecognizer)
+        panRecognizer.require(toFail: twoFingerTapRecognizer)
     }
 
     override func layoutSubviews() {
@@ -367,6 +386,24 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    @objc private func handleTwoFingerTap(_ tap: UITapGestureRecognizer) {
+        guard tap.state == .ended, let coordinator else { return }
+        coordinator.model.undo()
+        triggerHapticFeedback()
+    }
+
+    @objc private func handleThreeFingerTap(_ tap: UITapGestureRecognizer) {
+        guard tap.state == .ended, let coordinator else { return }
+        coordinator.model.redo()
+        triggerHapticFeedback()
+    }
+
+    private func triggerHapticFeedback() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         true
     }
@@ -374,23 +411,27 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        if (event?.allTouches?.count ?? 0) > 1 { return }
+        guard touches.count == 1, let touch = touches.first else { return }
         coordinator.begin(at: touch.location(in: self), in: self)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        if (event?.allTouches?.count ?? 0) > 1 { return }
+        guard touches.count == 1, let touch = touches.first else { return }
         coordinator.drag(at: touch.location(in: self), in: self)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        guard (event?.allTouches?.count ?? 0) <= 1, let touch = touches.first else { return }
         coordinator.end(at: touch.location(in: self), in: self)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first, let coordinator else { return }
-        coordinator.end(at: touch.location(in: self), in: self)
+        // Multi-touch cancellation does not commit stray tile edits
     }
 }
 #endif

@@ -51,7 +51,7 @@ impl Default for OnionSkin {
         OnionSkin {
             enabled: false,
             mode: OnionMode::Opacity,
-            prev: 1,
+            prev: 3,
             next: 1,
         }
     }

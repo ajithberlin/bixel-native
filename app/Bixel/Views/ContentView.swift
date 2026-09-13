@@ -540,7 +540,7 @@ struct ContentView: View {
     private var spriteBottomChrome: some View {
         VStack(spacing: 8) {
             if showTimeline && projects.activeDocument?.supportsAnimationAssist == true {
-                TimelineBar(model: model, onPredictNextFrame: predictNextFrame)
+                TimelineBar(model: model, viewport: viewport, onPredictNextFrame: predictNextFrame)
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -1290,7 +1290,7 @@ pub extern "C" fn bixel_ai_app_paths() -> *mut c_char {
 }
 
 const AI_SYSTEM_PROMPT: &str =
-    "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.";
+    "You are Bixel, an AI assistant for a 2D design studio. Be concise and helpful.";
 
 /// Blocking text chat with the configured text model.
 ///

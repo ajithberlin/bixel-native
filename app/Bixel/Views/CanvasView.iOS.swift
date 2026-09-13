@@ -106,8 +106,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private let artboardShadowLayer = CALayer()
     private let artboardLayer = CALayer()
     private let checkerboardLayer = CALayer()
-    private let onionLayer2 = CALayer()
-    private let onionLayer1 = CALayer()
+    private static let maxOnionLayers = 5
+    private let onionLayers: [CALayer] = (0..<5).map { _ in CALayer() }
     private let canvasImageLayer = CALayer()
     private let pixelGridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
@@ -137,6 +137,9 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // Gestures
     private var pinchRecognizer: UIPinchGestureRecognizer!
     private var panRecognizer: UIPanGestureRecognizer!
+    private var twoFingerTapRecognizer: UITapGestureRecognizer!
+    private var threeFingerTapRecognizer: UITapGestureRecognizer!
+    private let hudLabel = UILabel()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -182,15 +185,14 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         checkerboardLayer.backgroundColor = Self.checkerboardPatternColor
         artboardLayer.addSublayer(checkerboardLayer)
 
-        onionLayer2.magnificationFilter = .nearest
-        onionLayer2.minificationFilter = .nearest
-        onionLayer2.isHidden = true
-        artboardLayer.addSublayer(onionLayer2)
-
-        onionLayer1.magnificationFilter = .nearest
-        onionLayer1.minificationFilter = .nearest
-        onionLayer1.isHidden = true
-        artboardLayer.addSublayer(onionLayer1)
+        // Onion skin layers (nearest-neighbour)
+        // Added in reverse so closest frame (distance 1) is above older frames
+        for layer in onionLayers.reversed() {
+            layer.magnificationFilter = .nearest
+            layer.minificationFilter = .nearest
+            layer.isHidden = true
+            artboardLayer.addSublayer(layer)
+        }
 
         canvasImageLayer.magnificationFilter = .nearest
         canvasImageLayer.minificationFilter = .nearest
@@ -230,6 +232,25 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         pinchRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
         pinchRecognizer.delegate = self
         addGestureRecognizer(pinchRecognizer)
+
+        // Two-finger Tap: Undo
+        twoFingerTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleTwoFingerTap(_:)))
+        twoFingerTapRecognizer.numberOfTouchesRequired = 2
+        twoFingerTapRecognizer.numberOfTapsRequired = 1
+        twoFingerTapRecognizer.delegate = self
+        addGestureRecognizer(twoFingerTapRecognizer)
+
+        // Three-finger Tap: Redo
+        threeFingerTapRecognizer = UITapGestureRecognizer(target: self, action: #selector(handleThreeFingerTap(_:)))
+        threeFingerTapRecognizer.numberOfTouchesRequired = 3
+        threeFingerTapRecognizer.numberOfTapsRequired = 1
+        threeFingerTapRecognizer.delegate = self
+        addGestureRecognizer(threeFingerTapRecognizer)
+
+        twoFingerTapRecognizer.require(toFail: threeFingerTapRecognizer)
+        panRecognizer.require(toFail: twoFingerTapRecognizer)
+
+        setupHUD()
     }
 
     override func layoutSubviews() {
@@ -278,8 +299,9 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
 
         let localFrame = CGRect(x: 0, y: 0, width: scaledW, height: scaledH)
         checkerboardLayer.frame = localFrame
-        onionLayer2.frame = localFrame
-        onionLayer1.frame = localFrame
+        for layer in onionLayers {
+            layer.frame = localFrame
+        }
         canvasImageLayer.frame = localFrame
         borderLayer.frame = localFrame
         pixelGridLayer.frame = localFrame
@@ -302,7 +324,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
             frameCount: model.frameCount,
             enabled: viewport.onionSkin,
             frameCountToShow: viewport.onionFrames,
-            opacity: viewport.onionOpacity
+            opacity: viewport.onionOpacity,
+            colorize: viewport.onionColorize
         )
         let needBase = !didDrawContent || revision != lastDrawnRevision
         let needOnion = needBase || onionState.needsRedraw(comparedTo: lastOnionState)
@@ -321,24 +344,23 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         }
 
         if needOnion {
-            if let previousFrame = onionState.previousFrame {
-                let pixels = model.compositeFrame(previousFrame)
-                onionLayer1.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
-                onionLayer1.opacity = Float(onionState.opacity)
-                onionLayer1.isHidden = false
-            } else {
-                onionLayer1.isHidden = true
-                onionLayer1.contents = nil
-            }
-
-            if let olderPreviousFrame = onionState.olderPreviousFrame {
-                let pixels = model.compositeFrame(olderPreviousFrame)
-                onionLayer2.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
-                onionLayer2.opacity = Float(onionState.opacity * 0.5)
-                onionLayer2.isHidden = false
-            } else {
-                onionLayer2.isHidden = true
-                onionLayer2.contents = nil
+            let specs = onionState.layers
+            for i in 0..<onionLayers.count {
+                let layer = onionLayers[i]
+                if i < specs.count {
+                    let spec = specs[i]
+                    let pixels = model.compositeFrame(spec.frameIndex)
+                    if let tint = spec.tintColor {
+                        layer.contents = makeTintedCGImage(pixels: pixels, width: model.width, height: model.height, tint: tint)
+                    } else {
+                        layer.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+                    }
+                    layer.opacity = Float(spec.opacity)
+                    layer.isHidden = false
+                } else {
+                    layer.isHidden = true
+                    layer.contents = nil
+                }
             }
         }
 
@@ -412,7 +434,7 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    // MARK: - Gestures (Pinch & Pan)
+    // MARK: - Gestures (Pinch, Pan, Undo, Redo)
 
     @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
         guard let coordinator else { return }
@@ -437,6 +459,61 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    @objc private func handleTwoFingerTap(_ tap: UITapGestureRecognizer) {
+        guard tap.state == .ended, let coordinator else { return }
+        coordinator.model.abortStroke()
+        coordinator.model.undo()
+        triggerHapticFeedback()
+        showGestureHUD("Undo")
+    }
+
+    @objc private func handleThreeFingerTap(_ tap: UITapGestureRecognizer) {
+        guard tap.state == .ended, let coordinator else { return }
+        coordinator.model.abortStroke()
+        coordinator.model.redo()
+        triggerHapticFeedback()
+        showGestureHUD("Redo")
+    }
+
+    private func triggerHapticFeedback() {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+
+    private func setupHUD() {
+        hudLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        hudLabel.textColor = .white
+        hudLabel.backgroundColor = UIColor(white: 0.15, alpha: 0.90)
+        hudLabel.textAlignment = .center
+        hudLabel.layer.cornerRadius = 14
+        hudLabel.layer.masksToBounds = true
+        hudLabel.alpha = 0
+        addSubview(hudLabel)
+    }
+
+    private func showGestureHUD(_ text: String) {
+        hudLabel.text = text
+        let padding: CGFloat = 28
+        let size = (text as NSString).size(withAttributes: [.font: hudLabel.font!])
+        let badgeWidth = max(80, size.width + padding)
+        let badgeHeight: CGFloat = 28
+        hudLabel.frame = CGRect(
+            x: (bounds.width - badgeWidth) / 2,
+            y: safeAreaInsets.top + 16,
+            width: badgeWidth,
+            height: badgeHeight
+        )
+        bringSubviewToFront(hudLabel)
+        UIView.animate(withDuration: 0.15, animations: {
+            self.hudLabel.alpha = 1.0
+        }) { _ in
+            UIView.animate(withDuration: 0.25, delay: 0.6, options: .curveEaseOut, animations: {
+                self.hudLabel.alpha = 0.0
+            }, completion: nil)
+        }
+    }
+
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         true
     }
@@ -444,31 +521,43 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Drawing Touches (Finger & Apple Pencil)
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        if (event?.allTouches?.count ?? 0) > 1 {
+            coordinator.model.abortStroke()
+            return
+        }
+        guard touches.count == 1, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard let pixel = coordinator.pixelCoordinate(point, in: self) else { return }
         coordinator.model.beginStroke(x: pixel.x, y: pixel.y)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        if (event?.allTouches?.count ?? 0) > 1 {
+            coordinator.model.abortStroke()
+            return
+        }
+        guard touches.count == 1, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard let pixel = coordinator.pixelCoordinate(point, in: self) else { return }
         coordinator.model.continueStroke(x: pixel.x, y: pixel.y)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first, let coordinator else { return }
+        guard let coordinator else { return }
+        guard (event?.allTouches?.count ?? 0) <= 1, let touch = touches.first else {
+            coordinator.model.abortStroke()
+            return
+        }
         let point = touch.location(in: self)
         guard let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) else { return }
         coordinator.model.endStroke(x: pixel.x, y: pixel.y)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let touch = touches.first, let coordinator else { return }
-        let point = touch.location(in: self)
-        guard let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) else { return }
-        coordinator.model.endStroke(x: pixel.x, y: pixel.y)
+        guard let coordinator else { return }
+        coordinator.model.abortStroke()
     }
 }
 #endif

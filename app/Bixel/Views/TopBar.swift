@@ -561,7 +561,22 @@ struct ActionsPopover: View {
                 .toggleStyle(.switch)
 
                 if viewport.onionSkin {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Layers")
+                                .font(.caption)
+                                .foregroundColor(StudioTheme.textSecondary)
+                            Spacer()
+                            Stepper("\(viewport.onionFrames)", value: $viewport.onionFrames, in: 1...5)
+                        }
+
+                        Toggle(isOn: $viewport.onionColorize) {
+                            Text("Colorize Layers")
+                                .font(.caption)
+                                .foregroundColor(StudioTheme.textSecondary)
+                        }
+                        .toggleStyle(.switch)
+
                         HStack {
                             Text("Ghost Opacity")
                                 .font(.caption)
@@ -710,6 +725,28 @@ struct ActionsPopover: View {
                 }
 
                 Divider().overlay(StudioTheme.hairline)
+
+                Text("Share Animation")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(StudioTheme.textSecondary)
+
+                Button {
+                    model.exportGIF()
+                } label: {
+                    Label("Animated GIF…", systemImage: "play.rectangle")
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
+                .help("Export the animation as an animated GIF")
+
+                Button {
+                    model.exportVideo()
+                } label: {
+                    Label("MP4 Video…", systemImage: "video")
+                }
+                .buttonStyle(.plain)
+                .padding(.vertical, 4)
+                .help("Export the animation as an MP4 video")
 
                 Button {
                     model.exportSpriteSheet()

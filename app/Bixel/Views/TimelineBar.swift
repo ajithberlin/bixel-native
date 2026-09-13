@@ -5,6 +5,7 @@ import SwiftUI
 
 struct TimelineBar: View {
     @ObservedObject var model: EditorModel
+    var viewport: CanvasViewport? = nil
     var onPredictNextFrame: (String) -> Void
 
     @State private var hoveredIndex: Int? = nil
@@ -59,6 +60,41 @@ struct TimelineBar: View {
                     Text("Loop").tag(LoopMode.forward)
                     Text("Reverse").tag(LoopMode.reverse)
                     Text("Ping-pong").tag(LoopMode.pingPong)
+                }
+
+                if let viewport {
+                    Divider()
+                    Toggle("Onion Skin", isOn: Binding(
+                        get: { viewport.onionSkin },
+                        set: { viewport.onionSkin = $0 }
+                    ))
+                    if viewport.onionSkin {
+                        Menu("Onion Layers: \(viewport.onionFrames)") {
+                            ForEach(1...5, id: \.self) { count in
+                                Button("\(count) \(count == 1 ? "Layer" : "Layers")") {
+                                    viewport.onionFrames = count
+                                }
+                            }
+                        }
+                        Toggle("Colorize Layers", isOn: Binding(
+                            get: { viewport.onionColorize },
+                            set: { viewport.onionColorize = $0 }
+                        ))
+                    }
+                }
+
+                Divider()
+
+                Menu("Export Animation") {
+                    Button("Animated GIF…") {
+                        model.exportGIF()
+                    }
+                    Button("MP4 Video…") {
+                        model.exportVideo()
+                    }
+                    Button("Sprite Sheet…") {
+                        model.exportSpriteSheet()
+                    }
                 }
             } label: {
                 Text("Settings")

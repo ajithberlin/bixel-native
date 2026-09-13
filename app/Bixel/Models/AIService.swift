@@ -417,7 +417,7 @@ enum AIService {
     }
 
     /// Text chat with the configured text model. Returns the assistant's reply.
-    static func chat(prompt: String, system: String = "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.") -> String? {
+    static func chat(prompt: String, system: String = "You are Bixel, an AI assistant for a 2D design studio. Be concise and helpful.") -> String? {
         guard let ptr = bixel_ai_chat(prompt, system) else { return nil }
         defer { bixel_string_free(ptr) }
         return String(cString: ptr)

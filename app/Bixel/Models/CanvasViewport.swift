@@ -20,8 +20,10 @@ final class CanvasViewport: ObservableObject {
     @Published var onionSkin = false
     /// Ghost opacity for the most recent previous frame (0...1).
     @Published var onionOpacity: Double = 0.32
-    /// How many previous frames to ghost (1 or 2; the older one fades more).
-    @Published var onionFrames: Int = 1
+    /// How many previous frames to ghost (up to 5; default 3; older ones fade more).
+    @Published var onionFrames: Int = 3
+    /// Whether each onion-skin layer is tinted in a distinct color.
+    @Published var onionColorize: Bool = true
     /// Width (points) reserved on the right by a docked side panel. The camera
     /// centres within the remaining area instead of the full view.
     var rightInset: CGFloat = 0
