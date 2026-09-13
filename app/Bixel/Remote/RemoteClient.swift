@@ -41,6 +41,11 @@ final class RemoteClient: ObservableObject {
     private var wire: RemoteWire?
     private var pending: Pending?
     private var reconnectTarget: (host: String, port: UInt16)?
+    private var lastPeer: RemoteTrustStore.Peer?
+    private var manualDisconnect = false
+    private var reconnectWork: DispatchWorkItem?
+    private var heartbeatTimer: Timer?
+    private var lastPong = Date()
 
     private struct Pending {
         var expectedHostStatic: Data
@@ -59,6 +64,7 @@ final class RemoteClient: ObservableObject {
 
     init() {
         trustedHosts = trust.peers
+        lastPeer = trust.peers.last
     }
 
     // MARK: - Public entry points
@@ -91,11 +97,21 @@ final class RemoteClient: ObservableObject {
     }
 
     func disconnect() {
+        manualDisconnect = true
+        reconnectWork?.cancel()
+        reconnectWork = nil
         wire?.close()
         wire = nil
         pending = nil
         reconnectTarget = nil
         update(.idle)
+    }
+
+    /// Re-establish the last trusted Mac after a drop or app foreground.
+    func reconnectIfNeeded() {
+        guard !manualDisconnect, !state.isConnected else { return }
+        if case .connecting = state { return }
+        if let peer = lastPeer { reconnect(to: peer) }
     }
 
     func forget(_ peer: RemoteTrustStore.Peer) {
@@ -114,7 +130,12 @@ final class RemoteClient: ObservableObject {
 
     private func connect(host: String, port: UInt16, hostStatic: Data, salt: Data,
                          name: String, isNewPairing: Bool) {
+        manualDisconnect = false
+        reconnectWork?.cancel()
+        reconnectWork = nil
+        wire?.onClosed = nil
         wire?.close()
+        wire = nil
         update(.connecting)
         reconnectTarget = (host, port)
 
@@ -144,14 +165,38 @@ final class RemoteClient: ObservableObject {
 
         wire.onReady = { [weak self] in self?.sendHello() }
         wire.onFrame = { [weak self] data in self?.handleHandshakeFrame(data) }
-        wire.onMessage = { [weak self] message in self?.onMessage?(message) }
+        wire.onMessage = { [weak self] message in
+            guard let self else { return }
+            if message.type == RemoteMessageType.pong {
+                self.lastPong = Date()
+                return
+            }
+            self.onMessage?(message)
+        }
         wire.onClosed = { [weak self] error in
             guard let self else { return }
-            if case .connected = self.state { self.update(.idle) }
-            else if let error { self.update(.failed(error.localizedDescription)) }
-            else { self.update(.idle) }
+            let wasConnected = { if case .connected = self.state { return true }; return false }()
+            if self.manualDisconnect {
+                self.update(.idle)
+            } else if wasConnected {
+                // Seamless recovery: the socket dropped, so retry the last Mac.
+                self.update(.connecting)
+                self.scheduleReconnect()
+            } else if let error {
+                self.update(.failed(error.localizedDescription))
+            } else {
+                self.update(.idle)
+            }
         }
         wire.start()
+    }
+
+    private func scheduleReconnect() {
+        guard let peer = lastPeer else { update(.idle); return }
+        reconnectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.reconnect(to: peer) }
+        reconnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
     private func sendHello() {
@@ -216,13 +261,15 @@ final class RemoteClient: ObservableObject {
                 wire.activate(sendKey: keys.client, receiveKey: keys.host)
 
                 // Remember this Mac for seamless reconnects.
-                trust.upsert(RemoteTrustStore.Peer(
+                let peer = RemoteTrustStore.Peer(
                     id: hostStatic.base64EncodedString(),
                     name: pending.name,
                     psk: keys.psk.base64EncodedString(),
                     host: pending.host,
                     port: pending.port
-                ))
+                )
+                trust.upsert(peer)
+                lastPeer = peer
                 DispatchQueue.main.async { self.trustedHosts = self.trust.peers }
                 update(.connected(name: pending.name))
             } catch {
@@ -240,7 +287,37 @@ final class RemoteClient: ObservableObject {
     private func update(_ next: State) {
         DispatchQueue.main.async {
             self.state = next
+            if case .connected = next {
+                self.startHeartbeat()
+            } else {
+                self.stopHeartbeat()
+            }
             self.onStateChange?(next)
+        }
+    }
+
+    /// Keep the link honest: a half-open socket would otherwise leave sync and
+    /// chat hanging until their timeouts. A missed pong forces a reconnect.
+    private func startHeartbeat() {
+        stopHeartbeat()
+        lastPong = Date()
+        DispatchQueue.main.async {
+            self.heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                if Date().timeIntervalSince(self.lastPong) > 36 {
+                    self.update(.connecting)
+                    self.scheduleReconnect()
+                    return
+                }
+                try? self.send(RemoteMessage(type: RemoteMessageType.ping))
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        DispatchQueue.main.async {
+            self.heartbeatTimer?.invalidate()
+            self.heartbeatTimer = nil
         }
     }
 }

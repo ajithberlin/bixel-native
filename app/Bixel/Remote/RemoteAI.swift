@@ -90,8 +90,21 @@ final class RemoteHostAIBridge {
     }
 
     private func start(_ message: RemoteMessage, session: RemoteSession) {
-        guard let request = message.payload["request"] as? [String: Any],
-              let data = try? JSONSerialization.data(withJSONObject: request),
+        guard var request = message.payload["request"] as? [String: Any] else { return }
+
+        // The client's workspace path is iPad-local (an iOS sandbox path the Mac
+        // cannot create). Give the agent a Mac-local working directory instead;
+        // generated artifacts still stream back to the client as events.
+        request["base"] = Self.workspace(for: message.id).path
+        // The iPad's system prompt has no skill interpreter path; point the Mac
+        // agent at its own managed venv.
+        let python = AssistantSession.skillPythonPath
+        if !python.isEmpty {
+            let note = "\n\nThe skill Python interpreter on this Mac is \(python)."
+            request["system"] = (request["system"] as? String ?? "") + note
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: request),
               let json = String(data: data, encoding: .utf8) else { return }
 
         let hostRequest = RemoteAIHostRequest(id: message.id, session: session)
@@ -107,6 +120,16 @@ final class RemoteHostAIBridge {
             self?.requests.removeValue(forKey: message.id)
             self?.lock.unlock()
         }
+    }
+
+    /// A Mac-local working directory for one remote agent turn.
+    private static func workspace(for id: String) -> URL {
+        let base = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory)
+            .appendingPathComponent("Bixel/remote", isDirectory: true)
+        let url = base.appendingPathComponent(id, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
     }
 }
 
@@ -196,10 +219,14 @@ enum RemoteRouters {
     static func install() {
         #if os(macOS)
         RemoteHost.shared.onMessage = { message, session in
-            if message.type.hasPrefix("ai.") {
+            if message.type == RemoteMessageType.ping {
+                try? session.send(RemoteMessage(type: RemoteMessageType.pong, replyTo: message.id))
+            } else if message.type.hasPrefix("ai.") {
                 RemoteHostAIBridge.shared.handle(message, session: session)
             } else if message.type.hasPrefix("sync.") {
                 RemoteHostSyncBridge.shared.handle(message, session: session)
+            } else {
+                NSLog("Bixel remote host: no handler for %@", message.type)
             }
         }
         #else

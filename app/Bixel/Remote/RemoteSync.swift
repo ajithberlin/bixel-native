@@ -297,13 +297,23 @@ final class RemoteClientSyncEngine: ObservableObject {
                 allIDs.formUnion(localIDs)
 
                 var failures = 0
+                var firstError: String?
                 for id in allIDs.sorted() {
-                    do { try self.sync(projectID: id) }
-                    catch { failures += 1 }
+                    do {
+                        try self.sync(projectID: id)
+                    } catch {
+                        failures += 1
+                        if firstError == nil { firstError = "\(id): \(error.localizedDescription)" }
+                        NSLog("Bixel remote sync failed for %@: %@", id, error.localizedDescription)
+                    }
                 }
                 DispatchQueue.main.async {
                     self.isSyncing = false
-                    self.status = failures == 0 ? "Synced \(allIDs.count) project\(allIDs.count == 1 ? "" : "s")" : "\(failures) project(s) failed"
+                    if failures == 0 {
+                        self.status = "Synced \(allIDs.count) project\(allIDs.count == 1 ? "" : "s")"
+                    } else {
+                        self.status = "Sync failed — \(firstError ?? "\(failures) project(s)")"
+                    }
                     NotificationCenter.default.post(name: .bixelRemoteSyncCompleted, object: nil)
                 }
             } catch {

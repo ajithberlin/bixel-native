@@ -117,7 +117,13 @@ struct ContentView: View {
                     syncAnimationAssistVisibility()
                 }
                 .onChange(of: scenePhase) { phase in
-                    if phase != .active { flushProject() }
+                    if phase != .active {
+                        flushProject()
+                    } else {
+                        #if os(iOS)
+                        RemoteClient.shared.reconnectIfNeeded()
+                        #endif
+                    }
                 }
                 #if os(macOS)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in flushProject() }
