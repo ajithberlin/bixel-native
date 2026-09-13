@@ -52,6 +52,9 @@ the dependencies), never the system `python3`.
   from a description, style image, or existing sprite.
 - **pixel-tileset-gen** — seamless tilesets: top-down terrain, sidescroller
   platforms, and Wang autotile sets; includes seam verification.
+- **tileset-asset-extender** — add a new object (building, tree, prop) or area
+  tile (road, river, grass) to an existing tileset PNG, style-matched and
+  grid-snapped without disturbing existing content.
 - **pixel-9slice-splitter** — validate and split 9-slice panels, grid sheets,
   and scattered multi-object images, with engine manifests.
 - **pixel-game-asset-prep** — turn AI-generated sheets/maps into engine-ready

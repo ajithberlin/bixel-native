@@ -90,6 +90,11 @@ struct AssistantCommand: Identifiable, Hashable {
             detail: "Generate tileable terrain, autotiles, walls, and map elements for 2D tilemaps."
         ),
         AssistantCommand(
+            id: "tileset-asset-extender",
+            title: "tileset-asset-extender",
+            detail: "Add a new object or area asset (e.g. a building) to an existing tileset image, style-matched and grid-snapped."
+        ),
+        AssistantCommand(
             id: "pixel-9slice-splitter",
             title: "pixel-9slice-splitter",
             detail: "Split pixel art panels into 9-slice scalable frames or validate 9-slice grid definitions."
@@ -139,6 +144,8 @@ struct AssistantCommand: Identifiable, Hashable {
             return ["ui", "element", "component", "button", "icon", "gauge", "bar"]
         case "pixel-tileset-gen":
             return ["tile", "tileset", "terrain", "autotile", "wall", "walls", "map", "environment", "ground"]
+        case "tileset-asset-extender":
+            return ["extend", "append", "insert", "add", "building", "object", "prop", "asset", "tileset", "sheet", "tile", "map"]
         case "pixel-9slice-splitter":
             return ["9slice", "nine-slice", "scale", "slice", "splitter", "stretch", "border", "panel"]
         case "pixel-interpolate":
