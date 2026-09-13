@@ -15,10 +15,23 @@ struct AIPanel: View {
     @State private var archived: AssistantConversation?
     @State private var historySearch = ""
     @State private var commandIndex = 0
+    @State private var pickerSearch = ""
+
+    private var activeQuery: String {
+        (session.query ?? pickerSearch).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private var commands: [AssistantCommand] {
-        let query = (session.query ?? "").lowercased()
-        return session.commands.filter { query.isEmpty || $0.id.contains(query) || $0.title.lowercased().contains(query) }
+        let q = activeQuery
+        if q.isEmpty {
+            return session.commands
+        }
+        return session.commands.compactMap { cmd -> (AssistantCommand, Int)? in
+            guard let score = cmd.matchScore(for: q) else { return nil }
+            return (cmd, score)
+        }
+        .sorted { $0.1 > $1.1 }
+        .map { $0.0 }
     }
     private var commandMenuVisible: Bool { showCommands || session.query != nil }
 
@@ -69,6 +82,11 @@ struct AIPanel: View {
             }
         }
         .background(AppSettingsOpener(openOnAppear: !session.status.connected))
+        .onAppear {
+            if session.commands.isEmpty {
+                session.refreshCommands()
+            }
+        }
     }
 
     private func roleDot(_ role: String) -> Color {
@@ -173,7 +191,7 @@ struct AIPanel: View {
             }, onSubmit: submitComposer, onMove: { offset in
                 guard commandMenuVisible, !commands.isEmpty else { return false }
                 commandIndex = (commandIndex + offset + commands.count) % commands.count; return true
-            }, onEscape: { session.query = nil; showCommands = false })
+            }, onEscape: { session.query = nil; showCommands = false; pickerSearch = "" })
                 .frame(height: session.attachments.isEmpty ? 90 : 70)
             HStack(spacing: 8) {
                 Menu {
@@ -234,13 +252,51 @@ struct AIPanel: View {
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
     }
 
+    private var pickerTitle: String {
+        let q = activeQuery
+        if commands.isEmpty {
+            return q.isEmpty ? "No skills installed" : "No matching skills for \"\(q)\""
+        }
+        if !q.isEmpty {
+            return "Skills matching \"\(q)\""
+        }
+        return "Add a skill"
+    }
+
     private var commandPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(commands.isEmpty ? "No matching skills" : "Add a skill").font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary)
+                Text(pickerTitle).font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary)
                 Spacer()
-                iconButton("Close skill menu", "xmark") { showCommands = false; session.query = nil }
+                iconButton("Close skill menu", "xmark") {
+                    showCommands = false
+                    session.query = nil
+                    pickerSearch = ""
+                }
             }.padding(.horizontal, 8)
+            if session.query == nil {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    TextField("Search skills…", text: $pickerSearch)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textPrimary)
+                    if !pickerSearch.isEmpty {
+                        Button { pickerSearch = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(StudioTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(StudioTheme.panel, in: RoundedRectangle(cornerRadius: 7))
+                .padding(.horizontal, 4)
+            }
             if !commands.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -250,7 +306,14 @@ struct AIPanel: View {
                                     HStack(spacing: 10) {
                                         Image(systemName: "shippingbox").foregroundColor(StudioTheme.accent)
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text(command.title).font(.system(size: 12, weight: .medium))
+                                            HStack(spacing: 6) {
+                                                Text(command.title).font(.system(size: 12, weight: .medium))
+                                                if command.origin == .agent {
+                                                    Text("/\(command.id)")
+                                                        .font(.system(size: 10, design: .monospaced))
+                                                        .foregroundColor(StudioTheme.accent.opacity(0.8))
+                                                }
+                                            }
                                             Text(command.detail).font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary).lineLimit(2)
                                         }
                                         Spacer(minLength: 0)
@@ -268,11 +331,15 @@ struct AIPanel: View {
     }
     private func insert(_ command: AssistantCommand) {
         NotificationCenter.default.post(name: .assistantInsertCommand, object: command)
-        showCommands = false; session.query = nil
+        showCommands = false; session.query = nil; pickerSearch = ""
     }
     private func submitComposer() {
-        if commandMenuVisible, !commands.isEmpty { insert(commands[min(commandIndex, commands.count - 1)]) }
-        else { send() }
+        if commandMenuVisible, !commands.isEmpty {
+            let index = max(0, min(commandIndex, commands.count - 1))
+            insert(commands[index])
+        } else {
+            send()
+        }
     }
     private func send() { showHistory = false; session.send(model: model) }
     private func iconButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {

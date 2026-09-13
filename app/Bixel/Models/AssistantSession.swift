@@ -27,6 +27,232 @@ struct AssistantCommand: Identifiable, Hashable {
         origin = .agent
         inputHint = command.inputHint
     }
+
+    init(id: String, title: String, detail: String, local: Bool = true, origin: Origin = .agent, inputHint: String? = nil) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.local = local
+        self.origin = origin
+        self.inputHint = inputHint
+    }
+
+    /// Complete manifest of bundled skills built into Bixel Studio.
+    static let bundledSkills: [AssistantCommand] = [
+        AssistantCommand(
+            id: "take-control",
+            title: "take-control",
+            detail: "Take control of a Bixel Studio task end-to-end: interpret the goal, inspect the canvas/document state, plan steps, and execute using the right tools and skills."
+        ),
+        AssistantCommand(
+            id: "pixel-reduce-colors",
+            title: "pixel-reduce-colors",
+            detail: "Reduce color palette, quantize colors, create color ramps, or conform pixel art to standard retro palettes."
+        ),
+        AssistantCommand(
+            id: "pixel-remove-bg",
+            title: "pixel-remove-bg",
+            detail: "Remove backgrounds from pixel art images, creating clean transparent sprites while preserving edge detail."
+        ),
+        AssistantCommand(
+            id: "pixel-8dir-character",
+            title: "pixel-8dir-character",
+            detail: "Generate or validate 8-directional character walk animations and turnaround sheets."
+        ),
+        AssistantCommand(
+            id: "pixel-file-compressor",
+            title: "pixel-file-compressor",
+            detail: "Trim transparent margins, crop, or compress pixel-art sheets and images to minimize file size."
+        ),
+        AssistantCommand(
+            id: "pixel-game-asset-prep",
+            title: "pixel-game-asset-prep",
+            detail: "Add outlines, drop shadows, padding, or format game assets for engine import."
+        ),
+        AssistantCommand(
+            id: "pixel-game-ui-gen",
+            title: "pixel-game-ui-gen",
+            detail: "Generate retro game UI elements: health bars, dialog boxes, HUD frames, inventories."
+        ),
+        AssistantCommand(
+            id: "pixel-ui-kit-gen",
+            title: "pixel-ui-kit-gen",
+            detail: "Generate a coherent pixel-art UI kit with matching buttons, panels, sliders, and icons."
+        ),
+        AssistantCommand(
+            id: "pixel-ui-elements-gen",
+            title: "pixel-ui-elements-gen",
+            detail: "Generate individual pixel-art UI components and icons."
+        ),
+        AssistantCommand(
+            id: "pixel-tileset-gen",
+            title: "pixel-tileset-gen",
+            detail: "Generate tileable terrain, autotiles, walls, and map elements for 2D tilemaps."
+        ),
+        AssistantCommand(
+            id: "pixel-9slice-splitter",
+            title: "pixel-9slice-splitter",
+            detail: "Split pixel art panels into 9-slice scalable frames or validate 9-slice grid definitions."
+        ),
+        AssistantCommand(
+            id: "pixel-interpolate",
+            title: "pixel-interpolate",
+            detail: "Generate in-between frames for pixel art animations to smooth out movement."
+        ),
+        AssistantCommand(
+            id: "pixel-spritesheet-gen",
+            title: "pixel-spritesheet-gen",
+            detail: "Generate sprite sheets with multiple poses, actions, or animation sequences."
+        ),
+        AssistantCommand(
+            id: "pixel-animate-text",
+            title: "pixel-animate-text",
+            detail: "Generate animated text banners, dialog popups, floating damage numbers, or retro font graphics."
+        ),
+        AssistantCommand(
+            id: "skill-creator",
+            title: "skill-creator",
+            detail: "Create, test, and package new custom agent skills for Bixel Studio."
+        )
+    ]
+
+    /// Natural aliases and capability keywords mapped to this skill for smart search.
+    var keywords: [String] {
+        switch id {
+        case "take-control":
+            return ["task", "tasks", "take", "control", "plan", "agent", "autonomous", "execute", "workflow", "automate"]
+        case "pixel-reduce-colors":
+            return ["palette", "colors", "color", "quantize", "ramp", "retro", "limit", "reduction"]
+        case "pixel-remove-bg":
+            return ["transparent", "background", "bg", "alpha", "cutout", "transparency", "isolated"]
+        case "pixel-8dir-character":
+            return ["character", "walk", "turnaround", "8dir", "direction", "movement", "actor", "hero", "sprite"]
+        case "pixel-file-compressor":
+            return ["crop", "trim", "compress", "optimize", "margins", "shrink", "minify", "compact"]
+        case "pixel-game-asset-prep":
+            return ["outline", "shadow", "padding", "stroke", "border", "asset", "prep", "export"]
+        case "pixel-game-ui-gen":
+            return ["ui", "hud", "healthbar", "dialog", "inventory", "interface", "menu"]
+        case "pixel-ui-kit-gen":
+            return ["ui", "kit", "buttons", "panels", "sliders", "icons", "widget", "gui"]
+        case "pixel-ui-elements-gen":
+            return ["ui", "element", "component", "button", "icon", "gauge", "bar"]
+        case "pixel-tileset-gen":
+            return ["tile", "tileset", "terrain", "autotile", "wall", "walls", "map", "environment", "ground"]
+        case "pixel-9slice-splitter":
+            return ["9slice", "nine-slice", "scale", "slice", "splitter", "stretch", "border", "panel"]
+        case "pixel-interpolate":
+            return ["interpolate", "inbetween", "tween", "tweening", "smooth", "morph", "transition"]
+        case "pixel-spritesheet-gen":
+            return ["spritesheet", "sprite", "poses", "actions", "sequence", "sheet"]
+        case "pixel-animate-text":
+            return ["text", "font", "banner", "dialog", "damage", "numbers", "letters", "typography"]
+        case "skill-creator":
+            return ["creator", "new-skill", "create", "author", "package", "custom"]
+        case "image_gen":
+            return ["image", "generate", "draw", "art", "prompt", "make"]
+        case "generate_art":
+            return ["art", "render", "paint", "draw", "style"]
+        case "pixel_image_gen":
+            return ["pixel", "pixelart", "canvas", "art", "native"]
+        case "spritesheet":
+            return ["spritesheet", "sheet", "atlas", "frames", "animation"]
+        case "next_frame":
+            return ["next", "frame", "predict", "motion", "continue", "animation"]
+        default:
+            return []
+        }
+    }
+
+    /// Match score for query. Returns nil if no match. Higher score = higher ranking.
+    func matchScore(for query: String) -> Int? {
+        let clean = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if clean.isEmpty { return 0 }
+
+        let idLower = id.lowercased()
+        let titleLower = title.lowercased()
+        let detailLower = detail.lowercased()
+
+        // 1. Exact matches
+        if idLower == clean { return 1000 }
+        if titleLower == clean { return 950 }
+        if keywords.contains(where: { $0.lowercased() == clean }) { return 900 }
+
+        let splitSeparators = CharacterSet(charactersIn: "-_ /")
+        let idTokens = idLower.components(separatedBy: splitSeparators).filter { !$0.isEmpty }
+        let titleTokens = titleLower.components(separatedBy: splitSeparators).filter { !$0.isEmpty }
+        let queryTokens = clean.components(separatedBy: splitSeparators).filter { !$0.isEmpty }
+
+        // 2. Exact match on an individual token in id or title
+        if idTokens.contains(clean) { return 850 }
+        if titleTokens.contains(clean) { return 800 }
+
+        // 3. Prefix match on id or title
+        if idLower.hasPrefix(clean) { return 750 }
+        if titleLower.hasPrefix(clean) { return 700 }
+
+        // 4. Token prefix match
+        if idTokens.contains(where: { $0.hasPrefix(clean) }) { return 650 }
+        if titleTokens.contains(where: { $0.hasPrefix(clean) }) { return 600 }
+        if keywords.contains(where: { $0.lowercased().hasPrefix(clean) }) { return 550 }
+
+        // 5. Multi-token match: query has multiple words (e.g. "take control" or "reduce colors")
+        if queryTokens.count > 1 {
+            let searchableText = "\(idLower) \(titleLower) \(detailLower) \(keywords.joined(separator: " ").lowercased())"
+            let allMatch = queryTokens.allSatisfy { token in
+                searchableText.contains(token)
+            }
+            if allMatch { return 500 }
+        }
+
+        // 6. Substring match in id, title, or keywords
+        if idLower.contains(clean) { return 450 }
+        if titleLower.contains(clean) { return 400 }
+        if keywords.contains(where: { $0.lowercased().contains(clean) }) { return 380 }
+
+        // 7. Word in detail / description
+        let detailTokens = detailLower.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+        if detailTokens.contains(clean) {
+            // Give higher score if the word appears near the beginning of description
+            if let range = detailLower.range(of: clean) {
+                let distance = detailLower.distance(from: detailLower.startIndex, to: range.lowerBound)
+                return max(200, 350 - min(100, distance / 2))
+            }
+            return 300
+        }
+
+        // 8. Substring match in detail
+        if detailLower.contains(clean) { return 180 }
+
+        // 9. Typo tolerance: Levenshtein edit distance <= 1 for terms with length >= 4
+        if clean.count >= 4 {
+            for word in idTokens + keywords {
+                if abs(word.count - clean.count) <= 1 && Self.levenshtein(clean, word) <= 1 {
+                    return 150
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let aChars = Array(a)
+        let bChars = Array(b)
+        var dist = [[Int]](repeating: [Int](repeating: 0, count: bChars.count + 1), count: aChars.count + 1)
+        for i in 0...aChars.count { dist[i][0] = i }
+        for j in 0...bChars.count { dist[0][j] = j }
+        for i in 1...aChars.count {
+            for j in 1...bChars.count {
+                if aChars[i - 1] == bChars[j - 1] {
+                    dist[i][j] = dist[i - 1][j - 1]
+                } else {
+                    dist[i][j] = min(dist[i - 1][j] + 1, dist[i][j - 1] + 1, dist[i - 1][j - 1] + 1)
+                }
+            }
+        }
+        return dist[aChars.count][bChars.count]
+    }
 }
 
 typealias AssistantCommandOrigin = AssistantCommand.Origin
@@ -174,14 +400,44 @@ final class AssistantSession: ObservableObject {
         AssistantSavedState(conversationID: conversationID, messages: messages, history: history, tokenCount: tokenCount)
     }
 
+    init() {
+        refreshCommands()
+        NotificationCenter.default.addObserver(self, selector: #selector(handleRefreshSkills), name: .assistantRefreshSkills, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleRefreshSkills() {
+        refreshCommands()
+    }
+
+    /// Reload provider and agent skills from the current project or system environment.
+    func refreshCommands() {
+        let base = projectRoot?.path ?? ""
+        let provider = AIService.listSkills().map(AssistantCommand.init)
+        let agent = AIService.listAgentCommands(base: base).map(AssistantCommand.init)
+
+        // Merge discovered commands with bundled skills so all Bixel skills are always
+        // available for search and invocation even before goose copies them to disk.
+        var merged = provider + agent
+        var existingIDs = Set(merged.map(\.id))
+        for bundled in AssistantCommand.bundledSkills {
+            if !existingIDs.contains(bundled.id) {
+                merged.append(bundled)
+                existingIDs.insert(bundled.id)
+            }
+        }
+        commands = merged
+    }
+
     func configure(projectRoot: URL, state: AssistantSavedState?) {
         precondition(!busy)
         self.projectRoot = projectRoot
         // Provider image skills + goose's installed skill commands for this
         // project. goose discovers the SKILL.md packages it installed.
-        let provider = AIService.listSkills().map(AssistantCommand.init)
-        let agent = AIService.listAgentCommands(base: projectRoot.path).map(AssistantCommand.init)
-        commands = provider + agent
+        refreshCommands()
         conversationID = state?.conversationID ?? UUID()
         pendingArtifactWrites = 0
         finishRequested = false

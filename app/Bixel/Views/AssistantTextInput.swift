@@ -3,6 +3,7 @@ import SwiftUI
 extension Notification.Name {
     static let assistantFocus = Notification.Name("BixelAssistantFocus")
     static let assistantInsertCommand = Notification.Name("BixelAssistantInsertCommand")
+    static let assistantRefreshSkills = Notification.Name("BixelAssistantRefreshSkills")
 }
 
 #if os(macOS)

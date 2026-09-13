@@ -316,11 +316,19 @@ struct SettingsBadge: View {
 
 struct SkillsSettingsPane: View {
     @State private var skills: [AIService.InstalledSkillInfo] = []
+    @State private var search = ""
     @State private var loading = true
     @State private var busy = false
     @State private var error: String?
 
     private var enabledCount: Int { skills.filter(\.enabled).count }
+    private var filteredSkills: [AIService.InstalledSkillInfo] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return skills }
+        return skills.filter {
+            $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -334,6 +342,27 @@ struct SkillsSettingsPane: View {
                     banner(error, color: .orange, icon: "exclamationmark.triangle")
                 }
 
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    TextField("Search skills…", text: $search)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundColor(StudioTheme.textPrimary)
+                    if !search.isEmpty {
+                        Button { search = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(StudioTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .studioSurface()
+
                 SettingsSection(title: "Installed Skills", systemImage: "square.stack.3d.up",
                                 footer: "\(enabledCount) of \(skills.count) enabled. Bundled skills are re-synced on launch.") {
                     if loading {
@@ -344,9 +373,14 @@ struct SkillsSettingsPane: View {
                             .font(.system(size: 11))
                             .foregroundColor(StudioTheme.textDisabled)
                             .padding(.vertical, 10)
+                    } else if filteredSkills.isEmpty {
+                        Text("No skills match your search.")
+                            .font(.system(size: 11))
+                            .foregroundColor(StudioTheme.textDisabled)
+                            .padding(.vertical, 10)
                     } else {
-                        ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
-                            skillRow(skill, showsDivider: index < skills.count - 1)
+                        ForEach(Array(filteredSkills.enumerated()), id: \.element.id) { index, skill in
+                            skillRow(skill, showsDivider: index < filteredSkills.count - 1)
                         }
                     }
                 }
@@ -408,7 +442,12 @@ struct SkillsSettingsPane: View {
             let result = AIService.setSkillEnabled(name: skill.name, enabled: enabled)
             DispatchQueue.main.async {
                 busy = false
-                if let result { error = result } else { load() }
+                if let result {
+                    error = result
+                } else {
+                    load()
+                    NotificationCenter.default.post(name: .assistantRefreshSkills, object: nil)
+                }
             }
         }
     }
