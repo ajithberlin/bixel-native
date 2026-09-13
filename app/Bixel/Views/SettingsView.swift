@@ -163,6 +163,17 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .about: return .teal
         }
     }
+
+    /// Panes that are functional on the current platform. Skills (Python/shell)
+    /// and MCP servers (stdio subprocesses) require a desktop agent, so they are
+    /// macOS-only; iPad keeps Provider, General, and About.
+    static var visible: [SettingsPane] {
+        #if os(macOS)
+        return allCases
+        #else
+        return [.provider, .general, .about]
+        #endif
+    }
 }
 
 struct SettingsView: View {
@@ -173,7 +184,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsPane.allCases, selection: $pane) { item in
+            List(SettingsPane.visible, selection: $pane) { item in
                 Label(item.title, systemImage: item.icon)
                     .font(.system(size: 12, weight: .medium))
                     .tag(item)
@@ -801,13 +812,15 @@ struct GeneralSettingsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                paneHeader("General", subtitle: "Studio-wide defaults, saved for this Mac and applied the next time the app launches.")
+                paneHeader("General", subtitle: "Studio-wide defaults, saved for this device and applied the next time the app launches.")
 
+                #if os(macOS)
                 SettingsSection(title: "Assistant", systemImage: "sparkles") {
                     SettingsRow(title: "Open assistant on launch", subtitle: "Show the AI panel when a project opens.", systemImage: "sidebar.right", showsDivider: false) {
                         Toggle("", isOn: $openAssistantOnLaunch).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                     }
                 }
+                #endif
 
                 SettingsSection(title: "Editor Defaults", systemImage: "paintbrush") {
                     SettingsRow(title: "Snapping", subtitle: "Snap transforms and selections to whole pixels.", systemImage: "dot.squareshape.split.2x2") {
@@ -823,6 +836,7 @@ struct GeneralSettingsPane: View {
                     }
                 }
 
+                #if os(macOS)
                 SettingsSection(title: "AI Editor Control", systemImage: "lock.shield") {
                     SettingsRow(title: "Destructive changes", subtitle: "How the assistant approves removing or resizing content.", systemImage: "exclamationmark.shield", showsDivider: false) {
                         Picker("", selection: $editorApprovalMode) {
@@ -834,6 +848,7 @@ struct GeneralSettingsPane: View {
                         .controlSize(.small)
                     }
                 }
+                #endif
             }
             .padding(20)
         }

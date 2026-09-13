@@ -8,9 +8,7 @@
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
 
 import SwiftUI
-#if os(macOS)
-import AppKit
-#endif
+import UniformTypeIdentifiers
 
 struct HomePageView: View {
     @ObservedObject var store: ProjectStore
@@ -25,6 +23,7 @@ struct HomePageView: View {
 
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
+    @State private var showImportFilePicker = false
     @State private var aiPrompt = ""
     @State private var selectedWidth: Int = 32
     @State private var selectedHeight: Int = 32
@@ -153,6 +152,20 @@ struct HomePageView: View {
         }
         .sheet(item: $selectedGalleryItem) { item in
             AIGalleryImagePreview(item: item)
+        }
+        .fileImporter(
+            isPresented: $showImportFilePicker,
+            allowedContentTypes: [.image, .json],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first {
+                    importFile(from: url)
+                }
+            case .failure(let error):
+                store.error = "Could not choose that file: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -1123,38 +1136,38 @@ struct HomePageView: View {
     // MARK: - Helpers
 
     private func importFile() {
-        #if os(macOS)
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            let name = url.deletingPathExtension().lastPathComponent
+        showImportFilePicker = true
+    }
 
-            var imageURL = url
-            var manifest: String?
-            if url.pathExtension.lowercased() == "json" {
-                guard let sibling = SheetImport.siblingImage(for: url) else {
-                    store.error = "Choose a PNG spritesheet, or a JSON manifest next to its image."
-                    return
-                }
-                imageURL = sibling
-                manifest = (try? Data(contentsOf: url)).flatMap(SheetImport.manifest(fromJSON:))
-            } else {
-                manifest = SheetImport.sidecarManifest(for: url)
-            }
+    private func importFile(from url: URL) {
+        let hasSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
+        }
 
-            guard let data = try? Data(contentsOf: imageURL) else {
-                store.error = "Could not read that file."
+        let name = url.deletingPathExtension().lastPathComponent
+
+        var imageURL = url
+        var manifest: String?
+        if url.pathExtension.lowercased() == "json" {
+            guard let sibling = SheetImport.siblingImage(for: url) else {
+                store.error = "Choose a PNG spritesheet, or a JSON manifest next to its image."
                 return
             }
-
-            let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
-                ?? store.importImageProject(png: data, name: name)
-            if let project { onOpenProject(project) }
+            imageURL = sibling
+            manifest = (try? Data(contentsOf: url)).flatMap(SheetImport.manifest(fromJSON:))
+        } else {
+            manifest = SheetImport.sidecarManifest(for: url)
         }
-        #endif
+
+        guard let data = try? Data(contentsOf: imageURL) else {
+            store.error = "Could not read that file."
+            return
+        }
+
+        let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
+            ?? store.importImageProject(png: data, name: name)
+        if let project { onOpenProject(project) }
     }
 }
 

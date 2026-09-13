@@ -197,7 +197,9 @@ struct ContentView: View {
             currentScreen = .home
             showLayers = true
             showAssets = false
+            #if os(macOS)
             if openAssistantOnLaunch { showAI = true }
+            #endif
         }
     }
 
@@ -357,7 +359,9 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
-            // Right Window: Full-Height Connected AI Agent Pane
+            // Right Window: Full-Height Connected AI Agent Pane. The agentic
+            // assistant is macOS-only; iPad uses the AI image creator instead.
+            #if os(macOS)
             if showAI {
                 Rectangle()
                     .fill(StudioTheme.hairlineStrong)
@@ -388,6 +392,7 @@ struct ContentView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
                 .zIndex(2)
             }
+            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

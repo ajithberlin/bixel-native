@@ -125,7 +125,11 @@ struct TimelineBar: View {
                         ForEach(Array(model.frameIDs.enumerated()), id: \.element) { index, id in
                             frameItem(at: index, id: id, scrollProxy: proxy)
                         }
+                        // Predict-next-frame reports through the assistant, which
+                        // is macOS-only; iPad keeps the rest of the timeline.
+                        #if os(macOS)
                         aiFrameCell
+                        #endif
                     }
                     .padding(.horizontal, pad)
                     .padding(.vertical, 4)

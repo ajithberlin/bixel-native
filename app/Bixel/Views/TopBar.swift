@@ -237,9 +237,12 @@ struct TopBar: View {
             colorToggle(isSpriteColor: true)
             animationAssistToggle
             assetLibraryToggle
+            // The agentic assistant is macOS-only; iPad keeps image generation.
+            #if os(macOS)
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
+            #endif
             helpButton
         }
     }
@@ -256,9 +259,12 @@ struct TopBar: View {
 
             layersToggle
             assetLibraryToggle
+            // The agentic assistant is macOS-only; iPad keeps image generation.
+            #if os(macOS)
             AICopilotButton(isPresented: showAI) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
             }
+            #endif
             helpButton
         }
     }
