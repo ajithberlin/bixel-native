@@ -202,6 +202,69 @@ final class RemoteHostSyncBridge {
     }
 }
 
+// MARK: - History + space reclamation
+
+/// One synced revision: the previous content hash of every file the sync
+/// replaced or deleted, so a version can be restored and both sides stay lean.
+struct RemoteHistoryEntry: Codable {
+    var revision: UInt64
+    var timestamp: UInt64
+    var device: String
+    /// project-relative path → `blake3:<hex>` of the previous content.
+    var files: [String: String]
+}
+
+final class RemoteHistoryStore {
+    static let shared = RemoteHistoryStore()
+
+    private let relativePath = ".studio/sync/history.json"
+    private let limit = 10
+
+    func entries(projectRoot: URL) -> [RemoteHistoryEntry] {
+        guard let text = try? ProjectStorage.read(base: projectRoot, path: relativePath),
+              let data = text.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([RemoteHistoryEntry].self, from: data)) ?? []
+    }
+
+    func append(projectRoot: URL, entry: RemoteHistoryEntry) {
+        var list = entries(projectRoot: projectRoot)
+        list.append(entry)
+        if list.count > limit { list.removeFirst(list.count - limit) }
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        try? ProjectStorage.write(base: projectRoot, path: relativePath, data: data)
+    }
+}
+
+/// Reclaims space by deleting content-addressed blobs no history entry
+/// references (regenerable caches are already excluded from sync entirely).
+enum RemoteStorageGC {
+    @discardableResult
+    static func pruneBlobs() -> Int {
+        let root = ProjectStore.defaultRoot
+        let blobs = root.appendingPathComponent(".studio/sync/blobs", isDirectory: true)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: blobs.path) else { return 0 }
+
+        var referenced = Set<String>()
+        let projects = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        for project in projects {
+            guard (try? project.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
+            for entry in RemoteHistoryStore.shared.entries(projectRoot: project) {
+                for (_, hash) in entry.files {
+                    referenced.insert(hash.replacingOccurrences(of: "blake3:", with: ""))
+                }
+            }
+        }
+
+        var removed = 0
+        for name in names where !referenced.contains(name) {
+            if (try? FileManager.default.removeItem(at: blobs.appendingPathComponent(name))) != nil {
+                removed += 1
+            }
+        }
+        return removed
+    }
+}
+
 // MARK: - Client (iPad) sync engine
 
 final class RemoteClientSyncEngine: ObservableObject {
@@ -263,8 +326,19 @@ final class RemoteClientSyncEngine: ObservableObject {
         let base = readBase(projectRoot: projectRoot)
         let plan = try ProjectSync.plan(base: base, local: local, remote: remote)
 
+        // Snapshot the previous content of anything this sync overwrites or
+        // deletes so it can be restored from the bounded history.
+        var preserved: [String: String] = [:]
+        func preserve(_ path: String) {
+            guard preserved[path] == nil,
+                  let data = try? ProjectStorage.readBytes(base: projectRoot, path: path),
+                  let hash = try? ProjectSync.storeBlob(projectsRoot: root, data: data) else { return }
+            preserved[path] = hash
+        }
+
         // Pull changed/new files from the Mac.
         for path in plan.pull {
+            preserve(path)
             guard let data = try fetchFile(projectID: id, path: path) else { continue }
             try ProjectStorage.write(base: projectRoot, path: path, data: data)
         }
@@ -275,6 +349,7 @@ final class RemoteClientSyncEngine: ObservableObject {
         }
         // Propagate deletes.
         for path in plan.deleteLocal {
+            preserve(path)
             let target = projectRoot.appendingPathComponent(path).standardizedFileURL
             if target.path.hasPrefix(projectRoot.standardizedFileURL.path),
                FileManager.default.fileExists(atPath: target.path) {
@@ -293,6 +368,7 @@ final class RemoteClientSyncEngine: ObservableObject {
                 try ProjectStorage.write(base: projectRoot, path: conflictPath, data: localData)
             }
             if conflict.remoteHash != nil, let remoteData = try fetchFile(projectID: id, path: conflict.path) {
+                preserve(conflict.path)
                 try ProjectStorage.write(base: projectRoot, path: conflict.path, data: remoteData)
             }
             if let localData, conflict.remoteHash != nil {
@@ -311,6 +387,15 @@ final class RemoteClientSyncEngine: ObservableObject {
         try ProjectSync.writeManifest(projectRoot: projectRoot, manifest: merged)
         try commit(projectID: id, manifest: merged)
         writeBase(projectRoot: projectRoot, manifest: merged)
+
+        if !preserved.isEmpty {
+            RemoteHistoryStore.shared.append(projectRoot: projectRoot, entry: RemoteHistoryEntry(
+                revision: merged.revision,
+                timestamp: UInt64(Date().timeIntervalSince1970),
+                device: deviceName,
+                files: preserved
+            ))
+        }
     }
 
     // MARK: Helpers

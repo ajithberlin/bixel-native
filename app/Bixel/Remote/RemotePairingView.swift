@@ -183,6 +183,13 @@ private struct RemoteClientSettingsView: View {
                         Text(sync.status)
                             .font(.system(size: 11))
                             .foregroundColor(StudioTheme.textSecondary)
+                        Button {
+                            let removed = RemoteStorageGC.pruneBlobs()
+                            message = removed == 0 ? "No unused space to reclaim." : "Reclaimed \(removed) cached file(s)."
+                        } label: {
+                            Label("Free space", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
                     }
                     Button("Disconnect", role: .destructive) { client.disconnect() }
                 }
