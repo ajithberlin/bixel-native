@@ -26,6 +26,7 @@ struct ContentView: View {
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
     @State private var showHelpDocument = false
+    @State private var showSettings = false
     @State private var loadingProject: StudioProject? = nil
     @State private var showLoadingAd = false
     @State private var pendingPostAction: (() -> Void)? = nil
@@ -93,6 +94,7 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .studioUnlockLifetime)) { _ in showPaywall = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioCustomerCenter)) { _ in showCustomerCenter = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioShowHelp)) { _ in showHelpDocument = true }
+                .onReceive(NotificationCenter.default.publisher(for: AppSettings.openRequest)) { _ in showSettings = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioRestorePurchases)) { _ in
                     Task { await subscriptionManager.restorePurchases() }
                 }
@@ -107,8 +109,12 @@ struct ContentView: View {
                 .onChange(of: scenePhase) { phase in
                     if phase != .active { flushProject() }
                 }
+                #if os(macOS)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in flushProject() }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in flushProject() }
+                #else
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in flushProject() }
+                #endif
 
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -149,7 +155,9 @@ struct ContentView: View {
                 .zIndex(100)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 1040, minHeight: 680)
+        #endif
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: showAI)
@@ -157,6 +165,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: showColor)
         .animation(.easeInOut(duration: 0.2), value: showAssets)
         .animation(.easeInOut(duration: 0.22), value: currentScreen)
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showProjects) {
             ProjectPicker(store: projects, onSelectProject: { project in
                 handleOpenProject(project)
@@ -662,12 +671,14 @@ struct ContentView: View {
                 onShowHelp: { showHelpDocument = true },
                 mapModel: mapModel,
                 onImportTiledMap: {
+                    #if os(macOS)
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = [.json]
                     panel.begin { response in
                         guard response == .OK, let url = panel.url else { return }
                         projects.importTiledMap(from: url)
                     }
+                    #endif
                 }
             )
             Spacer()

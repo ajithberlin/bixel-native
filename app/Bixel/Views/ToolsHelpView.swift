@@ -5,7 +5,6 @@
 // drawing, tilemap, animation, and AI tool, their workflows, and keyboard shortcuts.
 
 import SwiftUI
-import AppKit
 
 // MARK: - Tool Help Model
 

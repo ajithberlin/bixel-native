@@ -1,6 +1,7 @@
 import Foundation
+import CoreGraphics
+import ImageIO
 import Combine
-import AppKit
 
 struct StudioProject: Codable, Identifiable {
     let id: String
@@ -326,8 +327,8 @@ final class ProjectStore: ObservableObject {
         Task.detached(priority: .userInitiated) { [weak self] in
             // 1. Fast path: read existing thumbnail.png
             if let pngData = try? ProjectStorage.readBytes(base: base, path: "thumbnail.png"),
-               let src = CGImageSourceCreateWithData(pngData as CFData, nil),
-               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+               let src = CGImageSourceCreateWithData(pngData as CFData, nil as CFDictionary?),
+               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil as CFDictionary?) {
                 await self?.storeLoadedThumbnail(cg, for: id)
                 return
             }

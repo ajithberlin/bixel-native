@@ -4,13 +4,98 @@
 // image helpers. Model-backed calls are blocking; run them off the main thread.
 
 import Foundation
-import AppKit
 import CoreGraphics
 import ImageIO
+#if canImport(SafariServices) && canImport(UIKit)
+import SafariServices
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
+
+/// Host bridge for OAuth browser interactions. On iOS/iPadOS, presents an
+/// in-app SFSafariViewController without suspending the app process; on macOS,
+/// opens the default system browser via NSWorkspace.
+final class AIOAuthBridge: NSObject {
+    static let shared = AIOAuthBridge()
+
+    #if canImport(SafariServices) && canImport(UIKit) && !os(macOS)
+    private weak var safariVC: SFSafariViewController?
+    #endif
+
+    func setup() {
+        bixel_ai_set_open_url_callback({ (cStr, _) in
+            guard let cStr else { return }
+            let urlString = String(cString: cStr)
+            AIOAuthBridge.shared.openURL(urlString)
+        }, nil)
+    }
+
+    func openURL(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        DispatchQueue.main.async {
+            #if canImport(SafariServices) && canImport(UIKit) && !os(macOS)
+            guard let topVC = Self.topViewController() else {
+                UIApplication.shared.open(url)
+                return
+            }
+            let safari = SFSafariViewController(url: url)
+            safari.delegate = self
+            self.safariVC = safari
+            topVC.present(safari, animated: true)
+            #elseif canImport(AppKit)
+            NSWorkspace.shared.open(url)
+            #endif
+        }
+    }
+
+    func dismissSafari() {
+        DispatchQueue.main.async {
+            #if canImport(SafariServices) && canImport(UIKit) && !os(macOS)
+            if let safari = self.safariVC {
+                safari.dismiss(animated: true)
+                self.safariVC = nil
+            }
+            #endif
+        }
+    }
+
+    #if canImport(UIKit) && !os(macOS)
+    private static func topViewController(base: UIViewController? = nil) -> UIViewController? {
+        let root = base ?? UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.windows.first(where: { $0.isKeyWindow }) }
+            .first?.rootViewController
+        if let nav = root as? UINavigationController {
+            return topViewController(base: nav.visibleViewController)
+        }
+        if let tab = root as? UITabBarController, let selected = tab.selectedViewController {
+            return topViewController(base: selected)
+        }
+        if let presented = root?.presentedViewController {
+            return topViewController(base: presented)
+        }
+        return root
+    }
+    #endif
+}
+
+#if canImport(SafariServices) && canImport(UIKit) && !os(macOS)
+extension AIOAuthBridge: SFSafariViewControllerDelegate {
+    func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
+        self.safariVC = nil
+        AIService.cancelCodexOAuth()
+    }
+}
+#endif
 
 enum AIService {
     static func available() -> Bool {
         bixel_ai_available()
+    }
+
+    static func setup() {
+        AIOAuthBridge.shared.setup()
     }
 
     // MARK: - Connection
@@ -70,8 +155,9 @@ enum AIService {
     /// secret store); returns nil on success or an error message.
     static func connect(provider: String, apiKey: String, imageAPIKey: String,
                         textModel: String, visionModel: String, imageModel: String) -> String? {
+        let normalizedProvider = (provider == "openrouter" || provider == "open_router") ? "open_router" : provider
         var cfg: [String: Any] = [
-            "provider": provider,
+            "provider": normalizedProvider,
             "models": ["text": textModel, "vision": visionModel, "image": imageModel],
             "validate": true,
         ]
@@ -92,6 +178,7 @@ enum AIService {
 
     /// Run the ChatGPT (Codex) browser sign-in. Returns nil on success.
     static func startCodexOAuth() -> String? {
+        AIOAuthBridge.shared.setup()
         guard let errorPtr = bixel_ai_start_codex_oauth() else { return nil }
         defer { bixel_string_free(errorPtr) }
         return String(cString: errorPtr)
@@ -399,24 +486,7 @@ enum AIService {
     // MARK: - image helpers
 
     static func rgbaToPNG(_ rgba: [UInt8], width: Int, height: Int) -> Data? {
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: width,
-            pixelsHigh: height,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: width * 4,
-            bitsPerPixel: 32
-        ) else { return nil }
-        rgba.withUnsafeBytes { raw in
-            if let base = raw.baseAddress, let dest = rep.bitmapData {
-                memcpy(dest, base, rgba.count)
-            }
-        }
-        return rep.representation(using: .png, properties: [:])
+        pngData(from: rgba, width: width, height: height)
     }
 
     static func pngToRGBA(_ data: Data) -> (rgba: [UInt8], width: Int, height: Int)? {

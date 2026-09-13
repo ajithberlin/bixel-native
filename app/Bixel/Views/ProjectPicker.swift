@@ -158,12 +158,14 @@ struct ProjectPicker: View {
                 .font(.caption)
                 .foregroundColor(StudioTheme.textDisabled)
             Spacer()
+            #if os(macOS)
             if let current = store.current {
                 Button("AI Files") {
                     NSWorkspace.shared.open(store.root.appendingPathComponent("\(current.id)/.studio/cache/ai"))
                 }
                 .font(.caption)
             }
+            #endif
         }
     }
 

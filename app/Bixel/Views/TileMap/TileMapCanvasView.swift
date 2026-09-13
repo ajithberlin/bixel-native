@@ -7,6 +7,7 @@
 // canvas: drag paint, Shift straight lines, space/middle-drag pan, scroll pan,
 // ⌘-scroll / pinch zoom and smart-magnify fit — all via the CanvasViewport.
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import QuartzCore
@@ -979,3 +980,4 @@ extension TileMapModel {
         if changed { commitChange() }
     }
 }
+#endif

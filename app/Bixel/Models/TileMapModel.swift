@@ -7,7 +7,10 @@
 // tileset PNGs are project assets referenced by relative path.
 
 import Foundation
+import CoreGraphics
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 import Combine
 
@@ -838,8 +841,7 @@ final class TileMapModel: ObservableObject {
         clipboard = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y, w: rect.width, h: rect.height)
         // A crop of the composite also lands on the pasteboard as a PNG.
         if let png = croppedCompositePNG(rect) {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setData(png, forType: .png)
+            PlatformPasteboard.copy(pngData: png)
         }
     }
 
@@ -914,8 +916,7 @@ final class TileMapModel: ObservableObject {
         guard bounds.width > 0, bounds.height > 0 else { return nil }
         let rgba = cropOfComposite(rect)
         guard let cg = makeCGImage(pixels: rgba, width: bounds.width, height: bounds.height) else { return nil }
-        let rep = NSBitmapImageRep(cgImage: cg)
-        return rep.representation(using: .png, properties: [:])
+        return pngData(from: cg)
     }
 
     // MARK: - Objects
@@ -1080,17 +1081,9 @@ final class TileMapModel: ObservableObject {
                 scaled[dst + 3] = pixels[src + 3]
             }
         }
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: w * scale, pixelsHigh: h * scale,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: w * scale * 4, bitsPerPixel: 32),
-              let bitmap = rep.bitmapData else { return }
-        scaled.withUnsafeBytes { raw in
-            if let base = raw.baseAddress {
-                memcpy(bitmap, base, scaled.count)
-            }
-        }
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        guard let png = pngData(from: scaled, width: w * scale, height: h * scale) else { return }
+
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "map-\(w)x\(h)@\(scale)x.png"
@@ -1098,10 +1091,12 @@ final class TileMapModel: ObservableObject {
             guard response == .OK, let url = panel.url else { return }
             try? png.write(to: url)
         }
+        #endif
     }
 
     /// Save the map itself as a Tiled JSON file.
     func exportTiledJSON() {
+        #if os(macOS)
         let text = map.toJSON()
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
@@ -1110,10 +1105,12 @@ final class TileMapModel: ObservableObject {
             guard response == .OK, let url = panel.url else { return }
             try? Data(text.utf8).write(to: url)
         }
+        #endif
     }
 
     /// Write one `.csv` file per tile layer into a chosen folder.
     func exportCSV() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -1127,6 +1124,7 @@ final class TileMapModel: ObservableObject {
                 try? Data(csv.utf8).write(to: url)
             }
         }
+        #endif
     }
 
     // MARK: - Agent control (Take Control bridge)

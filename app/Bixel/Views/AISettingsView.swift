@@ -40,7 +40,12 @@ struct ProviderSettingsPane: View {
             .padding(.bottom, 14)
         }
         .onAppear(perform: refresh)
-        .onDisappear { if signingIn { AIService.cancelCodexOAuth() } }
+        .onDisappear {
+            if signingIn {
+                AIService.cancelCodexOAuth()
+                AIOAuthBridge.shared.dismissSafari()
+            }
+        }
     }
 
     private var providerChooser: some View {
@@ -272,19 +277,22 @@ struct ProviderSettingsPane: View {
     private func applyProviderDefaults(_ newProvider: String) {
         let current = AIService.connectionStatus()
         if newProvider == "chatgpt_codex" {
-            primaryModel = current.provider == newProvider ? (current.models["text"] ?? primaryModel) : primaryModel
+            if current.provider == newProvider {
+                primaryModel = current.models["text"] ?? "gpt-5.6-luna"
+            } else {
+                primaryModel = "gpt-5.6-luna"
+            }
             visionModel = ""
             imageModel = ""
         } else {
-            if primaryModel.isEmpty || newProvider != current.provider {
-                primaryModel = current.models["text"] ?? primaryModel
-            }
-            if newProvider != current.provider {
+            if current.provider == newProvider {
+                primaryModel = current.models["text"] ?? "google/gemini-2.5-flash"
+                visionModel = current.models["vision"] ?? ""
+                imageModel = current.models["image"] ?? ""
+            } else {
+                primaryModel = "google/gemini-2.5-flash"
                 visionModel = ""
                 imageModel = ""
-            } else {
-                if visionModel.isEmpty { visionModel = current.models["vision"] ?? "" }
-                if imageModel.isEmpty { imageModel = current.models["image"] ?? "" }
             }
         }
     }
@@ -311,6 +319,7 @@ struct ProviderSettingsPane: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = AIService.startCodexOAuth()
             DispatchQueue.main.async {
+                AIOAuthBridge.shared.dismissSafari()
                 signingIn = false
                 refresh()
                 if let result { message = result }
@@ -320,6 +329,7 @@ struct ProviderSettingsPane: View {
 
     private func cancelSignIn() {
         AIService.cancelCodexOAuth()
+        AIOAuthBridge.shared.dismissSafari()
         signingIn = false
     }
 

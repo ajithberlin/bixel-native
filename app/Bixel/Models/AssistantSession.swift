@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 
 struct AssistantCommand: Identifiable, Hashable {
@@ -27,13 +29,33 @@ struct AssistantCommand: Identifiable, Hashable {
     }
 }
 
+typealias AssistantCommandOrigin = AssistantCommand.Origin
+
+final class AssistantCommandWrapper: Identifiable {
+    let id: String
+    let command: AssistantCommand
+    let title: String
+    let detail: String
+    let origin: AssistantCommandOrigin
+    let inputHint: String?
+
+    init(_ command: AssistantCommand) {
+        id = command.id
+        self.command = command
+        title = command.title
+        detail = command.detail
+        origin = command.origin
+        inputHint = command.inputHint
+    }
+}
+
 struct AssistantAttachment: Identifiable, Codable {
     var id = UUID()
     let name: String
     let data: Data
     let text: String?
     var isImage: Bool { text == nil }
-    var image: NSImage? { isImage ? NSImage(data: data) : nil }
+    var image: PlatformImage? { isImage ? makePlatformImage(data: data) : nil }
     var subtitle: String { ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file) }
 }
 
@@ -125,8 +147,12 @@ final class AssistantSession: ObservableObject {
     @Published private(set) var commands: [AssistantCommand] = []
     /// Managed virtualenv interpreter the Rust side provisions for skill Python
     /// dependencies. Keep in sync with `bixel_ai::skill_install::venv_dir`.
+    #if os(macOS)
     static let skillPythonPath: String = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Bixel/skill-venv/bin/python3").path
+    #else
+    static let skillPythonPath: String = ""
+    #endif
     /// Live connection status (models + per-role readiness).
     var status: AIService.AIConnectionStatus { AIService.connectionStatus() }
     var models: [String: String] { status.models }
@@ -217,6 +243,7 @@ final class AssistantSession: ObservableObject {
     }
 
     func attachFiles() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.plainText, .json, .png, .jpeg]
         panel.allowsMultipleSelection = true
@@ -225,6 +252,7 @@ final class AssistantSession: ObservableObject {
             guard response == .OK else { return }
             Task { @MainActor in panel.urls.forEach { self?.attach($0) } }
         }
+        #endif
     }
     func attach(_ url: URL) {
         guard attachments.count < 4 else { error = "Attach up to four files per message."; return }
@@ -238,7 +266,7 @@ final class AssistantSession: ObservableObject {
             let data = try Data(contentsOf: url)
             let isImage = ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased())
             let text = isImage ? nil : String(data: data, encoding: .utf8)
-            guard isImage ? NSImage(data: data) != nil : text != nil else {
+            guard isImage ? makePlatformImage(data: data) != nil : text != nil else {
                 error = "Choose a PNG, JPEG, or UTF-8 text file."; return
             }
             guard text == nil || data.count <= 64_000 else { error = "Text files must be smaller than 64 KB."; return }

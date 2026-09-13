@@ -6,7 +6,10 @@
 // so a whole stroke becomes a single Rust FFI call (never per-pixel).
 
 import Foundation
+import CoreGraphics
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 import Combine
 
@@ -1325,25 +1328,9 @@ final class EditorModel: ObservableObject {
                 scaled[dst + 3] = pixels[src + 3]
             }
         }
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: w * scale,
-            pixelsHigh: h * scale,
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: w * scale * 4,
-            bitsPerPixel: 32
-        ), let bitmap = rep.bitmapData else { return }
-        scaled.withUnsafeBytes { raw in
-            if let base = raw.baseAddress {
-                memcpy(bitmap, base, scaled.count)
-            }
-        }
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        guard let png = pngData(from: scaled, width: w * scale, height: h * scale) else { return }
 
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "frame-\(frame + 1)-\(w)x\(h)@\(scale)x.png"
@@ -1351,6 +1338,7 @@ final class EditorModel: ObservableObject {
             guard response == .OK, let url = panel.url else { return }
             try? png.write(to: url)
         }
+        #endif
     }
 
     func undo() { if document.undo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }
@@ -1630,6 +1618,7 @@ final class EditorModel: ObservableObject {
             guard let png = AIService.rgbaToPNG(sheet.rgba, width: sheet.width, height: sheet.height) else {
                 throw StorageError.message("Could not encode the sprite sheet.")
             }
+            #if os(macOS)
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.png]
             panel.nameFieldStringValue = "animation-\(width)x\(height).png"
@@ -1644,6 +1633,7 @@ final class EditorModel: ObservableObject {
                     try ProjectStorage.write(base: url.deletingLastPathComponent(), path: url.deletingPathExtension().lastPathComponent + ".json", data: json)
                 } catch { self.operationError = error.localizedDescription }
             }
+            #endif
         } catch { operationError = error.localizedDescription }
     }
 

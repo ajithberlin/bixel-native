@@ -5,7 +5,6 @@
 // Automatically finishes loading or lets the user continue once ready. Free-tier users can remove ads via the paywall.
 
 import SwiftUI
-import AppKit
 
 struct ProjectLoadingAdView: View {
     let project: StudioProject

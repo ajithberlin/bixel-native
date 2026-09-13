@@ -6,7 +6,6 @@
 // Automatically hidden when the user acquires the 'ad_free' lifetime entitlement.
 
 import SwiftUI
-import AppKit
 
 struct AdBannerView: View {
     @ObservedObject private var subscriptionManager = SubscriptionManager.shared

@@ -447,44 +447,8 @@ private struct FrameCell: View {
 }
 
 /// High-performance Core Animation backed pixel-art thumbnail view.
-final class FastPixelImageView: NSView {
-    var cgImage: CGImage? {
-        didSet {
-            if cgImage !== oldValue {
-                updateLayerContents()
-            }
-        }
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        updateLayerContents()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        wantsLayer = true
-        updateLayerContents()
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        updateLayerContents()
-    }
-
-    private func updateLayerContents() {
-        wantsLayer = true
-        guard let l = layer else { return }
-        l.magnificationFilter = .nearest
-        l.minificationFilter = .nearest
-        l.contentsGravity = .resizeAspect
-        l.contents = cgImage
-    }
-}
-
 /// Renders a CGImage or RGBA buffer as a crisp pixel-art thumbnail.
-struct PixelImageView: NSViewRepresentable {
+struct PixelImageView: View {
     var cgImage: CGImage?
     var image: [UInt8]?
     var width: Int
@@ -504,23 +468,21 @@ struct PixelImageView: NSViewRepresentable {
         self.height = height
     }
 
-    func makeNSView(context: Context) -> FastPixelImageView {
-        let view = FastPixelImageView()
-        updateImage(on: view)
-        return view
+    private var resolvedCGImage: CGImage? {
+        if let cgImage { return cgImage }
+        if let image, width > 0, height > 0 {
+            return makeCGImage(pixels: image, width: width, height: height)
+        }
+        return nil
     }
 
-    func updateNSView(_ nsView: FastPixelImageView, context: Context) {
-        updateImage(on: nsView)
-    }
-
-    private func updateImage(on nsView: FastPixelImageView) {
-        if let cgImage = cgImage {
-            nsView.cgImage = cgImage
-        } else if let image = image, width > 0, height > 0 {
-            nsView.cgImage = makeCGImage(pixels: image, width: width, height: height)
+    var body: some View {
+        if let resolved = resolvedCGImage {
+            Image(decorative: resolved, scale: 1.0)
+                .resizable()
+                .interpolation(.none)
         } else {
-            nsView.cgImage = nil
+            Color.clear
         }
     }
 }

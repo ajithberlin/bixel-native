@@ -86,6 +86,7 @@ struct AIPanel: View {
             iconButton("Recent chats", "clock.arrow.circlepath") { showHistory.toggle() }
             iconButton("New chat", "square.and.pencil") { session.newChat(); showHistory = false; archived = nil }.disabled(session.busy)
             iconButton(expanded ? "Reduce sidebar" : "Expand sidebar", expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: onExpand)
+            iconButton("AI Settings", "gearshape") { AppSettings.requestOpen() }
             iconButton("Close assistant", "xmark", action: onClose)
         }
         .padding(.horizontal, 16)
@@ -288,7 +289,7 @@ struct AssistantAttachmentThumbnail: View {
             ZStack(alignment: .topTrailing) {
                 Group {
                     if let image = file.image {
-                        Image(nsImage: image).resizable().interpolation(.none).scaledToFill()
+                        Image(platformImage: image).resizable().interpolation(.none).scaledToFill()
                     } else {
                         VStack(spacing: 6) {
                             Image(systemName: "doc.text").font(.system(size: 22))
@@ -324,8 +325,7 @@ private struct AssistantMessageView: View {
                 ForEach(message.blocks) { block in AssistantActivityNode(block: block, commands: commands, model: model, store: store) }
                 if !message.blocks.isEmpty && !message.blocks.contains(where: \.running) {
                     Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(message.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n"), forType: .string)
+                        PlatformPasteboard.copy(string: message.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n"))
                     } label: { Image(systemName: "doc.on.doc").font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary) }
                         .buttonStyle(.plain).help("Copy response")
                 }
@@ -412,9 +412,9 @@ private struct AssistantArtifactCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let image = NSImage(data: artifact.data) {
+            if let image = makePlatformImage(data: artifact.data) {
                 Button { showImage = true } label: {
-                    Image(nsImage: image).resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 230)
+                    Image(platformImage: image).resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 230)
                         .padding(8).background(StudioTheme.background, in: RoundedRectangle(cornerRadius: 10))
                 }.buttonStyle(.plain).help("View image or drag onto the canvas")
                 .onDrag { imageProvider(artifact.data) }
@@ -469,7 +469,7 @@ private struct AssistantArtifactCard: View {
         .sheet(isPresented: $showImage) {
             VStack(spacing: 12) {
                 HStack { Text(artifact.name).font(.headline); Spacer(); Button("Done") { showImage = false } }
-                if let image = NSImage(data: artifact.data) { Image(nsImage: image).resizable().interpolation(.none).scaledToFit() }
+                if let image = makePlatformImage(data: artifact.data) { Image(platformImage: image).resizable().interpolation(.none).scaledToFit() }
             }.padding(20).frame(minWidth: 500, idealWidth: 700, minHeight: 400, idealHeight: 600).background(StudioTheme.background)
         }
     }

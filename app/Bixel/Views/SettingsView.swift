@@ -8,7 +8,9 @@
 // see the same state.
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 enum AppSettingsRoute: Equatable {
     case swiftUI
@@ -35,7 +37,11 @@ enum AppSettings {
         guard case .legacySelector(let name) = route(for: ProcessInfo.processInfo.operatingSystemVersion) else {
             return false
         }
+        #if os(macOS)
         return NSApp.sendAction(Selector(name), to: nil, from: nil)
+        #else
+        return false
+        #endif
     }
 }
 
@@ -50,11 +56,15 @@ struct AppSettingsButton<Label: View>: View {
 
     @ViewBuilder
     var body: some View {
+        #if os(macOS)
         if #available(macOS 14.0, *) {
             SettingsLink { label }
         } else {
             Button(action: { _ = AppSettings.openLegacy() }) { label }
         }
+        #else
+        Button(action: { AppSettings.requestOpen() }) { label }
+        #endif
     }
 }
 
@@ -64,6 +74,7 @@ struct AppSettingsOpener: View {
     var openOnAppear = false
 
     var body: some View {
+        #if os(macOS)
         Group {
             if #available(macOS 14.0, *) {
                 ModernAppSettingsOpener(openOnAppear: openOnAppear)
@@ -72,9 +83,17 @@ struct AppSettingsOpener: View {
             }
         }
         .frame(width: 0, height: 0)
+        #else
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                if openOnAppear { AppSettings.requestOpen() }
+            }
+        #endif
     }
 }
 
+#if os(macOS)
 @available(macOS 14.0, *)
 private struct ModernAppSettingsOpener: View {
     @Environment(\.openSettings) private var openSettings
@@ -104,6 +123,7 @@ private struct LegacyAppSettingsOpener: View {
             }
     }
 }
+#endif
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case provider
@@ -147,6 +167,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @State private var pane: SettingsPane? = .provider
+    #if os(iOS)
+    @Environment(\.dismiss) private var dismiss
+    #endif
 
     var body: some View {
         NavigationSplitView {
@@ -157,6 +180,16 @@ struct SettingsView: View {
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 250)
+            .navigationTitle("Settings")
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            #endif
         } detail: {
             Group {
                 switch pane ?? .provider {
@@ -170,8 +203,19 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(StudioTheme.background)
             .navigationTitle((pane ?? .provider).title)
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            #endif
         }
+        #if os(macOS)
         .frame(minWidth: 780, minHeight: 560)
+        #endif
         .foregroundColor(StudioTheme.textPrimary)
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
@@ -381,8 +425,10 @@ struct SkillsSettingsPane: View {
     }
 
     private func revealSkillsFolder() {
+        #if os(macOS)
         guard let path = AIService.appPaths()?.skills_dir, !path.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        #endif
     }
 }
 
@@ -828,17 +874,25 @@ struct AboutSettingsPane: View {
 
     private var appIcon: some View {
         Group {
+            #if os(macOS)
             if let icon = NSApplication.shared.applicationIconImage {
                 Image(nsImage: icon)
                     .resizable()
                     .frame(width: 64, height: 64)
             } else {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(StudioTheme.accentSoft)
-                    .frame(width: 64, height: 64)
-                    .overlay(Image(systemName: "paintbrush.pointed.fill").font(.system(size: 26)).foregroundColor(StudioTheme.accent))
+                fallbackIcon
             }
+            #else
+            fallbackIcon
+            #endif
         }
+    }
+
+    private var fallbackIcon: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(StudioTheme.accentSoft)
+            .frame(width: 64, height: 64)
+            .overlay(Image(systemName: "paintbrush.pointed.fill").font(.system(size: 26)).foregroundColor(StudioTheme.accent))
     }
 
     private func aboutRow(_ title: String, _ value: String, showsDivider: Bool = true) -> some View {
@@ -848,9 +902,11 @@ struct AboutSettingsPane: View {
     private func pathRow(_ title: String, _ value: String?) -> some View {
         SettingsRow(title: title, subtitle: value?.isEmpty == false ? value : "—", systemImage: "folder") {
             Button {
+                #if os(macOS)
                 if let value, !value.isEmpty {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: value)])
                 }
+                #endif
             } label: {
                 Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
             }

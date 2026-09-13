@@ -1130,6 +1130,15 @@ pub extern "C" fn bixel_ai_cancel_codex_oauth() {
     bixel_ai::connection::cancel_codex_oauth();
 }
 
+/// Register a host callback for opening external URLs (such as OAuth browser flows).
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_open_url_callback(
+    callback: Option<extern "C" fn(*const c_char, *mut std::ffi::c_void)>,
+    context: *mut std::ffi::c_void,
+) {
+    bixel_ai::connection::set_open_url_callback(callback, context);
+}
+
 /// JSON object of selectable provider-scoped model options for `openrouter` or
 /// `chatgpt_codex`: `{"models": ["id", ...], "default": "id",
 /// "model_options": [{"id", "label", "capabilities"}]}`. OpenRouter

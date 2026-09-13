@@ -8,7 +8,9 @@
 // - Rich hover tooltip detailing tool name, shortcut, and description
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 struct ToolHoverButton<Content: View>: View {
     let isSelected: Bool
@@ -82,11 +84,13 @@ struct ToolHoverButton<Content: View>: View {
         .animation(.easeInOut(duration: 0.15), value: isSelected)
         .onHover { hovering in
             isHovered = hovering
+            #if os(macOS)
             if hovering {
                 NSCursor.pointingHand.push()
             } else {
                 NSCursor.pop()
             }
+            #endif
         }
         .help(fullTooltip)
     }
@@ -158,11 +162,13 @@ struct ToolHoverModifier: ViewModifier {
             .animation(.spring(response: 0.2, dampingFraction: 0.72), value: isHovered)
             .onHover { hovering in
                 isHovered = hovering
+                #if os(macOS)
                 if hovering {
                     NSCursor.pointingHand.push()
                 } else {
                     NSCursor.pop()
                 }
+                #endif
             }
             .help(fullHelp)
     }

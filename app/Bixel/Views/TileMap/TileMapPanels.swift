@@ -6,7 +6,9 @@
 // minimap overlay, a properties editor, and workspace feedback capsule.
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 import Combine
 
@@ -110,6 +112,7 @@ struct MapLeftDock: View {
     }
 
     private func pickImageLayer() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -118,6 +121,7 @@ struct MapLeftDock: View {
                   let data = try? Data(contentsOf: url) else { return }
             _ = model.addImageLayer(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
+        #endif
     }
 }
 
@@ -373,7 +377,7 @@ struct TilesetPanel: View {
             if brush.tilesetIndex == ts.index,
                let first = brush.pattern.tiles.first,
                let thumb = tileThumb(ts: ts, local: (first & 0x1fff_ffff) &- ts.firstGid) {
-                Image(nsImage: NSImage(cgImage: thumb, size: .zero))
+                Image(platformImage: makePlatformImage(cgImage: thumb))
                     .interpolation(.none)
                     .resizable()
             } else {
@@ -473,7 +477,7 @@ struct TilesetPanel: View {
                                     RoundedRectangle(cornerRadius: 4)
                                         .fill(autotileSlotToAssign == mask ? StudioTheme.accent.opacity(0.35) : Color.white.opacity(0.08))
                                     if let local, let thumb = tileThumb(ts: ts, local: UInt32(local)) {
-                                        Image(nsImage: NSImage(cgImage: thumb, size: .zero))
+                                        Image(platformImage: makePlatformImage(cgImage: thumb))
                                             .interpolation(.none)
                                             .resizable()
                                     }
@@ -521,6 +525,7 @@ struct TilesetPanel: View {
     // MARK: Add tileset flow
 
     private func pickImage() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -534,6 +539,7 @@ struct TilesetPanel: View {
                 addSheet = .configure(source)
             }
         }
+        #endif
     }
 
     /// Decode an image into an `AddTilesetSource`, surfacing decode failures.
@@ -782,7 +788,7 @@ private struct TileSheetView: View {
     }
 
     private var sheetContent: some View {
-        Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
+        Image(platformImage: makePlatformImage(cgImage: cgImage))
             .interpolation(.none)
             .resizable()
             .frame(width: contentSize.width, height: contentSize.height)
@@ -935,7 +941,7 @@ private struct AddTilesetSheet: View {
             Text("Add tileset")
                 .font(.title3.bold())
             HStack(spacing: 12) {
-                Image(nsImage: NSImage(cgImage: source.cgImage, size: .zero))
+                Image(platformImage: makePlatformImage(cgImage: source.cgImage))
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
@@ -1507,7 +1513,7 @@ struct MiniMapOverlay: View {
                     Color.clear
                         .background(CheckerboardView(cell: 4))
                     if let cg = model.compositeCGImage(), imgW > 0, imgH > 0 {
-                        Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                        Image(platformImage: makePlatformImage(cgImage: cg))
                             .resizable()
                             .interpolation(.none)
                             .frame(width: imgW, height: imgH)

@@ -3,6 +3,21 @@ import AppKit
 @main
 struct EditorInteractionTests {
     static func main() {
+        let onionDisabled = OnionSkinRenderState(
+            currentFrame: 2, frameCount: 4, enabled: false, frameCountToShow: 2, opacity: 0.32
+        )
+        let onionEnabled = OnionSkinRenderState(
+            currentFrame: 2, frameCount: 4, enabled: true, frameCountToShow: 2, opacity: 0.32
+        )
+        precondition(onionEnabled.previousFrame == 1,
+                     "Onion skin must select the immediately previous frame")
+        precondition(onionEnabled.olderPreviousFrame == 0,
+                     "Onion skin must select the second previous frame when requested")
+        precondition(onionEnabled.needsRedraw(comparedTo: onionDisabled),
+                     "Changing onion settings must invalidate the ghost layers")
+        precondition(!onionEnabled.needsRedraw(comparedTo: onionEnabled),
+                     "Unchanged onion settings must not invalidate the ghost layers")
+
         var workspaceRed: CGFloat = 0
         var workspaceGreen: CGFloat = 0
         var workspaceBlue: CGFloat = 0

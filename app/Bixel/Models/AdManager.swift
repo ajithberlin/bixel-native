@@ -7,7 +7,11 @@
 import Foundation
 import SwiftUI
 import Combine
+#if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 struct AdItem: Identifiable, Equatable {
     let id: String
@@ -187,7 +191,11 @@ final class AdManager: ObservableObject {
     /// Open destination URL when user clicks the ad.
     func clickCurrentAd() {
         let url = currentAd.destinationURL
+        #if os(macOS)
         NSWorkspace.shared.open(url)
+        #elseif os(iOS)
+        UIApplication.shared.open(url)
+        #endif
     }
 
     // MARK: - Web Ad HTML Generator

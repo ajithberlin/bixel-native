@@ -772,6 +772,16 @@ struct ActionsPopover: View {
             }
             .buttonStyle(.plain)
             .help("Manage your purchases")
+
+            Divider().overlay(StudioTheme.hairline)
+
+            Button {
+                AppSettings.requestOpen()
+            } label: {
+                Label("AI & App Settings…", systemImage: "gearshape")
+            }
+            .buttonStyle(.plain)
+            .help("Open AI provider, skills, and app preferences")
         }
     }
 
@@ -786,6 +796,7 @@ struct MapResizeDialog {
     let model: TileMapModel
 
     func show() {
+        #if os(macOS)
         let alert = NSAlert()
         alert.messageText = "Resize Map"
         alert.informativeText = "Re-grids every tile layer, anchored to the top-left."
@@ -804,5 +815,20 @@ struct MapResizeDialog {
             let h = Int(heightField.stringValue) ?? model.height
             model.resize(width: max(1, w), height: max(1, h))
         }
+        #elseif os(iOS)
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? windowScene.windows.first?.rootViewController else { return }
+        let alert = UIAlertController(title: "Resize Map", message: "Re-grids every tile layer, anchored to the top-left.", preferredStyle: .alert)
+        alert.addTextField { $0.text = "\(self.model.width)"; $0.placeholder = "Columns"; $0.keyboardType = .numberPad }
+        alert.addTextField { $0.text = "\(self.model.height)"; $0.placeholder = "Rows"; $0.keyboardType = .numberPad }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Resize", style: .default) { [weak model] _ in
+            guard let model else { return }
+            let w = Int(alert.textFields?[0].text ?? "") ?? model.width
+            let h = Int(alert.textFields?[1].text ?? "") ?? model.height
+            model.resize(width: max(1, w), height: max(1, h))
+        })
+        rootVC.present(alert, animated: true)
+        #endif
     }
 }

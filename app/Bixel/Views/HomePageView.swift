@@ -8,7 +8,9 @@
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 struct HomePageView: View {
     @ObservedObject var store: ProjectStore
@@ -132,7 +134,9 @@ struct HomePageView: View {
                 .padding(.bottom, 48)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 1060, minHeight: 720)
+        #endif
         .background(StudioTheme.homeDark)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showNewProjectSheet) {
@@ -270,6 +274,21 @@ struct HomePageView: View {
                     .buttonStyle(.plain)
                     .help("One-time lifetime purchase: Remove all ads forever")
                 }
+
+                Button {
+                    AppSettings.requestOpen()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("AI Provider and App Settings")
             }
             .padding(.trailing, 24)
         }
@@ -1104,6 +1123,7 @@ struct HomePageView: View {
     // MARK: - Helpers
 
     private func importFile() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .json]
         panel.allowsMultipleSelection = false
@@ -1129,10 +1149,12 @@ struct HomePageView: View {
                 store.error = "Could not read that file."
                 return
             }
+
             let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
                 ?? store.importImageProject(png: data, name: name)
             if let project { onOpenProject(project) }
         }
+        #endif
     }
 }
 

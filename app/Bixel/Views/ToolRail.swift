@@ -127,7 +127,9 @@ struct LeftBrushDock: View {
         .buttonStyle(.plain)
         .onHover { hovering in
             isModifyHovered = hovering
+            #if os(macOS)
             if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            #endif
         }
         .help("Quick Eyedropper / Modify (I)\nTap to toggle eyedropper, or drag onto canvas with live 9x magnifying loupe to sample colors")
         .highPriorityGesture(

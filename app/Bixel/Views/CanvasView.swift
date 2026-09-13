@@ -9,6 +9,7 @@
 // disabled, allowing the GPU / WindowServer to handle rendering at 120 FPS
 // with zero CPU overhead.
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import QuartzCore
@@ -1248,3 +1249,4 @@ final class PixelCanvas: NSView {
         }
     }
 }
+#endif

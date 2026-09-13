@@ -201,8 +201,8 @@ private struct AssetTile: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(StudioTheme.background)
-                    if let previewData, let image = NSImage(data: previewData) {
-                        Image(nsImage: image)
+                    if let previewData, let image = makePlatformImage(data: previewData) {
+                        Image(platformImage: image)
                             .resizable()
                             .interpolation(.none)
                             .scaledToFit()
@@ -251,8 +251,8 @@ private struct AssetPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                if let bitmap = NSBitmapImageRep(data: data), let cg = bitmap.cgImage {
-                    Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                if let image = makePlatformImage(data: data), let cg = image.cgImageRef {
+                    Image(platformImage: image)
                         .resizable().interpolation(.none).scaledToFit()
                         .frame(width: 52, height: 52)
                         .background(StudioTheme.background)
@@ -316,13 +316,9 @@ private struct AssetPreview: View {
 
 func imageProvider(_ data: Data) -> NSItemProvider {
     let provider = NSItemProvider()
-    let pngData: Data = {
-        guard let bitmap = NSBitmapImageRep(data: data),
-              let converted = bitmap.representation(using: .png, properties: [:]) else { return data }
-        return converted
-    }()
     provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in
-        completion(pngData, nil); return nil
+        completion(data, nil)
+        return nil
     }
     return provider
 }

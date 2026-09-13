@@ -1,0 +1,474 @@
+// CanvasView.iOS.swift
+//
+// High-performance Core Animation (CALayer) infinite canvas for iPadOS / iOS.
+// Supports multi-touch pan & pinch-zoom, Apple Pencil and touch pixel drawing,
+// nearest-neighbour pixel-art rendering, pixel grid, onion skinning, and selections.
+
+#if os(iOS)
+import SwiftUI
+import UIKit
+import QuartzCore
+import Combine
+
+struct CanvasView: UIViewRepresentable {
+    @ObservedObject var model: EditorModel
+    @ObservedObject var viewport: CanvasViewport
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(model: model, viewport: viewport)
+    }
+
+    func makeUIView(context: Context) -> PixelCanvasUIView {
+        let view = PixelCanvasUIView()
+        view.coordinator = context.coordinator
+        context.coordinator.connect(view)
+        return view
+    }
+
+    func updateUIView(_ view: PixelCanvasUIView, context: Context) {
+        context.coordinator.model = model
+        context.coordinator.viewport = viewport
+        view.updateArtboardGeometry()
+        view.updateCanvasContents()
+    }
+
+    final class Coordinator: NSObject {
+        var model: EditorModel
+        var viewport: CanvasViewport
+        private var observations: [AnyCancellable] = []
+
+        init(model: EditorModel, viewport: CanvasViewport) {
+            self.model = model
+            self.viewport = viewport
+        }
+
+        func connect(_ view: PixelCanvasUIView) {
+            model.canvasChanged.sink { [weak view] in
+                view?.updateCanvasContents()
+            }.store(in: &observations)
+
+            model.objectWillChange.sink { [weak view] in
+                view?.scheduleGeometryRefresh()
+            }.store(in: &observations)
+
+            viewport.objectWillChange.sink { [weak view] in
+                // @Published emits objectWillChange before the new value is
+                // stored. Defer the refresh so onion settings are read after
+                // the toggle/slider mutation has completed.
+                view?.scheduleGeometryRefresh()
+            }.store(in: &observations)
+        }
+
+        func pixelCoordinate(_ point: CGPoint, in view: UIView, clamp: Bool = false) -> (x: Int, y: Int)? {
+            let viewSize = view.bounds.size
+            guard viewSize.width > 0, viewSize.height > 0, model.width > 0, model.height > 0 else { return nil }
+
+            let appKitOrigin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.width, height: model.height)
+            let scaledW = CGFloat(model.width) * viewport.zoom
+            let scaledH = CGFloat(model.height) * viewport.zoom
+            let artboardTopLeftX = appKitOrigin.x
+            let artboardTopLeftY = viewSize.height - (appKitOrigin.y + scaledH)
+
+            let px = Int(floor((point.x - artboardTopLeftX) / viewport.zoom))
+            let py = Int(floor((point.y - artboardTopLeftY) / viewport.zoom))
+
+            if clamp {
+                return (min(max(px, 0), model.width - 1), min(max(py, 0), model.height - 1))
+            }
+            guard px >= 0, px < model.width, py >= 0, py < model.height else { return nil }
+            return (px, py)
+        }
+
+        func documentPoint(_ point: CGPoint, in view: UIView) -> CGPoint {
+            let viewSize = view.bounds.size
+            let appKitOrigin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.width, height: model.height)
+            let scaledH = CGFloat(model.height) * viewport.zoom
+            let artboardTopLeftX = appKitOrigin.x
+            let artboardTopLeftY = viewSize.height - (appKitOrigin.y + scaledH)
+            return CGPoint(
+                x: (point.x - artboardTopLeftX) / viewport.zoom,
+                y: (point.y - artboardTopLeftY) / viewport.zoom
+            )
+        }
+    }
+}
+
+final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
+    weak var coordinator: CanvasView.Coordinator?
+
+    static let workspaceBaseColor = UIColor(red: 32.0 / 255.0,
+                                            green: 34.0 / 255.0,
+                                            blue: 38.0 / 255.0,
+                                            alpha: 1.0)
+    static let workspaceDimAlpha: CGFloat = 0.22
+
+    // Layers
+    private let artboardShadowLayer = CALayer()
+    private let artboardLayer = CALayer()
+    private let checkerboardLayer = CALayer()
+    private let onionLayer2 = CALayer()
+    private let onionLayer1 = CALayer()
+    private let canvasImageLayer = CALayer()
+    private let pixelGridLayer = CAShapeLayer()
+    private let selectionLayer = CAShapeLayer()
+    private let selectionHandlesLayer = CAShapeLayer()
+    private let rotationHandleLayer = CAShapeLayer()
+    private let borderLayer = CALayer()
+    private let workspaceDimLayer = CAShapeLayer()
+    private let floatingImageLayer = CALayer()
+    private let floatingOutlineLayer = CAShapeLayer()
+    private let floatingHandlesLayer = CAShapeLayer()
+    private let floatingRotationLayer = CAShapeLayer()
+
+    // Redraw cache
+    private var didDrawContent = false
+    private var lastDrawnRevision = -1
+    private var lastOnionState: OnionSkinRenderState?
+    private var isUpdatingGeometry = false
+    private var isUpdatingContents = false
+    private var geometryRefreshScheduled = false
+
+    // Grid cache
+    private var lastGridZoom: CGFloat = -1
+    private var lastGridWidth = -1
+    private var lastGridHeight = -1
+    private var lastGridStride = -1
+
+    // Gestures
+    private var pinchRecognizer: UIPinchGestureRecognizer!
+    private var panRecognizer: UIPanGestureRecognizer!
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private static let checkerboardPatternColor: CGColor = {
+        let size = CGSize(width: 16, height: 16)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { ctx in
+            UIColor(white: 0.55, alpha: 1.0).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+            UIColor(white: 0.40, alpha: 1.0).setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            ctx.fill(CGRect(x: 8, y: 8, width: 8, height: 8))
+        }
+        return UIColor(patternImage: image).cgColor
+    }()
+
+    private func setup() {
+        isMultipleTouchEnabled = true
+        backgroundColor = Self.workspaceBaseColor
+        layer.masksToBounds = true
+
+        // Shadow
+        artboardShadowLayer.shadowColor = UIColor.black.cgColor
+        artboardShadowLayer.shadowOpacity = 0.45
+        artboardShadowLayer.shadowRadius = 14
+        artboardShadowLayer.shadowOffset = CGSize(width: 0, height: -2)
+        artboardShadowLayer.backgroundColor = UIColor(white: 0.08, alpha: 1.0).cgColor
+        layer.addSublayer(artboardShadowLayer)
+
+        // Artboard
+        artboardLayer.masksToBounds = false
+        layer.addSublayer(artboardLayer)
+
+        // Sublayers
+        checkerboardLayer.backgroundColor = Self.checkerboardPatternColor
+        artboardLayer.addSublayer(checkerboardLayer)
+
+        onionLayer2.magnificationFilter = .nearest
+        onionLayer2.minificationFilter = .nearest
+        onionLayer2.isHidden = true
+        artboardLayer.addSublayer(onionLayer2)
+
+        onionLayer1.magnificationFilter = .nearest
+        onionLayer1.minificationFilter = .nearest
+        onionLayer1.isHidden = true
+        artboardLayer.addSublayer(onionLayer1)
+
+        canvasImageLayer.magnificationFilter = .nearest
+        canvasImageLayer.minificationFilter = .nearest
+        artboardLayer.addSublayer(canvasImageLayer)
+
+        pixelGridLayer.strokeColor = UIColor(white: 1.0, alpha: 0.16).cgColor
+        pixelGridLayer.lineWidth = 1.0
+        pixelGridLayer.fillColor = nil
+        pixelGridLayer.isHidden = true
+        artboardLayer.addSublayer(pixelGridLayer)
+
+        selectionLayer.strokeColor = UIColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.95).cgColor
+        selectionLayer.lineWidth = 1.0
+        selectionLayer.fillColor = nil
+        selectionLayer.lineDashPattern = [4, 4]
+        selectionLayer.isHidden = true
+        artboardLayer.addSublayer(selectionLayer)
+
+        borderLayer.borderColor = UIColor(white: 1.0, alpha: 0.20).cgColor
+        borderLayer.borderWidth = 1.0
+        artboardLayer.addSublayer(borderLayer)
+
+        workspaceDimLayer.fillColor = UIColor.black.cgColor
+        workspaceDimLayer.fillRule = .evenOdd
+        workspaceDimLayer.opacity = Float(Self.workspaceDimAlpha)
+        workspaceDimLayer.isHidden = true
+        layer.addSublayer(workspaceDimLayer)
+
+        // Two-finger Pan
+        panRecognizer = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        panRecognizer.minimumNumberOfTouches = 2
+        panRecognizer.maximumNumberOfTouches = 2
+        panRecognizer.delegate = self
+        addGestureRecognizer(panRecognizer)
+
+        // Pinch Zoom
+        pinchRecognizer = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinchRecognizer.delegate = self
+        addGestureRecognizer(pinchRecognizer)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        updateArtboardGeometry()
+    }
+
+    func scheduleGeometryRefresh() {
+        guard !geometryRefreshScheduled else { return }
+        geometryRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.geometryRefreshScheduled = false
+            self.updateArtboardGeometry()
+            self.updateCanvasContents()
+        }
+    }
+
+    // MARK: - Geometry Updates
+
+    func updateArtboardGeometry() {
+        guard !isUpdatingGeometry, let coordinator else { return }
+        isUpdatingGeometry = true
+        defer { isUpdatingGeometry = false }
+
+        let model = coordinator.model
+        let viewport = coordinator.viewport
+        let viewSize = bounds.size
+        guard viewSize.width > 0, viewSize.height > 0 else { return }
+
+        let appKitOrigin = viewport.artboardOrigin(viewSize: viewSize,
+                                                   canvasWidth: model.width,
+                                                   height: model.height)
+        let scaledW = CGFloat(model.width) * viewport.zoom
+        let scaledH = CGFloat(model.height) * viewport.zoom
+
+        let artboardTopLeftX = appKitOrigin.x
+        let artboardTopLeftY = viewSize.height - (appKitOrigin.y + scaledH)
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let artboardFrame = CGRect(x: artboardTopLeftX, y: artboardTopLeftY, width: scaledW, height: scaledH)
+        artboardLayer.frame = artboardFrame
+        artboardShadowLayer.frame = artboardFrame
+
+        let localFrame = CGRect(x: 0, y: 0, width: scaledW, height: scaledH)
+        checkerboardLayer.frame = localFrame
+        onionLayer2.frame = localFrame
+        onionLayer1.frame = localFrame
+        canvasImageLayer.frame = localFrame
+        borderLayer.frame = localFrame
+        pixelGridLayer.frame = localFrame
+
+        updatePixelGrid()
+        updateSelectionHighlight()
+        CATransaction.commit()
+    }
+
+    func updateCanvasContents() {
+        guard !isUpdatingContents, let coordinator else { return }
+        isUpdatingContents = true
+        defer { isUpdatingContents = false }
+
+        let model = coordinator.model
+        let viewport = coordinator.viewport
+        let revision = model.canvasRevision
+        let onionState = OnionSkinRenderState(
+            currentFrame: model.frame,
+            frameCount: model.frameCount,
+            enabled: viewport.onionSkin,
+            frameCountToShow: viewport.onionFrames,
+            opacity: viewport.onionOpacity
+        )
+        let needBase = !didDrawContent || revision != lastDrawnRevision
+        let needOnion = needBase || onionState.needsRedraw(comparedTo: lastOnionState)
+        guard needBase || needOnion else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        if needBase {
+            let pixels = model.compositeCurrentFrame()
+            if let cgImage = makeCGImage(pixels: pixels, width: model.width, height: model.height) {
+                canvasImageLayer.contents = cgImage
+                didDrawContent = true
+                lastDrawnRevision = revision
+            }
+        }
+
+        if needOnion {
+            if let previousFrame = onionState.previousFrame {
+                let pixels = model.compositeFrame(previousFrame)
+                onionLayer1.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+                onionLayer1.opacity = Float(onionState.opacity)
+                onionLayer1.isHidden = false
+            } else {
+                onionLayer1.isHidden = true
+                onionLayer1.contents = nil
+            }
+
+            if let olderPreviousFrame = onionState.olderPreviousFrame {
+                let pixels = model.compositeFrame(olderPreviousFrame)
+                onionLayer2.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+                onionLayer2.opacity = Float(onionState.opacity * 0.5)
+                onionLayer2.isHidden = false
+            } else {
+                onionLayer2.isHidden = true
+                onionLayer2.contents = nil
+            }
+        }
+
+        lastOnionState = onionState
+
+        CATransaction.commit()
+    }
+
+    private func updatePixelGrid() {
+        guard let coordinator else { return }
+        let model = coordinator.model
+        let viewport = coordinator.viewport
+        let zoom = viewport.zoom
+
+        guard viewport.showGrid, zoom >= 4.0 else {
+            pixelGridLayer.isHidden = true
+            return
+        }
+
+        let w = model.width
+        let h = model.height
+        let stride = max(1, CanvasGridMetrics.lineStride(width: w, height: h, zoom: zoom))
+
+        if zoom == lastGridZoom, w == lastGridWidth, h == lastGridHeight, stride == lastGridStride {
+            pixelGridLayer.isHidden = false
+            return
+        }
+
+        let path = CGMutablePath()
+        let totalW = CGFloat(w) * zoom
+        let totalH = CGFloat(h) * zoom
+
+        for x in Swift.stride(from: max(1, stride), to: w, by: max(1, stride)) {
+            let xPos = CGFloat(x) * zoom
+            path.move(to: CGPoint(x: xPos, y: 0))
+            path.addLine(to: CGPoint(x: xPos, y: totalH))
+        }
+        for y in Swift.stride(from: max(1, stride), to: h, by: max(1, stride)) {
+            let yPos = CGFloat(y) * zoom
+            path.move(to: CGPoint(x: 0, y: yPos))
+            path.addLine(to: CGPoint(x: totalW, y: yPos))
+        }
+
+        pixelGridLayer.path = path
+        pixelGridLayer.isHidden = false
+        lastGridZoom = zoom
+        lastGridWidth = w
+        lastGridHeight = h
+        lastGridStride = stride
+    }
+
+    private func updateSelectionHighlight() {
+        guard let coordinator else { return }
+        let model = coordinator.model
+        let zoom = coordinator.viewport.zoom
+
+        if let sel = model.transformRect ?? model.selectionRect {
+            let rect = CGRect(
+                x: sel.origin.x * zoom,
+                y: sel.origin.y * zoom,
+                width: sel.width * zoom,
+                height: sel.height * zoom
+            )
+            let path = CGMutablePath()
+            path.addRect(rect)
+            selectionLayer.path = path
+            selectionLayer.isHidden = false
+        } else {
+            selectionLayer.isHidden = true
+            selectionLayer.path = nil
+        }
+    }
+
+    // MARK: - Gestures (Pinch & Pan)
+
+    @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
+        guard let coordinator else { return }
+        let translation = pan.translation(in: self)
+        coordinator.viewport.panBy(dx: translation.x, dy: -translation.y)
+        pan.setTranslation(.zero, in: self)
+        updateArtboardGeometry()
+    }
+
+    @objc private func handlePinch(_ pinch: UIPinchGestureRecognizer) {
+        guard let coordinator else { return }
+        if pinch.state == .began || pinch.state == .changed {
+            let center = pinch.location(in: self)
+            let appKitAnchor = CGPoint(x: center.x, y: bounds.height - center.y)
+            coordinator.viewport.zoomBy(
+                pinch.scale,
+                anchor: appKitAnchor,
+                viewSize: bounds.size
+            )
+            pinch.scale = 1.0
+            updateArtboardGeometry()
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    // MARK: - Drawing Touches (Finger & Apple Pencil)
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        let point = touch.location(in: self)
+        guard let pixel = coordinator.pixelCoordinate(point, in: self) else { return }
+        coordinator.model.beginStroke(x: pixel.x, y: pixel.y)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard touches.count == 1, let touch = touches.first, let coordinator else { return }
+        let point = touch.location(in: self)
+        guard let pixel = coordinator.pixelCoordinate(point, in: self) else { return }
+        coordinator.model.continueStroke(x: pixel.x, y: pixel.y)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first, let coordinator else { return }
+        let point = touch.location(in: self)
+        guard let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) else { return }
+        coordinator.model.endStroke(x: pixel.x, y: pixel.y)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = touches.first, let coordinator else { return }
+        let point = touch.location(in: self)
+        guard let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) else { return }
+        coordinator.model.endStroke(x: pixel.x, y: pixel.y)
+    }
+}
+#endif

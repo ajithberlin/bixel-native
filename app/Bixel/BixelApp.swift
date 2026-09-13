@@ -9,9 +9,11 @@ import SwiftUI
 struct BixelApp: App {
     init() {
         SubscriptionManager.shared.configure()
+        AIService.setup()
     }
 
     var body: some Scene {
+        #if os(macOS)
         Window("Bixel Studio", id: "studio") {
             ContentView()
         }
@@ -89,6 +91,11 @@ struct BixelApp: App {
         Settings {
             SettingsView()
         }
+        #elseif os(iOS)
+        WindowGroup {
+            ContentView()
+        }
+        #endif
     }
 
     private func post(_ name: Notification.Name) {

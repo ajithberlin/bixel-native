@@ -28,6 +28,7 @@ pub const CHATGPT_CODEX_PROVIDER: &str = "chatgpt_codex";
 #[serde(rename_all = "snake_case")]
 pub enum ProviderChoice {
     /// OpenRouter gateway with an API key.
+    #[serde(alias = "openrouter")]
     OpenRouter,
     /// ChatGPT (Codex) OAuth — the user's ChatGPT credentials, no API key.
     ChatgptCodex,
@@ -320,9 +321,86 @@ impl ProviderHandle {
     }
 }
 
+pub type OpenUrlCallback = extern "C" fn(*const std::os::raw::c_char, *mut std::ffi::c_void);
+
+struct OpenUrlHandler {
+    callback: OpenUrlCallback,
+    context: *mut std::ffi::c_void,
+}
+unsafe impl Send for OpenUrlHandler {}
+unsafe impl Sync for OpenUrlHandler {}
+
+static OPEN_URL_HANDLER: Mutex<Option<OpenUrlHandler>> = Mutex::new(None);
+
+pub fn set_open_url_callback(cb: Option<OpenUrlCallback>, context: *mut std::ffi::c_void) {
+    let mut guard = OPEN_URL_HANDLER.lock().unwrap();
+    if let Some(cb) = cb {
+        *guard = Some(OpenUrlHandler { callback: cb, context });
+    } else {
+        *guard = None;
+    }
+}
+
+pub fn trigger_open_url(url: &str) {
+    let guard = OPEN_URL_HANDLER.lock().unwrap();
+    if let Some(ref handler) = *guard {
+        if let Ok(c_url) = std::ffi::CString::new(url) {
+            (handler.callback)(c_url.as_ptr(), handler.context);
+        }
+    }
+}
+
+struct OAuthUrlCaptureLayer;
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for OAuthUrlCaptureLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        struct MessageVisitor(Option<String>);
+        impl tracing::field::Visit for MessageVisitor {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = Some(format!("{:?}", value));
+                }
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.0 = Some(value.to_string());
+                }
+            }
+        }
+        let mut visitor = MessageVisitor(None);
+        event.record(&mut visitor);
+        if let Some(msg) = visitor.0 {
+            if let Some(pos) = msg.find("Please open this URL in your browser:") {
+                let raw = &msg[pos + "Please open this URL in your browser:".len()..];
+                for line in raw.lines() {
+                    let trimmed = line.trim().trim_matches('"').trim_matches('\\');
+                    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+                        trigger_open_url(trimmed);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static TRACING_INIT: std::sync::Once = std::sync::Once::new();
+
+pub fn init_tracing_listener() {
+    TRACING_INIT.call_once(|| {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let layer = OAuthUrlCaptureLayer;
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _ = subscriber.try_init();
+    });
+}
+
 /// Where goose keeps its config/sessions/OAuth tokens. Must be set before the
 /// first `Config::global()` call (it is a `OnceCell`).
 pub fn ensure_goose_env() -> Result<PathBuf, AiError> {
+    init_tracing_listener();
     if std::env::var_os("GOOSE_PATH_ROOT").is_none() {
         std::env::set_var("GOOSE_PATH_ROOT", default_goose_root());
     }
@@ -333,13 +411,13 @@ pub fn ensure_goose_env() -> Result<PathBuf, AiError> {
     Ok(root)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn default_goose_root() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     home.join("Library/Application Support/Bixel/goose")
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn default_goose_root() -> PathBuf {
     std::env::temp_dir().join("bixel-goose")
 }
@@ -636,33 +714,80 @@ pub fn list_models(provider: ProviderChoice) -> Result<ModelCatalog, AiError> {
             ))
         }
         ProviderChoice::OpenRouter => {
-            let key: String = Config::global()
-                .get_secret("OPENROUTER_API_KEY")
-                .map_err(|_| AiError::Config("connect an OpenRouter API key first".into()))?;
+            let key: Option<String> = Config::global().get_secret::<String>("OPENROUTER_API_KEY").ok();
             let url = format!("{}/models", default_base_url().trim_end_matches('/'));
-            let text = reqwest::blocking::Client::new()
-                .get(&url)
-                .header("Authorization", format!("Bearer {key}"))
-                .send()
-                .map_err(|e| AiError::Provider(e.to_string()))?
-                .text()
-                .map_err(|e| AiError::Provider(e.to_string()))?;
-            let v: serde_json::Value = serde_json::from_str(&text)
-                .map_err(|e| AiError::Provider(format!("unexpected /models response: {e}")))?;
-            let mut models: Vec<ModelOption> = v
-                .get("data")
-                .and_then(|d| d.as_array())
-                .map(|models| {
-                    models
-                        .iter()
-                        .filter_map(openrouter_model_option)
-                        .collect()
+            let client = reqwest::blocking::Client::builder()
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new());
+            let mut req = client.get(&url);
+            if let Some(ref k) = key {
+                if !k.trim().is_empty() {
+                    req = req.header("Authorization", format!("Bearer {}", k.trim()));
+                }
+            }
+            let fetched = req.send().and_then(|resp| resp.text());
+            let mut models: Vec<ModelOption> = fetched
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|v| {
+                    v.get("data")
+                        .and_then(|d| d.as_array())
+                        .map(|arr| arr.iter().filter_map(openrouter_model_option).collect())
                 })
                 .unwrap_or_default();
-            models.sort_by(|a, b| a.id.cmp(&b.id));
-            Ok(ModelCatalog { models, default: None })
+
+            if models.is_empty() {
+                models = default_openrouter_models();
+            } else {
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+            }
+            Ok(ModelCatalog {
+                default: Some("anthropic/claude-3.7-sonnet".to_string()),
+                models,
+            })
         }
     }
+}
+
+fn default_openrouter_models() -> Vec<ModelOption> {
+    vec![
+        ModelOption {
+            id: "anthropic/claude-3.7-sonnet".into(),
+            label: "Claude 3.7 Sonnet".into(),
+            capabilities: vec![ModelCapability::Chat, ModelCapability::Vision],
+            recommended: true,
+        },
+        ModelOption {
+            id: "anthropic/claude-3.5-sonnet".into(),
+            label: "Claude 3.5 Sonnet".into(),
+            capabilities: vec![ModelCapability::Chat, ModelCapability::Vision],
+            recommended: false,
+        },
+        ModelOption {
+            id: "openai/gpt-4o".into(),
+            label: "GPT-4o".into(),
+            capabilities: vec![ModelCapability::Chat, ModelCapability::Vision],
+            recommended: false,
+        },
+        ModelOption {
+            id: "openai/gpt-4o-mini".into(),
+            label: "GPT-4o mini".into(),
+            capabilities: vec![ModelCapability::Chat, ModelCapability::Vision],
+            recommended: false,
+        },
+        ModelOption {
+            id: "google/gemini-2.0-flash-001".into(),
+            label: "Gemini 2.0 Flash".into(),
+            capabilities: vec![ModelCapability::Chat, ModelCapability::Vision],
+            recommended: false,
+        },
+        ModelOption {
+            id: "deepseek/deepseek-chat".into(),
+            label: "DeepSeek V3".into(),
+            capabilities: vec![ModelCapability::Chat],
+            recommended: false,
+        },
+    ]
 }
 
 #[cfg(test)]
