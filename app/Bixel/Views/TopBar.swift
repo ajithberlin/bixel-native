@@ -27,8 +27,21 @@ struct TopBar: View {
     var onImportTiledMap: (() -> Void)? = nil
 
     @State private var showActions = false
+    /// Observing the client lets the AI entry point appear on iPad once a Mac
+    /// is connected (the assistant runs on the Mac).
+    @ObservedObject private var remote = RemoteClient.shared
 
     private var isMap: Bool { mapModel != nil }
+
+    /// The agentic assistant is always available on macOS; on iPad it requires a
+    /// connected Mac.
+    private var assistantAvailable: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return remote.state.isConnected
+        #endif
+    }
 
     var body: some View {
         HStack {
@@ -237,12 +250,12 @@ struct TopBar: View {
             colorToggle(isSpriteColor: true)
             animationAssistToggle
             assetLibraryToggle
-            // The agentic assistant is macOS-only; iPad keeps image generation.
-            #if os(macOS)
-            AICopilotButton(isPresented: showAI) {
-                withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+            // Always on macOS; on iPad once a Mac is connected.
+            if assistantAvailable {
+                AICopilotButton(isPresented: showAI) {
+                    withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+                }
             }
-            #endif
             helpButton
         }
     }
@@ -259,12 +272,12 @@ struct TopBar: View {
 
             layersToggle
             assetLibraryToggle
-            // The agentic assistant is macOS-only; iPad keeps image generation.
-            #if os(macOS)
-            AICopilotButton(isPresented: showAI) {
-                withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+            // Always on macOS; on iPad once a Mac is connected.
+            if assistantAvailable {
+                AICopilotButton(isPresented: showAI) {
+                    withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+                }
             }
-            #endif
             helpButton
         }
     }

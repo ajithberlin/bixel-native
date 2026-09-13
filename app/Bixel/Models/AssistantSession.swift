@@ -379,8 +379,14 @@ final class AssistantSession: ObservableObject {
     #else
     static let skillPythonPath: String = ""
     #endif
-    /// Live connection status (models + per-role readiness).
-    var status: AIService.AIConnectionStatus { AIService.connectionStatus() }
+    /// Live connection status (models + per-role readiness). On iPad, when a Mac
+    /// is connected, this reflects the Mac's provider instead of a local one.
+    var status: AIService.AIConnectionStatus {
+        #if os(iOS)
+        if RemoteClientAIBridge.shared.isConnected { return RemoteClientAIBridge.shared.status }
+        #endif
+        return AIService.connectionStatus()
+    }
     var models: [String: String] { status.models }
     private let queue = DispatchQueue(label: "studio.bixel.assistant", qos: .userInitiated)
     private var cancellation: AssistantCancellation?
@@ -544,7 +550,12 @@ final class AssistantSession: ObservableObject {
         let selected = selectedCommands
         let files = attachments
         let status = self.status
-        let textReady = status.readiness["text"]?.ready ?? false
+        #if os(iOS)
+        let remoteReady = RemoteClientAIBridge.shared.isConnected
+        #else
+        let remoteReady = false
+        #endif
+        let textReady = remoteReady || (status.readiness["text"]?.ready ?? false)
         let imageReady = status.readiness["image"]?.ready ?? false
         let imageCommand = commands.first(where: { $0.id == "image_gen" })
         let naturalImageRequest = selected.isEmpty && isUnambiguousImageRequest(text)
@@ -669,7 +680,19 @@ final class AssistantSession: ObservableObject {
                     }
                     receive(AssistantEvent(type: "tool_result", id: "local", name: command.id, text: result.error ?? result.text ?? "Completed", success: result.error == nil))
                 } else { receive(AssistantEvent(type: "error", message: "The local skill failed.")) }
-            } else { AIService.streamChat(request: request, cancellation: token, receive: receive) }
+            } else {
+                #if os(iOS)
+                // With a Mac connected, the agent runs there and streams events
+                // back asynchronously; finish when the Mac reports completion.
+                if RemoteClientAIBridge.shared.isConnected {
+                    RemoteClientAIBridge.shared.streamChat(request: request, cancellation: token, receive: receive) {
+                        DispatchQueue.main.async { self.finish(stopped: token.isStopped) }
+                    }
+                    return
+                }
+                #endif
+                AIService.streamChat(request: request, cancellation: token, receive: receive)
+            }
             DispatchQueue.main.async {
                 self.finish(stopped: token.isStopped)
             }

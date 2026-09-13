@@ -15,6 +15,16 @@ struct TimelineBar: View {
     @State private var isPredictHovered = false
     @State private var showPredict = false
     @State private var predictText = ""
+    /// On iPad the predict-next-frame tile appears once a Mac is connected.
+    @ObservedObject private var remote = RemoteClient.shared
+
+    private var assistantAvailable: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return remote.state.isConnected
+        #endif
+    }
 
     private let cellWidth: CGFloat = 40
     private let spacing: CGFloat = 5
@@ -125,11 +135,11 @@ struct TimelineBar: View {
                         ForEach(Array(model.frameIDs.enumerated()), id: \.element) { index, id in
                             frameItem(at: index, id: id, scrollProxy: proxy)
                         }
-                        // Predict-next-frame reports through the assistant, which
-                        // is macOS-only; iPad keeps the rest of the timeline.
-                        #if os(macOS)
-                        aiFrameCell
-                        #endif
+                        // Predict-next-frame reports through the assistant; shown
+                        // on iPad once a Mac is connected.
+                        if assistantAvailable {
+                            aiFrameCell
+                        }
                     }
                     .padding(.horizontal, pad)
                     .padding(.vertical, 4)

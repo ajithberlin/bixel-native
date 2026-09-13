@@ -130,6 +130,12 @@ enum AIService {
         defer { bixel_string_free(ptr) }
         guard let data = String(cString: ptr).data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return AIConnectionStatus() }
+        return decodeStatus(json)
+    }
+
+    /// Decode the masked connection-status JSON shared by the local FFI and the
+    /// remote Mac host.
+    static func decodeStatus(_ json: [String: Any]) -> AIConnectionStatus {
         var status = AIConnectionStatus()
         status.connected = json["connected"] as? Bool ?? false
         status.provider = json["provider"] as? String ?? "openrouter"

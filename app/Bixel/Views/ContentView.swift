@@ -37,6 +37,16 @@ struct ContentView: View {
     @State private var aiGenerationError: String?
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
+    /// On iPad the assistant is only offered while a Mac is connected.
+    @ObservedObject private var remote = RemoteClient.shared
+
+    private var assistantAvailable: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return remote.state.isConnected
+        #endif
+    }
 
     @AppStorage("bixel.openAssistantOnLaunch") private var openAssistantOnLaunch = false
     @AppStorage("bixel.defaultSnapping") private var defaultSnapping = true
@@ -359,10 +369,9 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
-            // Right Window: Full-Height Connected AI Agent Pane. The agentic
-            // assistant is macOS-only; iPad uses the AI image creator instead.
-            #if os(macOS)
-            if showAI {
+            // Right Window: Full-Height Connected AI Agent Pane. Always on
+            // macOS; on iPad once a Mac is connected.
+            if assistantAvailable && showAI {
                 Rectangle()
                     .fill(StudioTheme.hairlineStrong)
                     .frame(width: 1)
@@ -392,7 +401,6 @@ struct ContentView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
                 .zIndex(2)
             }
-            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -10,6 +10,7 @@ struct BixelApp: App {
     init() {
         SubscriptionManager.shared.configure()
         AIService.setup()
+        RemoteRouters.install()
     }
 
     var body: some Scene {
