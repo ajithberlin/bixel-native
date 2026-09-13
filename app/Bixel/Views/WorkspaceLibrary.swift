@@ -271,18 +271,30 @@ private struct AssetPreview: View {
             }
 
             if isMap {
-                Button {
-                    store.placeImageOnMap(asset)
-                } label: {
-                    Label("Add as layer", systemImage: "photo.badge.plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Button {
+                        store.placeImageOnMap(asset)
+                    } label: {
+                        Label("Add as layer", systemImage: "photo.badge.plus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .help("Add this image to the map as a layer")
+
+                    Button {
+                        store.addTilesetFromAsset(asset)
+                    } label: {
+                        Label("Add as tileset", systemImage: "square.grid.3x3")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Slice this image into a tileset you can paint with")
                 }
-                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(store.assistant.busy)
-                .help("Add this image to the map as a layer")
-                Text("Added as an image layer — editable in the layers panel.")
+                Text("Add as an image layer, or slice it into a paintable tileset.")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
             } else {

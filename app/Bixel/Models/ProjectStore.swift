@@ -836,6 +836,22 @@ final class ProjectStore: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// Hand an image to the Tilemap Designer so it can become a tileset. The
+    /// panel opens its configure sheet; nothing is added until the user commits.
+    func requestTileset(name: String, data: Data) {
+        guard isMapActive, mapEditor != nil else { return }
+        pendingTilesetSource = PendingTilesetSource(name: name, data: data)
+    }
+
+    /// Same as `requestTileset`, sourced from a project asset. Used by the
+    /// library preview so a kept/generated image can be sliced into a tileset.
+    func addTilesetFromAsset(_ asset: ProjectAssetFile) {
+        guard isMapActive else { return }
+        do {
+            requestTileset(name: asset.name, data: try assetData(asset))
+        } catch { self.error = error.localizedDescription }
+    }
+
     func openImageAsset(_ asset: ProjectAssetFile) {
         guard !assistant.busy, let base = projectRoot else { return }
         do {

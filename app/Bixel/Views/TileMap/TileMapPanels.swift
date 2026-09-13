@@ -154,6 +154,13 @@ struct TilesetPanel: View {
         .onChange(of: tilesetList.count) { _ in
             if activeTileset >= tilesetList.count { activeTileset = max(0, tilesetList.count - 1) }
         }
+        .onChange(of: store.pendingTilesetSource?.id) { _ in
+            guard let pending = store.pendingTilesetSource else { return }
+            store.pendingTilesetSource = nil
+            if let source = prepareSource(name: pending.name, data: pending.data) {
+                addSheet = .configure(source)
+            }
+        }
         .sheet(item: $addSheet) { sheet in
             switch sheet {
             case .chooser:

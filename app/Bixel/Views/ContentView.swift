@@ -354,6 +354,7 @@ struct ContentView: View {
                 AIPanel(
                     model: model,
                     session: assistant,
+                    store: projects,
                     onClose: {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showAI = false

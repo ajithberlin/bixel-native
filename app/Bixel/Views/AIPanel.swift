@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct AIPanel: View {
     @ObservedObject var model: EditorModel
     @ObservedObject var session: AssistantSession
+    @ObservedObject var store: ProjectStore
     var onClose: () -> Void
     var expanded: Bool
     var onExpand: () -> Void
@@ -112,7 +113,7 @@ struct AIPanel: View {
         LazyVStack(alignment: .leading, spacing: 25) {
             if session.messages.isEmpty { welcome.id("welcome") }
             ForEach(session.messages) { message in
-                AssistantMessageView(message: message, commands: session.commands, model: model)
+                AssistantMessageView(message: message, commands: session.commands, model: model, store: store)
             }
             Color.clear.frame(height: 1).id("bottom")
         }.padding(18)
@@ -134,7 +135,7 @@ struct AIPanel: View {
                 Text(archived.title).font(.system(size: 13, weight: .semibold))
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(archived.messages) { AssistantMessageView(message: $0, commands: session.commands, model: model) }
+                        ForEach(archived.messages) { AssistantMessageView(message: $0, commands: session.commands, model: model, store: store) }
                     }
                 }
             } else {
@@ -309,6 +310,7 @@ private struct AssistantMessageView: View {
     let message: AssistantMessage
     let commands: [AssistantCommand]
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if message.isUser {
@@ -319,7 +321,7 @@ private struct AssistantMessageView: View {
                 }
                 Text(inlineText).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
             } else {
-                ForEach(message.blocks) { block in AssistantActivityNode(block: block, commands: commands, model: model) }
+                ForEach(message.blocks) { block in AssistantActivityNode(block: block, commands: commands, model: model, store: store) }
                 if !message.blocks.isEmpty && !message.blocks.contains(where: \.running) {
                     Button {
                         NSPasteboard.general.clearContents()
@@ -346,6 +348,7 @@ private struct AssistantActivityNode: View {
     let block: AssistantBlock
     let commands: [AssistantCommand]
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     @State private var expanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -375,7 +378,7 @@ private struct AssistantActivityNode: View {
                     }.padding(.leading, 20).overlay(alignment: .leading) { Rectangle().fill(StudioTheme.hairlineStrong).frame(width: 1).padding(.leading, 5) }
                 }
             }
-            ForEach(block.artifacts) { artifact in AssistantArtifactCard(artifact: artifact, model: model) }
+            ForEach(block.artifacts) { artifact in AssistantArtifactCard(artifact: artifact, model: model, store: store) }
         }
     }
     private var title: String {
@@ -394,6 +397,7 @@ private struct AssistantActivityNode: View {
 private struct AssistantArtifactCard: View {
     let artifact: AssistantArtifact
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     @State private var showImage = false
     @State private var applied = false
 
@@ -430,6 +434,14 @@ private struct AssistantArtifactCard: View {
                     .background((artifact.isSource ? StudioTheme.accentSoft : StudioTheme.panelElevated), in: Capsule())
 
                 Button("View") { showImage = true }.buttonStyle(.plain).font(.system(size: 10))
+
+                if store.isMapActive {
+                    Button("Add as tileset") {
+                        store.requestTileset(name: artifact.name, data: artifact.data)
+                    }
+                    .font(.system(size: 10))
+                    .help("Slice this image into a tileset you can paint with on the map")
+                }
 
                 if isSpriteSheet {
                     Button(applied ? "Added" : "Add as animation") {
