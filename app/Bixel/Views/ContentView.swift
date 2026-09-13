@@ -484,11 +484,13 @@ struct ContentView: View {
                     viewport: viewport,
                     projectName: projects.current?.name ?? "Bixel Project",
                     onShowProjects: {
+                        try? projects.flush()
                         withAnimation(.easeInOut(duration: 0.22)) {
                             currentScreen = .home
                         }
                     },
                     onGoHome: {
+                        try? projects.flush()
                         withAnimation(.easeInOut(duration: 0.22)) {
                             currentScreen = .home
                         }
@@ -634,11 +636,13 @@ struct ContentView: View {
                 viewport: viewport,
                 projectName: projects.current?.name ?? "Bixel Project",
                 onShowProjects: {
+                    try? projects.flush()
                     withAnimation(.easeInOut(duration: 0.22)) {
                         currentScreen = .home
                     }
                 },
                 onGoHome: {
+                    try? projects.flush()
                     withAnimation(.easeInOut(duration: 0.22)) {
                         currentScreen = .home
                     }

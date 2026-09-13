@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 struct StudioProject: Codable, Identifiable {
     let id: String
@@ -8,10 +9,21 @@ struct StudioProject: Codable, Identifiable {
     let created: Double
 }
 
+/// An image handed to the Tilemap Designer to register as a tileset. The
+/// `TilesetPanel` observes this and opens its configure sheet so tile size,
+/// margin and spacing can be chosen before the tileset is committed.
+struct PendingTilesetSource: Identifiable {
+    let id = UUID()
+    let name: String
+    let data: Data
+}
+
 /// Project catalog and independent documents; filesystem access stays in Rust.
 @MainActor
 final class ProjectStore: ObservableObject {
     @Published private(set) var projects: [StudioProject] = []
+    @Published private(set) var projectThumbnails: [String: CGImage] = [:]
+    private var loadingThumbnails = Set<String>()
     @Published private(set) var current: StudioProject?
     @Published private(set) var editor = EditorModel()
     /// Non-nil exactly when the active document is a `.map` opened in the
@@ -20,6 +32,9 @@ final class ProjectStore: ObservableObject {
     @Published private(set) var mapEditor: TileMapModel?
     @Published private(set) var catalog = WorkspaceCatalog()
     @Published private(set) var assets: [ProjectAssetFile] = []
+    /// Set when an image (AI-generated or kept in the project) should be offered
+    /// to the Tilemap Designer as a tileset; the tileset panel consumes it.
+    @Published var pendingTilesetSource: PendingTilesetSource?
     @Published var error: String?
     @Published private(set) var saving = false
     let assistant = AssistantSession()
@@ -47,7 +62,10 @@ final class ProjectStore: ObservableObject {
     }
 
     func refresh() {
-        do { projects = try decode([StudioProject].self, ProjectStorage.request(base: root, ["op": "list"]) ?? []) }
+        do {
+            projects = try decode([StudioProject].self, ProjectStorage.request(base: root, ["op": "list"]) ?? [])
+            preloadThumbnails()
+        }
         catch { self.error = error.localizedDescription }
     }
 
@@ -79,6 +97,11 @@ final class ProjectStore: ObservableObject {
                     : TileMapModel(width: doc.width, height: doc.height,
                                    tileWidth: doc.cellWidth, tileHeight: doc.cellHeight)
                 try mapModel.map.save(base: base, path: doc.path)
+                let mapPixels = mapModel.map.compositeRGBA()
+                if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: mapPixels, width: mapModel.map.pixelWidth, height: mapModel.map.pixelHeight) {
+                    try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                    self.projectThumbnails[project.id] = thumbCG
+                }
                 var nextCatalog = WorkspaceCatalog()
                 nextCatalog.documents = [doc]
                 nextCatalog.activeDocumentID = doc.id
@@ -94,6 +117,11 @@ final class ProjectStore: ObservableObject {
                 editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
             }
             try editorModel.document.save(base: base, path: doc.path)
+            let spritePixels = editorModel.document.compositeRGBA(frame: 0)
+            if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: spritePixels, width: doc.pixelWidth, height: doc.pixelHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                self.projectThumbnails[project.id] = thumbCG
+            }
 
             var nextCatalog = WorkspaceCatalog()
             nextCatalog.documents = [doc]
@@ -160,6 +188,11 @@ final class ProjectStore: ObservableObject {
             let base = root.appendingPathComponent(project.id)
             let (doc, item) = try make(base)
             try doc.save(base: base, path: item.path)
+            let importedPixels = doc.compositeRGBA(frame: 0)
+            if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: importedPixels, width: item.pixelWidth, height: item.pixelHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                self.projectThumbnails[project.id] = thumbCG
+            }
             var nextCatalog = WorkspaceCatalog()
             nextCatalog.documents = [item]
             nextCatalog.activeDocumentID = item.id
@@ -193,6 +226,8 @@ final class ProjectStore: ObservableObject {
         if current?.id == project.id {
             closeProject()
         }
+        projectThumbnails.removeValue(forKey: project.id)
+        loadingThumbnails.remove(project.id)
         let base = root.appendingPathComponent(project.id)
         try? FileManager.default.removeItem(at: base)
         refresh()
@@ -206,6 +241,9 @@ final class ProjectStore: ObservableObject {
         let dst = root.appendingPathComponent(newId)
         do {
             try FileManager.default.copyItem(at: src, to: dst)
+            if let cg = projectThumbnails[project.id] {
+                projectThumbnails[newId] = cg
+            }
             let meta: [String: Any] = [
                 "id": newId,
                 "name": newName,
@@ -263,6 +301,128 @@ final class ProjectStore: ObservableObject {
         return "Edited \(max(1, Int(diff / 604800)))w ago"
     }
 
+    // MARK: - Thumbnails
+
+    func thumbnail(for project: StudioProject) -> CGImage? {
+        if let cached = projectThumbnails[project.id] { return cached }
+        loadThumbnail(for: project)
+        return nil
+    }
+
+    func preloadThumbnails() {
+        for project in projects {
+            if projectThumbnails[project.id] == nil {
+                loadThumbnail(for: project)
+            }
+        }
+    }
+
+    func loadThumbnail(for project: StudioProject) {
+        let id = project.id
+        guard !loadingThumbnails.contains(id) else { return }
+        loadingThumbnails.insert(id)
+        let base = root.appendingPathComponent(id)
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            // 1. Fast path: read existing thumbnail.png
+            if let pngData = try? ProjectStorage.readBytes(base: base, path: "thumbnail.png"),
+               let src = CGImageSourceCreateWithData(pngData as CFData, nil),
+               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+                await self?.storeLoadedThumbnail(cg, for: id)
+                return
+            }
+
+            // 2. Generate on-demand from document JSON if thumbnail.png does not exist yet
+            if let (pngData, cg) = Self.generateThumbnailFromDisk(base: base) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: pngData)
+                await self?.storeLoadedThumbnail(cg, for: id)
+                return
+            }
+
+            await self?.finishThumbnailLoad(for: id)
+        }
+    }
+
+    private func storeLoadedThumbnail(_ cg: CGImage, for id: String) {
+        projectThumbnails[id] = cg
+        loadingThumbnails.remove(id)
+    }
+
+    private func finishThumbnailLoad(for id: String) {
+        loadingThumbnails.remove(id)
+    }
+
+    nonisolated static func generateThumbnailFromDisk(base: URL) -> (Data, CGImage)? {
+        if let json = try? ProjectStorage.read(base: base, path: "workspace.json"),
+           let data = json.data(using: .utf8),
+           let catalog = try? JSONDecoder().decode(WorkspaceCatalog.self, from: data),
+           let active = catalog.documents.first(where: { $0.id == catalog.activeDocumentID }) ?? catalog.documents.first {
+            if active.mode == .map {
+                if let docJSON = try? ProjectStorage.read(base: base, path: active.path),
+                   let map = try? TileMap(json: docJSON) {
+                    for info in map.tilesetsInfo() where !info.image.isEmpty {
+                        if let imgData = try? ProjectStorage.readBytes(base: base, path: info.image),
+                           let img = AIService.pngToRGBA(imgData) {
+                            _ = map.setTilesetPixels(info.index, rgba: img.rgba)
+                        }
+                    }
+                    let pixels = map.compositeRGBA()
+                    return downsampleAndEncodeThumbnail(pixels: pixels, width: map.pixelWidth, height: map.pixelHeight)
+                }
+            } else {
+                if let docJSON = try? ProjectStorage.read(base: base, path: active.path),
+                   let doc = try? Document(json: docJSON) {
+                    let pixels = doc.compositeRGBA(frame: 0)
+                    return downsampleAndEncodeThumbnail(pixels: pixels, width: doc.width, height: doc.height)
+                }
+            }
+        } else if let docJSON = try? ProjectStorage.read(base: base, path: "document.json"),
+                  let doc = try? Document(json: docJSON) {
+            let pixels = doc.compositeRGBA(frame: 0)
+            return downsampleAndEncodeThumbnail(pixels: pixels, width: doc.width, height: doc.height)
+        }
+        return nil
+    }
+
+    nonisolated static func downsampleAndEncodeThumbnail(pixels: [UInt8], width: Int, height: Int, maxDimension: Int = 160) -> (Data, CGImage)? {
+        guard width > 0, height > 0, pixels.count >= width * height * 4 else { return nil }
+        let scale = min(1.0, CGFloat(maxDimension) / CGFloat(max(width, height)))
+        let finalPixels: [UInt8]
+        let finalW: Int
+        let finalH: Int
+
+        if scale >= 1.0 {
+            finalPixels = pixels
+            finalW = width
+            finalH = height
+        } else {
+            finalW = max(1, Int((CGFloat(width) * scale).rounded()))
+            finalH = max(1, Int((CGFloat(height) * scale).rounded()))
+            var out = [UInt8](repeating: 0, count: finalW * finalH * 4)
+            for y in 0..<finalH {
+                let sy = min(height - 1, y * height / finalH)
+                let srcRow = sy * width
+                let dstRow = y * finalW
+                for x in 0..<finalW {
+                    let sx = min(width - 1, x * width / finalW)
+                    let si = (srcRow + sx) * 4
+                    let di = (dstRow + x) * 4
+                    out[di] = pixels[si]
+                    out[di + 1] = pixels[si + 1]
+                    out[di + 2] = pixels[si + 2]
+                    out[di + 3] = pixels[si + 3]
+                }
+            }
+            finalPixels = out
+        }
+
+        guard let cgImage = makeCGImage(pixels: finalPixels, width: finalW, height: finalH),
+              let pngData = AIService.rgbaToPNG(finalPixels, width: finalW, height: finalH) else {
+            return nil
+        }
+        return (pngData, cgImage)
+    }
+
     private func bootstrapSamplesIfEmpty() {
         guard projects.isEmpty else { return }
         let samples: [(name: String, w: Int, h: Int)] = [
@@ -293,6 +453,11 @@ final class ProjectStore: ObservableObject {
                 editorModel.document.loadImageData(pixels, width: doc.pixelWidth, height: doc.pixelHeight, layer: 0, frame: 0)
             }
             try editorModel.document.save(base: base, path: doc.path)
+            let pixelsToUse = pixels ?? editorModel.document.compositeRGBA(frame: 0)
+            if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: pixelsToUse, width: doc.pixelWidth, height: doc.pixelHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                self.projectThumbnails[project.id] = thumbCG
+            }
 
             var nextCatalog = WorkspaceCatalog()
             nextCatalog.documents = [doc]
@@ -508,6 +673,11 @@ final class ProjectStore: ObservableObject {
             installEditor(EditorModel(width: item.pixelWidth, height: item.pixelHeight))
             installMapEditor(model)
             loadMapTilesetImages(model, base: base)
+            let mapPixels = model.map.compositeRGBA()
+            if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: mapPixels, width: model.map.pixelWidth, height: model.map.pixelHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                if let currentID = current?.id { self.projectThumbnails[currentID] = thumbCG }
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -552,6 +722,21 @@ final class ProjectStore: ObservableObject {
         let isMap = item.mode == .map
         let mapDoc = mapEditor?.map
         let spriteDoc = editor.document
+        let currentID = current?.id
+
+        let thumbPixels: [UInt8]
+        let thumbWidth: Int
+        let thumbHeight: Int
+        if isMap {
+            thumbPixels = mapDoc?.compositeRGBA() ?? []
+            thumbWidth = mapDoc?.pixelWidth ?? 0
+            thumbHeight = mapDoc?.pixelHeight ?? 0
+        } else {
+            thumbPixels = editor.compositeCurrentFrame()
+            thumbWidth = editor.width
+            thumbHeight = editor.height
+        }
+
         let work = DispatchWorkItem {
             let result: Result<Void, Error>
             if isMap {
@@ -573,8 +758,18 @@ final class ProjectStore: ObservableObject {
                     try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
                 }
             }
+
+            var thumbCG: CGImage? = nil
+            if let (thumbPNG, cg) = Self.downsampleAndEncodeThumbnail(pixels: thumbPixels, width: thumbWidth, height: thumbHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                thumbCG = cg
+            }
+
             DispatchQueue.main.async {
                 if generation == self.saveGeneration { self.saving = false }
+                if let thumbCG, let currentID {
+                    self.projectThumbnails[currentID] = thumbCG
+                }
                 if case .failure(let error) = result { self.error = error.localizedDescription }
             }
         }
@@ -653,6 +848,11 @@ final class ProjectStore: ObservableObject {
             let model = EditorModel(width: image.width, height: image.height)
             model.document.loadImageData(image.rgba, width: image.width, height: image.height, layer: 0, frame: 0)
             try model.document.save(base: base, path: item.path)
+            let importedPixels = model.document.compositeRGBA(frame: 0)
+            if let (thumbPNG, thumbCG) = Self.downsampleAndEncodeThumbnail(pixels: importedPixels, width: item.pixelWidth, height: item.pixelHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                if let currentID = current?.id { self.projectThumbnails[currentID] = thumbCG }
+            }
             var next = catalog; next.documents.append(item); next.activeDocumentID = item.id
             try writeCatalog(next, base: base)
             catalog = next; installEditor(model)
@@ -673,6 +873,22 @@ final class ProjectStore: ObservableObject {
         let isMap = item?.mode == .map
         let mapDoc = mapEditor?.map
         let document = editor.document
+        let currentID = current?.id
+
+        let thumbPixels: [UInt8]
+        let thumbWidth: Int
+        let thumbHeight: Int
+        if isMap {
+            thumbPixels = mapDoc?.compositeRGBA() ?? []
+            thumbWidth = mapDoc?.pixelWidth ?? 0
+            thumbHeight = mapDoc?.pixelHeight ?? 0
+        } else {
+            thumbPixels = editor.compositeCurrentFrame()
+            thumbWidth = editor.width
+            thumbHeight = editor.height
+        }
+
+        var savedThumbCG: CGImage? = nil
         try saves.sync {
             if let item {
                 if isMap, let mapDoc {
@@ -683,6 +899,13 @@ final class ProjectStore: ObservableObject {
             }
             try ProjectStorage.write(base: base, path: "workspace.json", data: JSONEncoder().encode(snapshot))
             try ProjectStorage.write(base: base, path: "assistant.json", data: JSONEncoder().encode(state))
+            if let (thumbPNG, cg) = Self.downsampleAndEncodeThumbnail(pixels: thumbPixels, width: thumbWidth, height: thumbHeight) {
+                try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                savedThumbCG = cg
+            }
+        }
+        if let savedThumbCG, let currentID {
+            projectThumbnails[currentID] = savedThumbCG
         }
         saveGeneration += 1; saving = false
     }

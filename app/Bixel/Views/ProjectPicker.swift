@@ -133,7 +133,7 @@ struct ProjectPicker: View {
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
                         ForEach(store.projects) { project in
-                            ProjectCard(project: project, isCurrent: project.id == store.current?.id) {
+                            ProjectCard(project: project, isCurrent: project.id == store.current?.id, thumbnail: store.thumbnail(for: project)) {
                                 if let onSelectProject = onSelectProject {
                                     dismiss()
                                     onSelectProject(project)
@@ -244,6 +244,7 @@ private struct TemplateCard: View {
 private struct ProjectCard: View {
     let project: StudioProject
     let isCurrent: Bool
+    let thumbnail: CGImage?
     let action: () -> Void
 
     var body: some View {
@@ -251,9 +252,18 @@ private struct ProjectCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack {
                     StudioTheme.panelElevated
-                    Image(systemName: "square.grid.3x3.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(StudioTheme.accent.opacity(0.7))
+                    if let thumbnail {
+                        CheckerboardView(cell: 6)
+                            .opacity(0.3)
+                        Image(decorative: thumbnail, scale: 1.0)
+                            .resizable()
+                            .interpolation(.none)
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        Image(systemName: "square.grid.3x3.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(StudioTheme.accent.opacity(0.7))
+                    }
                     if isCurrent {
                         VStack {
                             HStack {

@@ -1010,6 +1010,7 @@ struct HomePageView: View {
                         RecentProjectCard(
                             project: project,
                             metadata: store.metadata(for: project),
+                            thumbnail: store.thumbnail(for: project),
                             onOpen: { onOpenProject(project) },
                             onRename: {
                                 renameText = project.name
@@ -1140,6 +1141,7 @@ struct HomePageView: View {
 struct RecentProjectCard: View {
     let project: StudioProject
     let metadata: (mode: WorkspaceMode, sizeText: String, timeText: String)
+    let thumbnail: CGImage?
     let onOpen: () -> Void
     let onRename: () -> Void
     let onDuplicate: () -> Void
@@ -1151,7 +1153,7 @@ struct RecentProjectCard: View {
         Button(action: onOpen) {
             HStack(spacing: 12) {
                 // Pixel Art Preview Thumbnail
-                PixelPreviewThumb(name: project.name, size: 76)
+                ProjectThumbnailThumb(thumbnail: thumbnail, fallbackName: project.name, size: 76)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1286,6 +1288,40 @@ struct TemplateInspirationCard: View {
                 )
         )
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Project Artwork Thumbnail
+
+struct ProjectThumbnailThumb: View {
+    let thumbnail: CGImage?
+    let fallbackName: String
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            CheckerboardView(cell: 6)
+                .opacity(0.35)
+
+            if let thumbnail {
+                Image(decorative: thumbnail, scale: 1.0)
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: size, maxHeight: size)
+            } else if let sample = SamplePixelArt.makePreviewImage(for: fallbackName) {
+                Image(decorative: sample, scale: 1.0)
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: size, maxHeight: size)
+            } else {
+                Rectangle()
+                    .fill(StudioTheme.homeCard)
+            }
+        }
+        .frame(width: size, height: size)
+        .background(Color.black.opacity(0.3))
     }
 }
 
