@@ -1053,7 +1053,29 @@ impl AsepriteDoc {
         y: usize,
         color: Rgba,
     ) -> usize {
-        if x >= self.width || y >= self.height {
+        self.flood_fill_within(layer_idx, frame_idx, x, y, color, 0, 0, self.width, self.height)
+    }
+
+    /// 4-way flood fill constrained to `[min_x, max_x) × [min_y, max_y)`.
+    /// Bounds outside the document are clipped. Returns the number of pixels
+    /// changed, which is zero when the seed is outside the allowed region.
+    pub fn flood_fill_within(
+        &mut self,
+        layer_idx: usize,
+        frame_idx: usize,
+        x: usize,
+        y: usize,
+        color: Rgba,
+        min_x: usize,
+        min_y: usize,
+        max_x: usize,
+        max_y: usize,
+    ) -> usize {
+        let min_x = min_x.min(self.width);
+        let min_y = min_y.min(self.height);
+        let max_x = max_x.min(self.width);
+        let max_y = max_y.min(self.height);
+        if min_x >= max_x || min_y >= max_y || x < min_x || x >= max_x || y < min_y || y >= max_y {
             return 0;
         }
         let target = self.get_pixel(layer_idx, frame_idx, x, y);
@@ -1073,6 +1095,9 @@ impl AsepriteDoc {
                 continue;
             }
             seen[key] = true;
+            if cxu < min_x || cxu >= max_x || cyu < min_y || cyu >= max_y {
+                continue;
+            }
             if self.get_pixel(layer_idx, frame_idx, cxu, cyu) != target {
                 continue;
             }

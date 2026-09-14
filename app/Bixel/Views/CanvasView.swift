@@ -771,8 +771,16 @@ final class PixelCanvas: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         setColorDropHighlight(false)
         if let payload = colorDropPayload(from: sender) {
-            coordinator?.model.dropFill(payload.color)
-            return coordinator?.model.operationError == nil
+            guard let coordinator else { return false }
+            let point = convert(sender.draggingLocation, from: nil)
+            guard let pixel = coordinator.viewport.viewToDoc(
+                point,
+                viewSize: bounds.size,
+                width: coordinator.model.width,
+                height: coordinator.model.height
+            ) else { return false }
+            coordinator.model.dropFill(payload.color, at: pixel)
+            return coordinator.model.operationError == nil
         }
         guard let coordinator, let data = sender.draggingPasteboard.data(forType: .png),
               data.count <= 32_000_000 else { return false }

@@ -160,6 +160,29 @@ fn flood_fill_bounded_region() {
 }
 
 #[test]
+fn flood_fill_within_selection_bounds_does_not_escape() {
+    let mut doc = AsepriteDoc::new(8, 8, &[]);
+    // A closed square leaves a 3x3 interior at x/y 3..6. The selection is
+    // deliberately tighter than the canvas so a fill must respect both the
+    // drawn boundary and the editor's selection bounds.
+    for x in 2..=6 {
+        doc.set_pixel(0, 0, x, 2, rgba(255, 255, 255, 255));
+        doc.set_pixel(0, 0, x, 6, rgba(255, 255, 255, 255));
+    }
+    for y in 2..=6 {
+        doc.set_pixel(0, 0, 2, y, rgba(255, 255, 255, 255));
+        doc.set_pixel(0, 0, 6, y, rgba(255, 255, 255, 255));
+    }
+
+    let changed = doc.flood_fill_within(0, 0, 4, 4, rgba(255, 0, 0, 255), 3, 3, 6, 6);
+
+    assert_eq!(changed, 9);
+    assert_eq!(doc.get_pixel(0, 0, 4, 4), rgba(255, 0, 0, 255));
+    assert_eq!(doc.get_pixel(0, 0, 1, 1), Rgba::TRANSPARENT);
+    assert_eq!(doc.get_pixel(0, 0, 6, 4), rgba(255, 255, 255, 255));
+}
+
+#[test]
 fn legacy_global_layers_expand_to_per_frame_stacks() {
     // A pre-per-frame (schema-1) document: one layer with a cel on every frame.
     let json = serde_json::json!({

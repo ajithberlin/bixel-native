@@ -633,6 +633,56 @@ final class MapCanvas: NSView {
         CATransaction.commit()
     }
 
+    /// Screen path covering all selected cells plus any active drag-selection preview.
+    private func tileSelectionPath(model: TileMapModel, zoom: CGFloat) -> CGPath? {
+        let cells = model.tileSelection.cells
+        let drag = model.selectionDragRect
+        if cells.isEmpty && drag == nil { return nil }
+
+        let path = CGMutablePath()
+        let viewSize = bounds.size
+
+        if model.orientation == .orthogonal {
+            let cw = CGFloat(model.map.cellWidth) * zoom
+            let ch = CGFloat(model.map.cellHeight) * zoom
+            for pt in cells {
+                let p = canvasPoint(Double(pt.x * model.map.cellWidth),
+                                    Double(pt.y * model.map.cellHeight),
+                                    model: model, viewSize: viewSize)
+                path.addRect(CGRect(x: p.x, y: p.y, width: cw, height: ch))
+            }
+            if let drag {
+                let p = canvasPoint(Double(drag.x * model.map.cellWidth),
+                                    Double(drag.y * model.map.cellHeight),
+                                    model: model, viewSize: viewSize)
+                path.addRect(CGRect(x: p.x, y: p.y,
+                                    width: CGFloat(drag.width * model.map.cellWidth) * zoom,
+                                    height: CGFloat(drag.height * model.map.cellHeight) * zoom))
+            }
+            return path
+        }
+
+        let tw = CGFloat(model.map.cellWidth)
+        let th = CGFloat(model.map.cellHeight)
+        func point(_ origin: (x: Int, y: Int), _ dx: CGFloat, _ dy: CGFloat) -> CGPoint {
+            let p = canvasPoint(Double(origin.x), Double(origin.y), model: model, viewSize: viewSize)
+            return CGPoint(x: p.x + dx * zoom, y: p.y + dy * zoom)
+        }
+        for pt in cells {
+            let origin = model.cellOrigin(pt.x, pt.y)
+            path.move(to: point(origin, tw / 2, 0))
+            path.addLine(to: point(origin, tw, th / 2))
+            path.addLine(to: point(origin, tw / 2, th))
+            path.addLine(to: point(origin, 0, th / 2))
+            path.closeSubpath()
+        }
+        if let drag {
+            let dragPath = cellRegionPath(x: drag.x, y: drag.y, width: drag.width, height: drag.height, model: model, zoom: zoom)
+            path.addPath(dragPath)
+        }
+        return path
+    }
+
     /// Redraw the selection, object and ghost overlays from the model.
     func updateOverlays() {
         guard let coordinator else { return }
@@ -642,11 +692,9 @@ final class MapCanvas: NSView {
         CATransaction.setDisableActions(true)
 
         // Selection marquee (tile selection or wand region).
-        if let rect = model.selection, model.activeIsTile {
+        if model.activeIsTile, let selPath = tileSelectionPath(model: model, zoom: zoom) {
             selectionLayer.isHidden = false
-            selectionLayer.path = cellRegionPath(x: rect.x, y: rect.y,
-                                                 width: rect.width, height: rect.height,
-                                                 model: model, zoom: zoom)
+            selectionLayer.path = selPath
         } else if model.tool == .select, model.isObjectActive {
             selectionLayer.isHidden = false
             selectionLayer.path = nil
@@ -957,6 +1005,16 @@ final class MapCanvas: NSView {
                     viewport.zoomToFit(viewSize: bounds.size,
                                        canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
                 }
+            case "c":
+                model.copySelection()
+            case "x":
+                model.cutSelection()
+            case "v":
+                model.beginPaste()
+            case "a":
+                model.selectAll()
+            case "d":
+                model.deselectAll()
             default: super.keyDown(with: event)
             }
             return
@@ -986,8 +1044,13 @@ final class MapCanvas: NSView {
         }
 
         if event.keyCode == 53 {
+            model.deselectAll()
             model.selection = nil
             model.selectedObjectID = nil
+            if model.hasPasteGhost {
+                model.hasPasteGhost = false
+                model.commitChange()
+            }
         }
         if event.keyCode == 51 {
             if model.isObjectActive { model.deleteObject() } else { model.deleteSelection() }

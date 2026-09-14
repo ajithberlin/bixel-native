@@ -1,7 +1,7 @@
 // ColorDrop.swift
 //
 // Procreate-style "ColorDrop": drag a color out of the palette and drop it on
-// the canvas to fill the active layer (or the current selection).
+// the canvas to flood-fill the connected region under the drop point.
 //
 // The payload travels as JSON under a private pasteboard type, and the canvas
 // views handle the drop natively (AppKit `NSDraggingDestination` on macOS,

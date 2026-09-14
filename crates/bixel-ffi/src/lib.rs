@@ -709,6 +709,37 @@ pub unsafe extern "C" fn bixel_doc_flood_fill(
         as u32
 }
 
+/// 4-way flood fill constrained to the half-open pixel rectangle
+/// `[min_x, max_x) × [min_y, max_y)`; returns the number of pixels changed.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_flood_fill_within(
+    ptr: *mut BixelDoc,
+    layer: u32,
+    frame: u32,
+    x: u32,
+    y: u32,
+    color: BixelColor,
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+) -> u32 {
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .flood_fill_within(
+            layer as usize,
+            frame as usize,
+            x as usize,
+            y as usize,
+            color.into(),
+            min_x as usize,
+            min_y as usize,
+            max_x as usize,
+            max_y as usize,
+        ) as u32
+}
+
 // ------------------------------------------------------------------ layers
 
 #[no_mangle]

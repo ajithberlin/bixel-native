@@ -27,6 +27,7 @@ struct TopBar: View {
     var onImportTiledMap: (() -> Void)? = nil
 
     @State private var showActions = false
+    @State private var showSelectPopover = false
     /// Observing the client lets the AI entry point appear on iPad once a Mac
     /// is connected (the assistant runs on the Mac).
     @ObservedObject private var remote = RemoteClient.shared
@@ -343,24 +344,64 @@ struct TopBar: View {
         }
     }
 
+    @ViewBuilder
     private func mapTool(_ mapModel: TileMapModel, _ tool: MapTool, _ symbol: String) -> some View {
-        ToolHoverButton(
-            isSelected: mapModel.tool == tool,
-            selectedColor: StudioTheme.accent,
-            tooltipName: "\(tool.label)",
-            shortcut: shortcut(for: tool),
-            tooltipDescription: mapToolDescription(for: tool),
-            width: 26,
-            height: 26,
-            action: {
-                showLayers = false
-                showColor = false
-                mapModel.tool = tool
+        if tool == .select {
+            ToolHoverButton(
+                isSelected: mapModel.tool == .select,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "Select Tool",
+                shortcut: shortcut(for: tool),
+                tooltipDescription: "Select tiles with Replace, Add, Subtract, Intersect modes. Click to open options.",
+                width: 26,
+                height: 26,
+                action: {
+                    showLayers = false
+                    showColor = false
+                    if mapModel.tool == .select {
+                        showSelectPopover.toggle()
+                    } else {
+                        mapModel.tool = .select
+                        showSelectPopover = true
+                    }
+                }
+            ) { isSel, _ in
+                ZStack(alignment: .bottomTrailing) {
+                    Image(systemName: mapModel.selectionMode == .replace ? symbol : mapModel.selectionMode.symbol)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
+
+                    if mapModel.selectionMode != .replace {
+                        Circle()
+                            .fill(StudioTheme.accent)
+                            .frame(width: 4, height: 4)
+                            .offset(x: 2, y: 2)
+                    }
+                }
             }
-        ) { isSel, _ in
-            Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
+            .popover(isPresented: $showSelectPopover, arrowEdge: .bottom) {
+                TileSelectionPopover(model: mapModel)
+            }
+        } else {
+            ToolHoverButton(
+                isSelected: mapModel.tool == tool,
+                selectedColor: StudioTheme.accent,
+                tooltipName: "\(tool.label)",
+                shortcut: shortcut(for: tool),
+                tooltipDescription: mapToolDescription(for: tool),
+                width: 26,
+                height: 26,
+                action: {
+                    showLayers = false
+                    showColor = false
+                    showSelectPopover = false
+                    mapModel.tool = tool
+                }
+            ) { isSel, _ in
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(isSel ? StudioTheme.accent : Color.white.opacity(0.85))
+            }
         }
     }
 

@@ -437,17 +437,36 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         let model = coordinator.model
         let zoom = coordinator.viewport.zoom
 
-        if let sel = model.selection {
-            let rect = CGRect(
-                x: CGFloat(sel.x * model.map.cellWidth) * zoom,
-                y: CGFloat(sel.y * model.map.cellHeight) * zoom,
-                width: CGFloat(sel.width * model.map.cellWidth) * zoom,
-                height: CGFloat(sel.height * model.map.cellHeight) * zoom
-            )
-            let path = CGMutablePath()
-            path.addRect(rect)
-            selectionLayer.path = path
-            selectionLayer.isHidden = false
+        if model.activeIsTile {
+            let cells = model.tileSelection.cells
+            let drag = model.selectionDragRect
+            if !cells.isEmpty || drag != nil {
+                let path = CGMutablePath()
+                let cw = CGFloat(model.map.cellWidth) * zoom
+                let ch = CGFloat(model.map.cellHeight) * zoom
+                for pt in cells {
+                    let rect = CGRect(
+                        x: CGFloat(pt.x * model.map.cellWidth) * zoom,
+                        y: CGFloat(pt.y * model.map.cellHeight) * zoom,
+                        width: cw, height: ch
+                    )
+                    path.addRect(rect)
+                }
+                if let drag {
+                    let rect = CGRect(
+                        x: CGFloat(drag.x * model.map.cellWidth) * zoom,
+                        y: CGFloat(drag.y * model.map.cellHeight) * zoom,
+                        width: CGFloat(drag.width * model.map.cellWidth) * zoom,
+                        height: CGFloat(drag.height * model.map.cellHeight) * zoom
+                    )
+                    path.addRect(rect)
+                }
+                selectionLayer.path = path
+                selectionLayer.isHidden = false
+            } else {
+                selectionLayer.isHidden = true
+                selectionLayer.path = nil
+            }
         } else {
             selectionLayer.isHidden = true
             selectionLayer.path = nil

@@ -226,8 +226,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         colorDropHighlightLayer.isHidden = true
         artboardLayer.addSublayer(colorDropHighlightLayer)
 
-        // Procreate-style ColorDrop: fill the layer when a palette color is
-        // dragged onto the canvas.
+        // Procreate-style ColorDrop: flood-fill the connected region beneath
+        // the palette color's drop point.
         addInteraction(UIDropInteraction(delegate: self))
 
         workspaceDimLayer.fillColor = UIColor.black.cgColor
@@ -675,10 +675,12 @@ extension PixelCanvasUIView: UIDropInteractionDelegate {
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
         setColorDropHighlight(false)
         guard let item = session.items.first else { return }
+        guard let coordinator,
+              let pixel = coordinator.pixelCoordinate(session.location(in: self), in: self) else { return }
         item.itemProvider.loadDataRepresentation(forTypeIdentifier: ColorDropPayload.typeIdentifier) { [weak self] data, _ in
             guard let self, let data, let payload = ColorDropPayload(jsonData: data) else { return }
             DispatchQueue.main.async {
-                self.coordinator?.model.dropFill(payload.color)
+                self.coordinator?.model.dropFill(payload.color, at: pixel)
             }
         }
     }

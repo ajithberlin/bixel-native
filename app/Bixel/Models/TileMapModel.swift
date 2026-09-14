@@ -26,7 +26,7 @@ enum MapTool: String, CaseIterable, Identifiable {
         case .bucket: return "drop.fill"
         case .rectFill: return "square.on.square"
         case .line: return "line.diagonal"
-        case .select: return "lasso"
+        case .select: return "rectangle.dashed"
         case .move: return "arrow.up.and.down.and.arrow.left.and.right"
         case .tilePicker: return "eyedropper"
         case .wand: return "wand.and.rays"
@@ -52,8 +52,60 @@ enum MapTool: String, CaseIterable, Identifiable {
     static let toolbar: [MapTool] = [.stamp, .terrain, .eraser, .bucket, .rectFill, .line, .select, .move, .tilePicker]
 }
 
+/// An individual discrete cell coordinate on the map grid.
+struct MapCellPoint: Hashable, Equatable {
+    var x: Int
+    var y: Int
+}
+
+/// Selection combining mode matching Tiled and graphic design apps.
+enum MapSelectionMode: String, CaseIterable, Identifiable {
+    case replace = "replace"
+    case add = "add"
+    case subtract = "subtract"
+    case intersect = "intersect"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .replace: return "Replace"
+        case .add: return "Add"
+        case .subtract: return "Subtract"
+        case .intersect: return "Intersect"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .replace: return "square.fill"
+        case .add: return "plus.square.fill"
+        case .subtract: return "minus.square.fill"
+        case .intersect: return "square.and.line.vertical.and.square"
+        }
+    }
+
+    var shortcut: String {
+        switch self {
+        case .replace: return "Normal"
+        case .add: return "⇧"
+        case .subtract: return "⌥"
+        case .intersect: return "⇧⌥"
+        }
+    }
+
+    var tooltip: String {
+        switch self {
+        case .replace: return "Replace Selection (Normal)"
+        case .add: return "Add to Selection (Shift)"
+        case .subtract: return "Subtract from Selection (Option)"
+        case .intersect: return "Intersect with Selection (Shift + Option)"
+        }
+    }
+}
+
 /// A cell-aligned selection rectangle (inclusive corners → width/height ≥ 1).
-struct MapCellRect {
+struct MapCellRect: Equatable {
     var x: Int
     var y: Int
     var width: Int
@@ -70,6 +122,75 @@ struct MapCellRect {
     static func between(_ a: (x: Int, y: Int), _ b: (x: Int, y: Int)) -> MapCellRect {
         let x0 = min(a.x, b.x), y0 = min(a.y, b.y)
         return MapCellRect(x: x0, y: y0, width: abs(a.x - b.x) + 1, height: abs(a.y - b.y) + 1)
+    }
+}
+
+/// An arbitrary set of cell coordinates on the map grid.
+struct MapSelection: Equatable {
+    var cells: Set<MapCellPoint> = []
+
+    var isEmpty: Bool { cells.isEmpty }
+    var count: Int { cells.count }
+
+    var boundingRect: MapCellRect? {
+        guard !cells.isEmpty else { return nil }
+        var minX = Int.max, minY = Int.max, maxX = Int.min, maxY = Int.min
+        for pt in cells {
+            if pt.x < minX { minX = pt.x }
+            if pt.x > maxX { maxX = pt.x }
+            if pt.y < minY { minY = pt.y }
+            if pt.y > maxY { maxY = pt.y }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return MapCellRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
+    func contains(x: Int, y: Int) -> Bool {
+        cells.contains(MapCellPoint(x: x, y: y))
+    }
+
+    mutating func clear() {
+        cells.removeAll()
+    }
+
+    mutating func replace(with rect: MapCellRect) {
+        cells.removeAll()
+        add(rect)
+    }
+
+    mutating func add(_ rect: MapCellRect) {
+        guard !rect.isEmpty else { return }
+        for y in rect.y..<(rect.y + rect.height) {
+            for x in rect.x..<(rect.x + rect.width) {
+                cells.insert(MapCellPoint(x: x, y: y))
+            }
+        }
+    }
+
+    mutating func subtract(_ rect: MapCellRect) {
+        guard !rect.isEmpty else { return }
+        for y in rect.y..<(rect.y + rect.height) {
+            for x in rect.x..<(rect.x + rect.width) {
+                cells.remove(MapCellPoint(x: x, y: y))
+            }
+        }
+    }
+
+    mutating func intersect(_ rect: MapCellRect) {
+        guard !rect.isEmpty else {
+            cells.removeAll()
+            return
+        }
+        cells = cells.filter { pt in
+            pt.x >= rect.x && pt.x < rect.x + rect.width &&
+            pt.y >= rect.y && pt.y < rect.y + rect.height
+        }
+    }
+
+    mutating func add(points: [MapCellPoint]) {
+        for pt in points {
+            cells.insert(pt)
+        }
     }
 }
 
@@ -110,7 +231,22 @@ final class TileMapModel: ObservableObject {
     @Published var tool: MapTool = .stamp
     @Published var brush = MapBrush(pattern: MapTilePattern())
     @Published var clipboard: MapTilePattern? = nil
-    @Published var selection: MapCellRect?
+    @Published var tileSelection = MapSelection()
+    @Published var selectionMode: MapSelectionMode = .replace
+    @Published var selectionDragRect: MapCellRect? = nil
+    @Published var selection: MapCellRect? {
+        didSet {
+            if let selection {
+                if tileSelection.boundingRect != selection {
+                    tileSelection.replace(with: selection)
+                }
+            } else {
+                if !tileSelection.isEmpty {
+                    tileSelection.clear()
+                }
+            }
+        }
+    }
     @Published var activeLayer: Int = 0
     @Published var layers: [MapLayerRow] = []
     @Published var tileName: String?
@@ -155,6 +291,11 @@ final class TileMapModel: ObservableObject {
     private var moveOrigin: (x: Int, y: Int)?
     private var moveGrab: (x: Int, y: Int)?
     private var imageTransformDrag: ImageTransformDrag?
+    private var selectionDragStart: (x: Int, y: Int)?
+
+    func syncSelectionFromTileSelection() {
+        selection = tileSelection.boundingRect
+    }
 
     var width: Int { map.columns }
     var height: Int { map.rows }
@@ -249,6 +390,7 @@ final class TileMapModel: ObservableObject {
         map.snapshot()
         map.setOrientation(value)
         reloadGeometry()
+        tileSelection.clear()
         selection = nil
         commitChange()
     }
@@ -308,12 +450,13 @@ final class TileMapModel: ObservableObject {
     /// Whether a Move gesture starting at this cell should manipulate the
     /// current tile selection. Empty scene space belongs to camera panning.
     func canMoveSelection(at x: Int, y: Int) -> Bool {
-        guard isActiveLayerTile, let rect = selection, !rect.isEmpty,
-              x >= rect.x, x < rect.x + rect.width,
-              y >= rect.y, y < rect.y + rect.height else { return false }
-        let pattern = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y,
-                                     w: rect.width, h: rect.height)
-        return pattern.tiles.contains { $0 != 0 }
+        guard isActiveLayerTile, !tileSelection.isEmpty, tileSelection.contains(x: x, y: y) else { return false }
+        for cell in tileSelection.cells {
+            if map.getTile(layer: activeLayer, x: cell.x, y: cell.y) != 0 {
+                return true
+            }
+        }
+        return false
     }
 
     /// World-pixel bounds of the content (infinite maps), matching the
@@ -788,8 +931,10 @@ final class TileMapModel: ObservableObject {
         strokeChanged = false
         switch tool {
         case .select:
-            selection = MapCellRect(x: x, y: y, width: 1, height: 1)
+            selectionDragStart = (x, y)
+            selectionDragRect = MapCellRect(x: x, y: y, width: 1, height: 1)
             hasPasteGhost = false
+            notifyCanvasChanged()
         case .move:
             beginMove(x: x, y: y)
         case .tilePicker:
@@ -811,9 +956,9 @@ final class TileMapModel: ObservableObject {
         if !isInfinite { guard x >= 0, y >= 0, x < width, y < height else { return } }
         switch tool {
         case .select:
-            guard let start = selection else { return }
-            let rect = MapCellRect.between((start.x, start.y), (x, y))
-            selection = rect
+            guard let start = selectionDragStart else { return }
+            selectionDragRect = MapCellRect.between(start, (x, y))
+            notifyCanvasChanged()
             return
         case .move:
             continueMove(x: x, y: y)
@@ -840,11 +985,39 @@ final class TileMapModel: ObservableObject {
             strokeChanged = false
             commitChange()
         }
-        if tool == .select, let selection {
-            if selection.width == 1 && selection.height == 1 {
-                // A plain click on an object layer selects an object instead.
-                if isObjectActive {
-                    let center = map.cellCenter(x: selection.x, y: selection.y)
+        if tool == .select {
+            defer {
+                selectionDragStart = nil
+                selectionDragRect = nil
+            }
+            if let start = selectionDragStart {
+                let dragRect = MapCellRect.between(start, (x, y))
+                var effectiveMode = selectionMode
+                #if os(macOS)
+                let flags = NSEvent.modifierFlags
+                if flags.contains([.shift, .option]) {
+                    effectiveMode = .intersect
+                } else if flags.contains(.shift) {
+                    effectiveMode = .add
+                } else if flags.contains(.option) {
+                    effectiveMode = .subtract
+                }
+                #endif
+                switch effectiveMode {
+                case .replace:
+                    tileSelection.replace(with: dragRect)
+                case .add:
+                    tileSelection.add(dragRect)
+                case .subtract:
+                    tileSelection.subtract(dragRect)
+                case .intersect:
+                    tileSelection.intersect(dragRect)
+                }
+                syncSelectionFromTileSelection()
+                commitChange()
+
+                if dragRect.width == 1 && dragRect.height == 1 && isObjectActive {
+                    let center = map.cellCenter(x: dragRect.x, y: dragRect.y)
                     selectObject(at: CGFloat(center.x), y: CGFloat(center.y))
                 }
             }
@@ -866,24 +1039,35 @@ final class TileMapModel: ObservableObject {
             return
         }
         guard isActiveLayerTile else { return }
-        if let rect = selection,
-           x >= rect.x, x < rect.x + rect.width,
-           y >= rect.y, y < rect.y + rect.height {
-            let pattern = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y, w: rect.width, h: rect.height)
-            guard pattern.tiles.contains(where: { $0 != 0 }) else { return }
+        if !tileSelection.isEmpty, tileSelection.contains(x: x, y: y), let rect = tileSelection.boundingRect {
+            var tiles = [UInt32](repeating: 0, count: rect.width * rect.height)
+            var hasNonZero = false
+            for py in 0..<rect.height {
+                for px in 0..<rect.width {
+                    let cx = rect.x + px
+                    let cy = rect.y + py
+                    if tileSelection.contains(x: cx, y: cy) {
+                        let gid = map.getTile(layer: activeLayer, x: cx, y: cy)
+                        if gid != 0 { hasNonZero = true }
+                        tiles[py * rect.width + px] = gid
+                    }
+                }
+            }
+            guard hasNonZero else { return }
             map.snapshot()
-            map.paintRect(layer: activeLayer, x0: rect.x, y0: rect.y,
-                          x1: rect.x + rect.width - 1, y1: rect.y + rect.height - 1, gid: 0)
+            for cell in tileSelection.cells {
+                _ = map.setTile(layer: activeLayer, x: cell.x, y: cell.y, gid: 0)
+            }
+            let pattern = MapTilePattern(width: rect.width, height: rect.height, tiles: tiles)
             clipboard = pattern
             brush = MapBrush(pattern: pattern)
             hasPasteGhost = true
             moveOrigin = (rect.x, rect.y)
             moveGrab = (x, y)
-            // Reflect the lifted block immediately so the source empties as the
-            // ghost starts following the pointer.
             commitChange()
         } else {
-            selection = MapCellRect(x: x, y: y, width: 1, height: 1)
+            tileSelection.replace(with: MapCellRect(x: x, y: y, width: 1, height: 1))
+            syncSelectionFromTileSelection()
             moveOrigin = nil
             moveGrab = nil
         }
@@ -896,12 +1080,11 @@ final class TileMapModel: ObservableObject {
             let width = clipboard?.width ?? 1
             let height = clipboard?.height ?? 1
             selection = MapCellRect(x: anchorX, y: anchorY, width: width, height: height)
-            // The map projection may offset or skew a cell (isometric and
-            // staggered scenes), so the ghost must follow the engine's
-            // orientation-aware origin rather than raw orthogonal math.
             hoverPixel = map.cellOrigin(x: anchorX, y: anchorY)
         } else if let start = selection {
-            selection = MapCellRect.between((start.x, start.y), (x, y))
+            let rect = MapCellRect.between((start.x, start.y), (x, y))
+            selection = rect
+            tileSelection.replace(with: rect)
         }
     }
 
@@ -910,19 +1093,27 @@ final class TileMapModel: ObservableObject {
         guard hasPasteGhost, let origin = moveOrigin, let grab = moveGrab else { return }
         let anchorX = origin.x + (x - grab.x)
         let anchorY = origin.y + (y - grab.y)
-        map.stamp(layer: activeLayer, x: anchorX, y: anchorY, pattern: brush.pattern, skipEmpty: false)
+        let dx = anchorX - origin.x
+        let dy = anchorY - origin.y
+        map.stamp(layer: activeLayer, x: anchorX, y: anchorY, pattern: brush.pattern, skipEmpty: true)
         hasPasteGhost = false
-        selection = MapCellRect(x: anchorX, y: anchorY,
-                                width: brush.pattern.width, height: brush.pattern.height)
+        var shifted = Set<MapCellPoint>()
+        for cell in tileSelection.cells {
+            shifted.insert(MapCellPoint(x: cell.x + dx, y: cell.y + dy))
+        }
+        tileSelection.cells = shifted
+        syncSelectionFromTileSelection()
         commitChange()
     }
 
     func eraseSelection() {
-        guard let rect = selection, isActiveLayerTile else { return }
+        guard isActiveLayerTile, !tileSelection.isEmpty else { return }
         map.snapshot()
-        map.paintRect(layer: activeLayer, x0: rect.x, y0: rect.y,
-                      x1: rect.x + rect.width - 1, y1: rect.y + rect.height - 1, gid: 0)
-        selection = nil
+        for cell in tileSelection.cells {
+            _ = map.setTile(layer: activeLayer, x: cell.x, y: cell.y, gid: 0)
+        }
+        tileSelection.clear()
+        syncSelectionFromTileSelection()
         commitChange()
     }
 
@@ -992,29 +1183,41 @@ final class TileMapModel: ObservableObject {
         let rows = map.rows
         let ox = map.originX
         let oy = map.originY
-        var minX = Int.max, minY = Int.max, maxX = Int.min, maxY = Int.min
+        var wandPoints: [MapCellPoint] = []
         var idx = 0
         for row in 0..<rows {
             for col in 0..<cols {
                 if mask[idx] {
                     let wx = col + ox
                     let wy = row + oy
-                    minX = min(minX, wx); maxX = max(maxX, wx)
-                    minY = min(minY, wy); maxY = max(maxY, wy)
+                    wandPoints.append(MapCellPoint(x: wx, y: wy))
                 }
                 idx += 1
             }
         }
-        guard maxX >= minX, maxY >= minY else { return }
-        selection = MapCellRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
-        objectWillChange.send()
+        guard !wandPoints.isEmpty else { return }
+        tileSelection.clear()
+        tileSelection.add(points: wandPoints)
+        syncSelectionFromTileSelection()
+        commitChange()
     }
 
     // MARK: - Selection clipboard
 
     func copySelection() {
-        guard let rect = selection, isActiveLayerTile else { return }
-        clipboard = map.readRegion(layer: activeLayer, x: rect.x, y: rect.y, w: rect.width, h: rect.height)
+        guard isActiveLayerTile, !tileSelection.isEmpty, let rect = tileSelection.boundingRect else { return }
+        var tiles = [UInt32](repeating: 0, count: rect.width * rect.height)
+        for py in 0..<rect.height {
+            for px in 0..<rect.width {
+                let cx = rect.x + px
+                let cy = rect.y + py
+                if tileSelection.contains(x: cx, y: cy) {
+                    tiles[py * rect.width + px] = map.getTile(layer: activeLayer, x: cx, y: cy)
+                }
+            }
+        }
+        let pattern = MapTilePattern(width: rect.width, height: rect.height, tiles: tiles)
+        clipboard = pattern
         // A crop of the composite also lands on the pasteboard as a PNG.
         if let png = croppedCompositePNG(rect) {
             PlatformPasteboard.copy(pngData: png)
@@ -1036,13 +1239,46 @@ final class TileMapModel: ObservableObject {
         hasPasteGhost = true
         tool = .stamp
         tileName = "Paste"
+        commitChange()
     }
 
     func commitPaste(at x: Int, y: Int) {
         guard hasPasteGhost, !brush.pattern.isEmpty else { return }
         map.snapshot()
-        _ = map.stamp(layer: activeLayer, x: x, y: y, pattern: brush.pattern, skipEmpty: false)
+        _ = map.stamp(layer: activeLayer, x: x, y: y, pattern: brush.pattern, skipEmpty: true)
         hasPasteGhost = false
+        commitChange()
+    }
+
+    func selectAll() {
+        guard isActiveLayerTile else { return }
+        let rect = MapCellRect(x: 0, y: 0, width: map.columns, height: map.rows)
+        tileSelection.replace(with: rect)
+        syncSelectionFromTileSelection()
+        commitChange()
+    }
+
+    func deselectAll() {
+        tileSelection.clear()
+        syncSelectionFromTileSelection()
+        commitChange()
+    }
+
+    func invertSelection() {
+        guard isActiveLayerTile else { return }
+        var inverted = Set<MapCellPoint>()
+        let w = map.columns
+        let h = map.rows
+        for y in 0..<h {
+            for x in 0..<w {
+                let pt = MapCellPoint(x: x, y: y)
+                if !tileSelection.cells.contains(pt) {
+                    inverted.insert(pt)
+                }
+            }
+        }
+        tileSelection.cells = inverted
+        syncSelectionFromTileSelection()
         commitChange()
     }
 

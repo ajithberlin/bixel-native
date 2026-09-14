@@ -77,6 +77,16 @@ final class Document: @unchecked Sendable {
         Int(bixel_doc_flood_fill(handle, UInt32(layer), UInt32(frame), UInt32(x), UInt32(y), c))
     }
 
+    @discardableResult
+    func floodFillWithin(layer: Int, frame: Int, x: Int, y: Int, _ c: BixelColor,
+                         minX: Int, minY: Int, maxX: Int, maxY: Int) -> Int {
+        Int(bixel_doc_flood_fill_within(
+            handle,
+            UInt32(layer), UInt32(frame), UInt32(x), UInt32(y), c,
+            UInt32(minX), UInt32(minY), UInt32(maxX), UInt32(maxY)
+        ))
+    }
+
     func addLayer(_ name: String? = nil) -> Int {
         Int(bixel_doc_add_layer(handle, name))
     }

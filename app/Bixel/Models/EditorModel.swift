@@ -1200,40 +1200,43 @@ final class EditorModel: ObservableObject {
 
     // MARK: - ColorDrop
 
-    /// Procreate-style ColorDrop: fill the active layer (or just the current
-    /// selection) with the dragged color. Whole-layer fill replaces the cel;
-    /// with a marquee only the selected pixels change.
-    func dropFill(_ color: BixelColor) {
+    /// Procreate-style ColorDrop: flood-fill the connected region under the
+    /// drop point, optionally clipped to the current selection.
+    func dropFill(_ color: BixelColor, at point: (x: Int, y: Int)) {
         guard activeLayer >= 0, document.layerFrame(activeLayer) == frame else { return }
-        document.snapshot()
-        let byteCount = width * height * 4
-        var pixels = document.celRGBA(layer: activeLayer, frame: frame)
-        if pixels.count != byteCount { pixels = [UInt8](repeating: 0, count: byteCount) }
-
         let rect = (transformRect ?? selectionRect)?.integral
+        var bounds: (minX: Int, minY: Int, maxX: Int, maxY: Int)?
         if let rect {
             let minX = max(0, Int(rect.minX)), maxX = min(width, Int(rect.maxX))
             let minY = max(0, Int(rect.minY)), maxY = min(height, Int(rect.maxY))
-            if minX < maxX, minY < maxY {
-                for y in minY..<maxY {
-                    let row = y * width
-                    for x in minX..<maxX {
-                        let i = (row + x) * 4
-                        pixels[i] = color.r; pixels[i + 1] = color.g
-                        pixels[i + 2] = color.b; pixels[i + 3] = color.a
-                    }
-                }
-            }
+            guard minX < maxX, minY < maxY,
+                  point.x >= minX, point.x < maxX,
+                  point.y >= minY, point.y < maxY else { return }
+            bounds = (minX, minY, maxX, maxY)
         } else {
-            for i in stride(from: 0, to: byteCount, by: 4) {
-                pixels[i] = color.r; pixels[i + 1] = color.g
-                pixels[i + 2] = color.b; pixels[i + 3] = color.a
-            }
+            guard point.x >= 0, point.x < width, point.y >= 0, point.y < height else { return }
         }
 
-        document.loadImageData(pixels, width: width, height: height, layer: activeLayer, frame: frame)
+        // Avoid adding an undo entry when the destination already has the
+        // dragged color. The fill itself remains a single Rust operation.
+        guard document.getPixel(layer: activeLayer, frame: frame, x: point.x, y: point.y) != color else {
+            currentColor = color
+            return
+        }
+
+        document.snapshot()
+        let changed: Int
+        if let bounds {
+            changed = document.floodFillWithin(
+                layer: activeLayer, frame: frame, x: point.x, y: point.y, color,
+                minX: bounds.minX, minY: bounds.minY,
+                maxX: bounds.maxX, maxY: bounds.maxY
+            )
+        } else {
+            changed = document.floodFill(layer: activeLayer, frame: frame, x: point.x, y: point.y, color)
+        }
         currentColor = color
-        commitChange()
+        if changed > 0 { commitChange() }
     }
 
     // MARK: - Animation
@@ -1714,8 +1717,6 @@ final class EditorModel: ObservableObject {
         do {
             switch image.target {
             case .newFrame:
-                // A new frame owns a fresh layer stack; place the image on its
-                // seeded layer rather than a layer that belongs to another frame.
                 document.snapshot()
                 let newFrame = document.addFrame(durationMs: 125)
                 let newLayer = document.frameLayers(newFrame).last ?? 0

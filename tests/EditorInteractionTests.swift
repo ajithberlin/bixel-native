@@ -179,6 +179,47 @@ struct EditorInteractionTests {
         precondition(model.selectionRect == nil && model.transformRect == nil,
                      "Changing from transform to a painting tool must close the selection")
 
+        func pixel(_ pixels: [UInt8], width: Int, x: Int, y: Int) -> [UInt8] {
+            let offset = (y * width + x) * 4
+            return Array(pixels[offset..<(offset + 4)])
+        }
+
+        // ColorDrop must flood-fill the connected region under the drop point,
+        // not overwrite the entire active layer.
+        let fillColor = BixelColor(r: 255, g: 0, b: 0, a: 255)
+        let outlineColor = BixelColor(r: 255, g: 255, b: 255, a: 255)
+        let closedDropModel = EditorModel(width: 8, height: 8)
+        for x in 2...6 {
+            closedDropModel.document.setPixel(layer: 0, frame: 0, x: x, y: 2, outlineColor)
+            closedDropModel.document.setPixel(layer: 0, frame: 0, x: x, y: 6, outlineColor)
+        }
+        for y in 2...6 {
+            closedDropModel.document.setPixel(layer: 0, frame: 0, x: 2, y: y, outlineColor)
+            closedDropModel.document.setPixel(layer: 0, frame: 0, x: 6, y: y, outlineColor)
+        }
+        closedDropModel.dropFill(fillColor, at: (x: 4, y: 4))
+        let closedDropPixels = closedDropModel.document.celRGBA(layer: 0, frame: 0)
+        precondition(pixel(closedDropPixels, width: 8, x: 4, y: 4) == [255, 0, 0, 255] &&
+                     pixel(closedDropPixels, width: 8, x: 1, y: 1) == [0, 0, 0, 0] &&
+                     pixel(closedDropPixels, width: 8, x: 6, y: 4) == [255, 255, 255, 255],
+                     "ColorDrop must fill only the enclosed connected region")
+
+        let openDropModel = EditorModel(width: 8, height: 8)
+        for x in 2...6 {
+            openDropModel.document.setPixel(layer: 0, frame: 0, x: x, y: 2, outlineColor)
+            openDropModel.document.setPixel(layer: 0, frame: 0, x: x, y: 6, outlineColor)
+        }
+        for y in 2...6 where y != 4 {
+            openDropModel.document.setPixel(layer: 0, frame: 0, x: 2, y: y, outlineColor)
+            openDropModel.document.setPixel(layer: 0, frame: 0, x: 6, y: y, outlineColor)
+        }
+        openDropModel.dropFill(fillColor, at: (x: 4, y: 4))
+        let openDropPixels = openDropModel.document.celRGBA(layer: 0, frame: 0)
+        precondition(pixel(openDropPixels, width: 8, x: 4, y: 4) == [255, 0, 0, 255] &&
+                     pixel(openDropPixels, width: 8, x: 7, y: 4) == [255, 0, 0, 255] &&
+                     pixel(openDropPixels, width: 8, x: 6, y: 4) == [255, 0, 0, 255],
+                     "A gap in the outline must connect the fill to the outside region")
+
         func nativeSource(width: Int, height: Int) -> [UInt8] {
             var pixels = [UInt8](repeating: 0, count: width * height * 4)
             for y in 0..<height {
@@ -188,10 +229,6 @@ struct EditorInteractionTests {
                 }
             }
             return pixels
-        }
-        func pixel(_ pixels: [UInt8], width: Int, x: Int, y: Int) -> [UInt8] {
-            let offset = (y * width + x) * 4
-            return Array(pixels[offset..<(offset + 4)])
         }
         func floatingGestureModel(sourceWidth: Int = 4, sourceHeight: Int = 2) -> EditorModel {
             let result = EditorModel(width: 16, height: 16)
@@ -403,10 +440,11 @@ struct EditorInteractionTests {
         let commitFrameSource = nativeSource(width: 8, height: 8)
         commitFrameModel.applyImageToNewFrame(commitFrameSource, width: 8, height: 8)
         commitFrameModel.commitFloatingImport()
+        let expectedLayer = commitFrameModel.document.frameLayers(1).last ?? 0
         precondition(commitFrameModel.floatingImport == nil && commitFrameModel.frameCount == 2 && commitFrameModel.frame == 1 &&
-                     commitFrameModel.activeLayer == 1,
+                     commitFrameModel.activeLayer == expectedLayer,
                      "Committing a new-frame import must add and select exactly one frame on its target layer")
-        precondition(pixel(commitFrameModel.document.celRGBA(layer: 1, frame: 1), width: 4, x: 0, y: 0) ==
+        precondition(pixel(commitFrameModel.document.celRGBA(layer: expectedLayer, frame: 1), width: 4, x: 0, y: 0) ==
                      pixel(commitFrameSource, width: 8, x: 2, y: 2),
                      "Commit must clip the centered native source only in the document-sized result")
         precondition(commitFrameModel.selectionRect == CGRect(x: 0, y: 0, width: 4, height: 4),
@@ -434,7 +472,7 @@ struct EditorInteractionTests {
         scaledImportModel.beginFloatingResize(handle: .bottomRight, x: 6, y: 6, uniform: false)
         scaledImportModel.updateFloatingResize(x: 4, y: 4)
         scaledImportModel.commitFloatingImport()
-        let scaledPixels = scaledImportModel.document.celRGBA(layer: 0, frame: 1)
+        let scaledPixels = scaledImportModel.document.celRGBA(layer: scaledImportModel.activeLayer, frame: 1)
         precondition(pixel(scaledPixels, width: 8, x: 2, y: 2) == pixel(scaledImportSource, width: 4, x: 1, y: 1) &&
                      pixel(scaledPixels, width: 8, x: 3, y: 2) == pixel(scaledImportSource, width: 4, x: 3, y: 1),
                      "Reducing floating scale must place nearest source pixels at the transformed document positions")
@@ -576,6 +614,94 @@ struct EditorInteractionTests {
         precondition(isoMoveModel.hoverPixel?.x == isoMoveModel.cellOrigin(1, 0).x &&
                      isoMoveModel.hoverPixel?.y == isoMoveModel.cellOrigin(1, 0).y,
                      "Moved isometric ghosts must use projected cell origins")
+
+        // Multi-tile selection modes & copy/paste tests (Tiled parity)
+        let selectModel = TileMapModel(width: 8, height: 8, tileWidth: 16, tileHeight: 16)
+        // 1. Replace mode selection
+        selectModel.tool = .select
+        selectModel.selectionMode = .replace
+        selectModel.beginStroke(x: 1, y: 1)
+        selectModel.continueStroke(x: 2, y: 2)
+        selectModel.endStroke(x: 2, y: 2)
+        precondition(selectModel.tileSelection.count == 4, "Replace selection must select 4 cells for 2x2 area")
+        precondition(selectModel.tileSelection.contains(x: 1, y: 1) && selectModel.tileSelection.contains(x: 2, y: 2),
+                     "Replace selection must contain all cells in rect")
+
+        // 2. Add mode selection (select multiple times)
+        selectModel.selectionMode = .add
+        selectModel.beginStroke(x: 4, y: 4)
+        selectModel.continueStroke(x: 5, y: 5)
+        selectModel.endStroke(x: 5, y: 5)
+        precondition(selectModel.tileSelection.count == 8, "Add selection must accumulate multiple areas (4 + 4 = 8)")
+        precondition(selectModel.tileSelection.contains(x: 1, y: 1) && selectModel.tileSelection.contains(x: 5, y: 5),
+                     "Both disjoint areas must remain selected")
+
+        // 3. Subtract mode selection
+        selectModel.selectionMode = .subtract
+        selectModel.beginStroke(x: 1, y: 1)
+        selectModel.continueStroke(x: 1, y: 2)
+        selectModel.endStroke(x: 1, y: 2)
+        precondition(selectModel.tileSelection.count == 6, "Subtract mode must remove 2 cells from selection")
+        precondition(!selectModel.tileSelection.contains(x: 1, y: 1) && selectModel.tileSelection.contains(x: 2, y: 1),
+                     "Subtracted cells must no longer be selected")
+
+        // 4. Intersect mode selection
+        selectModel.selectionMode = .intersect
+        selectModel.beginStroke(x: 2, y: 0)
+        selectModel.continueStroke(x: 2, y: 3)
+        selectModel.endStroke(x: 2, y: 3)
+        precondition(selectModel.tileSelection.count == 2, "Intersect mode must retain only overlapping cells")
+        precondition(selectModel.tileSelection.contains(x: 2, y: 1) && selectModel.tileSelection.contains(x: 2, y: 2),
+                     "Intersected cells must be exactly (2,1) and (2,2)")
+
+        // 5. Selective copy and paste with transparency masking
+        let copyModel = TileMapModel(width: 8, height: 8, tileWidth: 16, tileHeight: 16)
+        _ = copyModel.map.setTile(layer: 0, x: 0, y: 0, gid: 10)
+        _ = copyModel.map.setTile(layer: 0, x: 1, y: 0, gid: 20)
+        _ = copyModel.map.setTile(layer: 0, x: 2, y: 0, gid: 30)
+        // Select disjoint tiles: (0,0) and (2,0), skipping (1,0)
+        copyModel.tileSelection.clear()
+        copyModel.tileSelection.replace(with: MapCellRect(x: 0, y: 0, width: 1, height: 1))
+        copyModel.tileSelection.add(MapCellRect(x: 2, y: 0, width: 1, height: 1))
+        copyModel.syncSelectionFromTileSelection()
+        copyModel.copySelection()
+        precondition(copyModel.clipboard != nil && copyModel.clipboard?.width == 3 && copyModel.clipboard?.height == 1,
+                     "Clipboard must span bounding box of selection")
+        precondition(copyModel.clipboard?.tiles == [10, 0, 30],
+                     "Clipboard must preserve selected tiles and mask unselected cell as 0")
+
+        // Paste onto a row with existing tiles [99, 99, 99]
+        _ = copyModel.map.setTile(layer: 0, x: 0, y: 2, gid: 99)
+        _ = copyModel.map.setTile(layer: 0, x: 1, y: 2, gid: 99)
+        _ = copyModel.map.setTile(layer: 0, x: 2, y: 2, gid: 99)
+        copyModel.beginPaste()
+        copyModel.commitPaste(at: 0, y: 2)
+        precondition(copyModel.map.getTile(layer: 0, x: 0, y: 2) == 10 &&
+                     copyModel.map.getTile(layer: 0, x: 1, y: 2) == 99 &&
+                     copyModel.map.getTile(layer: 0, x: 2, y: 2) == 30,
+                     "Pasting disjoint selection must stamp selected tiles without overwriting underlying tile at unselected cell")
+
+        // 6. Multi-cell erase / cut
+        copyModel.tileSelection.clear()
+        copyModel.tileSelection.replace(with: MapCellRect(x: 0, y: 2, width: 1, height: 1))
+        copyModel.tileSelection.add(MapCellRect(x: 2, y: 2, width: 1, height: 1))
+        copyModel.syncSelectionFromTileSelection()
+        copyModel.eraseSelection()
+        precondition(copyModel.map.getTile(layer: 0, x: 0, y: 2) == 0 &&
+                     copyModel.map.getTile(layer: 0, x: 1, y: 2) == 99 &&
+                     copyModel.map.getTile(layer: 0, x: 2, y: 2) == 0,
+                     "Erasing multi-cell selection must only clear selected cells, preserving unselected neighbors")
+
+        // 7. Helpers: selectAll, deselectAll, invertSelection
+        copyModel.selectAll()
+        precondition(copyModel.tileSelection.count == 64, "Select all must select all cells in 8x8 map")
+        copyModel.deselectAll()
+        precondition(copyModel.tileSelection.isEmpty && copyModel.selection == nil, "Deselect must clear selection")
+        copyModel.tileSelection.replace(with: MapCellRect(x: 0, y: 0, width: 2, height: 2))
+        copyModel.invertSelection()
+        precondition(copyModel.tileSelection.count == 60 && !copyModel.tileSelection.contains(x: 0, y: 0),
+                     "Invert selection must invert cells within map bounds")
+
         print("Editor interaction tests passed")
     }
 }
