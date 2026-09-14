@@ -34,5 +34,18 @@
 	<string>Bixel connects to your Mac on the local network to sync projects and share the AI assistant.</string>
 	<key>RevenueCatAPIKey</key>
 	<string>appl_RxyNleGUVFCdwNVZemafcSzICuv</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Bixel Color</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.bixel.studio.color-drop</string>
+		</dict>
+	</array>
 </dict>
 </plist>

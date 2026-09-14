@@ -110,8 +110,17 @@ impl Cel {
 }
 
 /// A layer in the document.
+///
+/// Layers are owned by a single frame (see [`AsepriteDoc::frame_of_layer`]) so
+/// each animation frame has an independent layer stack, Procreate-Dreams style.
+/// `cels` is still one slot per frame for storage/format compatibility, but only
+/// the owning frame's slot is ever populated; all others stay `None`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
+    /// Stable identity, preserved across reorders/undo so the host can animate
+    /// list moves. Assigned by the document when the layer is created.
+    #[serde(default)]
+    pub uid: u64,
     pub name: String,
     pub visible: bool,
     pub locked: bool,
@@ -126,6 +135,7 @@ pub struct Layer {
 impl Layer {
     pub fn new(name: impl Into<String>) -> Self {
         Layer {
+            uid: 0,
             name: name.into(),
             visible: true,
             locked: false,
@@ -179,6 +189,42 @@ struct DocumentState {
     layers: Vec<Layer>,
     frames: Vec<Frame>,
     tags: Vec<Tag>,
+    /// Owning frame of each layer, parallel to `layers`. Absent in schema-1
+    /// documents saved before per-frame layers existed; reconstructed on load.
+    #[serde(default)]
+    frame_of_layer: Vec<usize>,
+}
+
+/// Rewrite a legacy global-layer document into per-frame layer stacks. Every
+/// frame that a layer had a cel on gets its own copy of that layer, preserving
+/// compositing while making the layers panel frame-accurate.
+fn migrate_legacy_layers(state: &mut DocumentState) {
+    let frame_count = state.frames.len();
+    let old_layers = std::mem::take(&mut state.layers);
+    let mut new_layers = Vec::new();
+    let mut ownership = Vec::new();
+    for frame in 0..frame_count {
+        for old in &old_layers {
+            let Some(cel) = old.cels.get(frame).and_then(|c| c.as_ref()) else { continue };
+            let mut layer = old.clone();
+            layer.uid = 0;
+            let mut cels = vec![None; frame_count];
+            cels[frame] = Some(cel.clone());
+            layer.cels = cels;
+            new_layers.push(layer);
+            ownership.push(frame);
+        }
+    }
+    if new_layers.is_empty() {
+        if let Some(mut old) = old_layers.into_iter().next() {
+            old.uid = 0;
+            old.cels = vec![None; frame_count];
+            new_layers.push(old);
+            ownership.push(0);
+        }
+    }
+    state.layers = new_layers;
+    state.frame_of_layer = ownership;
 }
 
 /// The sprite document.
@@ -188,9 +234,13 @@ pub struct AsepriteDoc {
     pub height: usize,
     pub palette: Vec<String>,
     pub layers: Vec<Layer>,
+    /// Owning frame of each entry in `layers`, parallel to it. Each frame owns
+    /// an independent, ordered subset of the global layer storage.
+    pub frame_of_layer: Vec<usize>,
     pub frames: Vec<Frame>,
     pub tags: Vec<Tag>,
     pub max_undo: usize,
+    next_layer_uid: u64,
     undo_stack: Vec<DocumentState>,
     redo_stack: Vec<DocumentState>,
 }
@@ -217,13 +267,23 @@ impl AsepriteDoc {
     pub fn from_json(text: &str) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
         if value["schema"] != 1 { return Err("Unsupported document version".into()); }
-        let state: DocumentState = serde_json::from_value(value["document"].clone()).map_err(|e| e.to_string())?;
+        let mut state: DocumentState = serde_json::from_value(value["document"].clone()).map_err(|e| e.to_string())?;
         let bytes = state.width.checked_mul(state.height).and_then(|n| n.checked_mul(4)).ok_or("Invalid dimensions")?;
         if state.width == 0 || state.height == 0 || bytes > 256 * 1024 * 1024 || state.layers.is_empty() || state.frames.is_empty() {
             return Err("Invalid document dimensions or empty layers/frames".into());
         }
-        for layer in &state.layers {
-            if layer.cels.len() > state.frames.len() || !layer.opacity.is_finite() { return Err("Invalid layer".into()); }
+        // Backfill ownership for schema-1 documents saved before per-frame
+        // layers: expand each shared layer into a copy per frame it had a cel on.
+        if state.frame_of_layer.len() != state.layers.len() {
+            migrate_legacy_layers(&mut state);
+        }
+        for (index, layer) in state.layers.iter().enumerate() {
+            if layer.cels.len() > state.frames.len() || !layer.opacity.is_finite() {
+                return Err("Invalid layer".into());
+            }
+            if state.frame_of_layer[index] >= state.frames.len() {
+                return Err("Invalid layer ownership".into());
+            }
             for cel in layer.cels.iter().flatten() {
                 if cel.width != state.width || cel.height != state.height || cel.data.len() != bytes { return Err("Invalid cel dimensions or data".into()); }
             }
@@ -247,17 +307,60 @@ impl AsepriteDoc {
             height,
             palette: palette.to_vec(),
             layers: Vec::new(),
+            frame_of_layer: Vec::new(),
             frames: Vec::new(),
             tags: Vec::new(),
             max_undo: 50,
+            next_layer_uid: 1,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         };
         doc.frames.push(Frame::new(0, 125));
         let mut layer = Layer::new("Layer 1");
+        layer.uid = doc.alloc_uid();
         layer.cels.push(Some(Cel::new(0, 0, width, height)));
         doc.layers.push(layer);
+        doc.frame_of_layer.push(0);
         doc
+    }
+
+    fn alloc_uid(&mut self) -> u64 {
+        let uid = self.next_layer_uid;
+        self.next_layer_uid = self.next_layer_uid.saturating_add(1);
+        uid
+    }
+
+    /// Global layer indices owned by `frame`, in stacking order (bottom first).
+    pub fn frame_layers(&self, frame: usize) -> Vec<usize> {
+        (0..self.layers.len())
+            .filter(|&l| self.frame_of_layer.get(l) == Some(&frame))
+            .collect()
+    }
+
+    /// Owning frame of a global layer index.
+    pub fn layer_frame(&self, layer: usize) -> Option<usize> {
+        self.frame_of_layer.get(layer).copied()
+    }
+
+    /// Append a new layer owned by `frame`. Returns its global index.
+    pub fn add_layer_for_frame(&mut self, frame: usize, name: Option<&str>) -> Option<usize> {
+        if frame >= self.frames.len() {
+            return None;
+        }
+        let name = match name {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => format!("Layer {}", self.frame_layers(frame).len() + 1),
+        };
+        let idx = self.layers.len();
+        let uid = self.alloc_uid();
+        let mut layer = Layer::new(name);
+        layer.uid = uid;
+        layer.cels = (0..self.frames.len())
+            .map(|f| if f == frame { Some(Cel::new(idx, frame, self.width, self.height)) } else { None })
+            .collect();
+        self.layers.push(layer);
+        self.frame_of_layer.push(frame);
+        Some(idx)
     }
 
     fn sync_cel_indices(&mut self) {
@@ -271,14 +374,21 @@ impl AsepriteDoc {
         }
     }
 
-    /// Returns (and lazily creates) the cel at `(layer, frame)`.
+    /// Returns (and lazily creates) the cel at `(layer, frame)`. Layers are
+    /// owned by a single frame, so a layer that does not belong to `frame_idx`
+    /// has no cel there and this returns `None`.
     pub fn cel_mut(&mut self, layer_idx: usize, frame_idx: usize) -> Option<&mut Cel> {
+        if self.frame_of_layer.get(layer_idx).copied() != Some(frame_idx) {
+            return None;
+        }
+        let width = self.width;
+        let height = self.height;
         let layer = self.layers.get_mut(layer_idx)?;
         while layer.cels.len() <= frame_idx {
             layer.cels.push(None);
         }
         if layer.cels[frame_idx].is_none() {
-            layer.cels[frame_idx] = Some(Cel::new(layer_idx, frame_idx, self.width, self.height));
+            layer.cels[frame_idx] = Some(Cel::new(layer_idx, frame_idx, width, height));
         }
         layer.cels[frame_idx].as_mut()
     }
@@ -305,23 +415,17 @@ impl AsepriteDoc {
         cel.get_pixel(x, y)
     }
 
+    /// Add a layer to frame 0 (legacy helper for single-frame documents).
     pub fn add_layer(&mut self, name: Option<&str>) -> usize {
-        let name = match name {
-            Some(n) if !n.is_empty() => n.to_string(),
-            _ => format!("Layer {}", self.layers.len() + 1),
-        };
-        let idx = self.layers.len();
-        let mut layer = Layer::new(name);
-        layer.cels = (0..self.frames.len())
-            .map(|f| Some(Cel::new(idx, f, self.width, self.height)))
-            .collect();
-        self.layers.push(layer);
-        idx
+        self.add_layer_for_frame(0, name).unwrap_or(0)
     }
 
     pub fn remove_layer(&mut self, layer_idx: usize) {
         if layer_idx < self.layers.len() {
             self.layers.remove(layer_idx);
+            if layer_idx < self.frame_of_layer.len() {
+                self.frame_of_layer.remove(layer_idx);
+            }
             self.sync_cel_indices();
         }
     }
@@ -332,6 +436,10 @@ impl AsepriteDoc {
         }
         let layer = self.layers.remove(from);
         self.layers.insert(to, layer);
+        if from < self.frame_of_layer.len() && to < self.frame_of_layer.len() {
+            let owner = self.frame_of_layer.remove(from);
+            self.frame_of_layer.insert(to, owner);
+        }
         self.sync_cel_indices();
     }
 
@@ -343,18 +451,19 @@ impl AsepriteDoc {
         }
     }
 
+    /// Append a new frame. Every existing layer grows a `None` cel slot, and the
+    /// frame starts with a single fresh empty layer of its own.
     pub fn add_frame(&mut self, duration_ms: u32) -> usize {
         let new_idx = self.frames.len();
         self.frames.push(Frame::new(new_idx, duration_ms));
-        for (l, layer) in self.layers.iter_mut().enumerate() {
-            layer
-                .cels
-                .push(Some(Cel::new(l, new_idx, self.width, self.height)));
+        for layer in self.layers.iter_mut() {
+            layer.cels.push(None);
         }
+        self.add_layer_for_frame(new_idx, None);
         new_idx
     }
 
-    /// Move a complete frame, keeping timing and every layer's cel together.
+    /// Move a complete frame, keeping its layer stack, timing, and cels together.
     /// Tags remain anchored to their timeline ranges.
     pub fn reorder_frame(&mut self, from: usize, to: usize) {
         if from >= self.frames.len() || to >= self.frames.len() || from == to {
@@ -369,6 +478,16 @@ impl AsepriteDoc {
             layer.cels.resize(self.frames.len(), None);
             let cel = layer.cels.remove(from);
             layer.cels.insert(to, cel);
+        }
+        // Remap layer ownership so each stack follows its frame.
+        for owner in self.frame_of_layer.iter_mut() {
+            if *owner == from {
+                *owner = to;
+            } else if from < to && *owner > from && *owner <= to {
+                *owner -= 1;
+            } else if to < from && *owner >= to && *owner < from {
+                *owner += 1;
+            }
         }
         self.sync_cel_indices();
     }
@@ -385,6 +504,20 @@ impl AsepriteDoc {
             if frame_idx < layer.cels.len() {
                 layer.cels.remove(frame_idx);
             }
+        }
+        // Drop every layer owned by the removed frame and shift ownership of
+        // later frames down by one.
+        let mut removed = Vec::new();
+        for (l, owner) in self.frame_of_layer.iter_mut().enumerate() {
+            if *owner == frame_idx {
+                removed.push(l);
+            } else if *owner > frame_idx {
+                *owner -= 1;
+            }
+        }
+        for l in removed.into_iter().rev() {
+            self.layers.remove(l);
+            self.frame_of_layer.remove(l);
         }
         self.sync_cel_indices();
 
@@ -425,6 +558,7 @@ impl AsepriteDoc {
             layers: self.layers.clone(),
             frames: self.frames.clone(),
             tags: self.tags.clone(),
+            frame_of_layer: self.frame_of_layer.clone(),
         }
     }
 
@@ -435,6 +569,31 @@ impl AsepriteDoc {
         self.layers = state.layers;
         self.frames = state.frames;
         self.tags = state.tags;
+        // Reconstruct ownership when absent and guarantee every layer has a
+        // unique, non-zero uid so host-side list identities survive undo.
+        if state.frame_of_layer.len() == self.layers.len() {
+            self.frame_of_layer = state.frame_of_layer;
+        } else {
+            self.frame_of_layer = self.layers.iter().map(|layer| {
+                layer.cels.iter().position(|c| c.is_some()).unwrap_or(0)
+            }).collect();
+        }
+        let mut max_uid = 0u64;
+        let mut seen = std::collections::HashSet::new();
+        for layer in &mut self.layers {
+            if layer.uid == 0 || !seen.insert(layer.uid) {
+                layer.uid = 0;
+            } else {
+                max_uid = max_uid.max(layer.uid);
+            }
+        }
+        for layer in &mut self.layers {
+            if layer.uid == 0 {
+                max_uid += 1;
+                layer.uid = max_uid;
+            }
+        }
+        self.next_layer_uid = max_uid.saturating_add(1);
         self.sync_cel_indices();
     }
 
@@ -529,7 +688,8 @@ impl AsepriteDoc {
         Ok(())
     }
 
-    /// Place pixels on a new layer, clipping to the canvas, as one undo step.
+    /// Place pixels on a new layer owned by `frame`, clipping to the canvas, as
+    /// one undo step. Returns the new layer's global index.
     pub fn place_image_data(
         &mut self, data: &[u8], w: usize, h: usize, x: i32, y: i32,
         frame: usize, name: &str,
@@ -541,19 +701,18 @@ impl AsepriteDoc {
         let right = ((x as i64) + w as i64).min(self.width as i64).max(0) as usize;
         let bottom = ((y as i64) + h as i64).min(self.height as i64).max(0) as usize;
         if left >= right || top >= bottom { return Err("Image is outside the canvas".into()); }
-        let index = self.layers.len();
-        let mut layer = Layer::new(name);
-        layer.cels.resize(self.frames.len(), None);
-        let mut cel = Cel::new(index, frame, self.width, self.height);
+        self.snapshot();
+        let index = self
+            .add_layer_for_frame(frame, Some(name))
+            .ok_or("Invalid destination frame")?;
+        let canvas_width = self.width;
+        let cel = self.cel_mut(index, frame).ok_or("Invalid layer")?;
         for dy in top..bottom {
             let source = (((dy as i64 - y as i64) as usize) * w + (left as i64 - x as i64) as usize) * 4;
-            let target = (dy * self.width + left) * 4;
+            let target = (dy * canvas_width + left) * 4;
             let count = (right - left) * 4;
             cel.data[target..target + count].copy_from_slice(&data[source..source + count]);
         }
-        layer.cels[frame] = Some(cel);
-        self.snapshot();
-        self.layers.push(layer);
         Ok(index)
     }
 
@@ -650,8 +809,9 @@ impl AsepriteDoc {
         Ok(())
     }
 
-    /// Import a regular sheet to a new layer, row-major from frame zero.
-    /// Existing layers and canvas dimensions are preserved; history records one step.
+    /// Import a regular sheet row-major from frame zero, giving every frame its
+    /// own layer (per-frame layer stacks). Existing layers and canvas dimensions
+    /// are preserved; history records one step. Returns the first new layer.
     pub fn import_sheet_data(
         &mut self, data: &[u8], w: usize, h: usize,
         cell_w: usize, cell_h: usize, name: &str,
@@ -666,26 +826,27 @@ impl AsepriteDoc {
         let columns = w / cell_w;
         let count = columns * (h / cell_h);
         if count > 4096 { return Err("Sheet exceeds 4096 frames".into()); }
-        let index = self.layers.len();
-        let mut layer = Layer::new(name);
-        layer.cels.resize(self.frames.len().max(count), None);
+        self.snapshot();
+        let duration = self.frames.first().map_or(100, |frame| frame.duration_ms);
+        while self.frames.len() < count {
+            let idx = self.frames.len();
+            self.frames.push(Frame::new(idx, duration));
+            for existing in &mut self.layers { existing.cels.push(None); }
+        }
+        let mut first_layer = None;
         for frame in 0..count {
-            let mut cel = Cel::new(index, frame, cell_w, cell_h);
+            let index = self
+                .add_layer_for_frame(frame, Some(name))
+                .ok_or("Invalid frame")?;
+            if first_layer.is_none() { first_layer = Some(index); }
+            let cel = self.cel_mut(index, frame).ok_or("Invalid layer")?;
             for row in 0..cell_h {
                 let source = (((frame / columns) * cell_h + row) * w + (frame % columns) * cell_w) * 4;
                 let target = row * cell_w * 4;
                 cel.data[target..target + cell_w * 4].copy_from_slice(&data[source..source + cell_w * 4]);
             }
-            layer.cels[frame] = Some(cel);
         }
-        self.snapshot();
-        let duration = self.frames.first().map_or(100, |frame| frame.duration_ms);
-        while self.frames.len() < count {
-            self.frames.push(Frame::new(self.frames.len(), duration));
-        }
-        for existing in &mut self.layers { existing.cels.resize(self.frames.len(), None); }
-        self.layers.push(layer);
-        Ok(index)
+        Ok(first_layer.unwrap_or(0))
     }
 
     /// Copy one sheet region into a canvas-sized cel, clipped to both the sheet
@@ -738,13 +899,22 @@ impl AsepriteDoc {
         let mut doc = AsepriteDoc::new(canvas_w, canvas_h, &[]);
         doc.frames.clear();
         doc.layers.clear();
-        let mut layer = Layer::new(name);
+        doc.frame_of_layer.clear();
         for (index, frame) in plan.frames.iter().enumerate() {
             doc.frames.push(Frame::new(index, frame.duration_ms.max(1)));
-            let cel = Self::crop_sheet_cel(data, image_w, image_h, frame, canvas_w, canvas_h, 0, index);
-            layer.cels.push(Some(cel));
         }
-        doc.layers.push(layer);
+        let total_frames = doc.frames.len();
+        for (index, frame) in plan.frames.iter().enumerate() {
+            let layer_index = doc.layers.len();
+            let uid = doc.alloc_uid();
+            let mut layer = Layer::new(name);
+            layer.uid = uid;
+            layer.cels = vec![None; total_frames];
+            let cel = Self::crop_sheet_cel(data, image_w, image_h, frame, canvas_w, canvas_h, layer_index, index);
+            layer.cels[index] = Some(cel);
+            doc.layers.push(layer);
+            doc.frame_of_layer.push(index);
+        }
         for tag in &plan.tags {
             doc.add_tag(&tag.name, tag.from as usize, tag.to as usize, &tag.color);
         }
@@ -777,14 +947,22 @@ impl AsepriteDoc {
         self.snapshot();
         let base = self.frames.len();
         let name = if layer_name.trim().is_empty() { "Sprites" } else { layer_name };
-        let layer_index = self.add_layer(Some(name));
+        let mut first_layer = None;
         let mut tags_added = 0usize;
         for frame in plan.frames.iter() {
             let frame_index = self.add_frame(frame.duration_ms.max(1));
+            // `add_frame` seeds the new frame with one empty layer; reuse it.
+            let layer_index = self
+                .frame_layers(frame_index)
+                .into_iter()
+                .next()
+                .ok_or("Invalid frame")?;
+            self.rename_layer(layer_index, name);
             let cel = Self::crop_sheet_cel(
                 data, image_w, image_h, frame, self.width, self.height, layer_index, frame_index,
             );
             self.layers[layer_index].cels[frame_index] = Some(cel);
+            if first_layer.is_none() { first_layer = Some(layer_index); }
         }
         for tag in &plan.tags {
             self.add_tag(
@@ -796,7 +974,7 @@ impl AsepriteDoc {
             tags_added += 1;
         }
         Ok(SheetImportReport {
-            layer: layer_index,
+            layer: first_layer.unwrap_or(0),
             first_frame: base,
             frames_added: plan.frames.len(),
             tags_added,

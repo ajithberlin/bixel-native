@@ -26,14 +26,21 @@ fn set_and_get_pixel_roundtrip() {
 }
 
 #[test]
-fn add_frame_creates_cels_on_all_layers() {
+fn add_frame_creates_independent_layer_stack() {
     let mut doc = AsepriteDoc::new(4, 4, &[]);
     doc.add_layer(Some("bg"));
     doc.add_frame(200);
     assert_eq!(doc.frames.len(), 2);
-    assert_eq!(doc.layers.len(), 2);
-    assert_eq!(doc.layers[0].cels.len(), 2);
-    assert_eq!(doc.layers[1].cels.len(), 2);
+    // Frame 0 keeps its two layers; frame 1 gets a single fresh layer.
+    assert_eq!(doc.frame_layers(0).len(), 2);
+    assert_eq!(doc.frame_layers(1).len(), 1);
+    assert_eq!(doc.layers.len(), 3);
+    // Every layer tracks every frame slot for storage compatibility.
+    for layer in &doc.layers {
+        assert_eq!(layer.cels.len(), 2);
+    }
+    // Existing layers have no cel on the new frame.
+    assert!(doc.layers[0].cels[1].is_none());
     assert_eq!(doc.frames[1].duration_ms, 200);
 }
 
@@ -153,40 +160,80 @@ fn flood_fill_bounded_region() {
 }
 
 #[test]
-fn reorder_frame_preserves_layers_timing_and_undo() {
+fn legacy_global_layers_expand_to_per_frame_stacks() {
+    // A pre-per-frame (schema-1) document: one layer with a cel on every frame.
+    let json = serde_json::json!({
+        "schema": 1,
+        "document": {
+            "width": 1, "height": 1, "palette": [],
+            "frames": [
+                {"index": 0, "duration_ms": 100},
+                {"index": 1, "duration_ms": 100}
+            ],
+            "tags": [],
+            "layers": [{
+                "name": "Shared",
+                "visible": true,
+                "locked": false,
+                "opacity": 1.0,
+                "blend_mode": "Normal",
+                "cels": [
+                    {"layer_index":0,"frame_index":0,"width":1,"height":1,"data":[1,0,0,255]},
+                    {"layer_index":0,"frame_index":1,"width":1,"height":1,"data":[2,0,0,255]}
+                ]
+            }]
+        }
+    }).to_string();
+
+    let doc = AsepriteDoc::from_json(&json).unwrap();
+    // Each frame gets its own copy so the layers panel stays frame-accurate.
+    assert_eq!(doc.frame_layers(0).len(), 1);
+    assert_eq!(doc.frame_layers(1).len(), 1);
+    let first = doc.frame_layers(0)[0];
+    let second = doc.frame_layers(1)[0];
+    assert_eq!(doc.layer_frame(first), Some(0));
+    assert_eq!(doc.layer_frame(second), Some(1));
+    assert_eq!(doc.get_pixel(first, 0, 0, 0).r, 1);
+    assert_eq!(doc.get_pixel(second, 1, 0, 0).r, 2);
+    // Legacy content still composites identically per frame.
+    assert_eq!(doc.composite_frame(0)[0], 1);
+    assert_eq!(doc.composite_frame(1)[0], 2);
+}
+
+#[test]
+fn reorder_frame_preserves_layer_stacks_timing_and_undo() {
     let mut doc = AsepriteDoc::new(2, 2, &[]);
     doc.add_layer(Some("overlay"));
     doc.add_frame(250);
     doc.add_frame(500);
+    // A distinct marker on each frame's own top layer.
     for frame in 0..3 {
-        for layer in 0..2 {
-            doc.set_pixel(layer, frame, 0, 0, rgba((frame * 10 + layer + 1) as u8, 0, 0, 255));
-        }
+        let top = *doc.frame_layers(frame).last().unwrap();
+        doc.set_pixel(top, frame, 0, 0, rgba((frame + 1) as u8, 0, 0, 255));
     }
+    let layer_count = doc.layers.len();
     doc.snapshot();
     doc.reorder_frame(0, 2);
     assert_eq!(doc.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), vec![250, 500, 125]);
-    assert_eq!(doc.get_pixel(0, 2, 0, 0).r, 1);
-    assert_eq!(doc.get_pixel(1, 2, 0, 0).r, 2);
-    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 12);
     for (index, frame) in doc.frames.iter().enumerate() {
         assert_eq!(frame.index, index);
-        for (layer_index, layer) in doc.layers.iter().enumerate() {
-            let cel = layer.cels[index].as_ref().unwrap();
-            assert_eq!(cel.frame_index, index);
-            assert_eq!(cel.layer_index, layer_index);
-        }
     }
+    // The old frame 0 stack (marker 1) now lives at frame 2.
+    let moved = *doc.frame_layers(2).last().unwrap();
+    assert_eq!(doc.layer_frame(moved), Some(2));
+    assert_eq!(doc.get_pixel(moved, 2, 0, 0).r, 1);
+    // Frame 0 now holds the old frame 1 stack (marker 2).
+    let now_first = *doc.frame_layers(0).last().unwrap();
+    assert_eq!(doc.get_pixel(now_first, 0, 0, 0).r, 2);
+    assert_eq!(doc.layers.len(), layer_count);
     assert!(doc.undo());
-    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
+    let original_first = *doc.frame_layers(0).last().unwrap();
+    assert_eq!(doc.get_pixel(original_first, 0, 0, 0).r, 1);
     assert!(doc.redo());
-    assert_eq!(doc.get_pixel(1, 2, 0, 0).r, 2);
     doc.reorder_frame(2, 0);
     assert_eq!(doc.frames.iter().map(|f| f.duration_ms).collect::<Vec<_>>(), vec![125, 250, 500]);
-    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
     doc.reorder_frame(0, 99);
     doc.reorder_frame(99, 0);
     doc.reorder_frame(0, 0);
     assert_eq!(doc.frames.len(), 3);
-    assert_eq!(doc.get_pixel(1, 0, 0, 0).r, 2);
 }

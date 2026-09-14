@@ -177,6 +177,7 @@ struct EyedropperOverlayView: View {
             if let session = model.eyedropperSession, session.isActive {
                 EyedropperLoupeView(session: session)
                     .position(session.viewPosition)
+                    .animation(.interactiveSpring(response: 0.14, dampingFraction: 0.9), value: session.viewPosition)
                     .transition(.scale(scale: 0.85).combined(with: .opacity))
             }
         }

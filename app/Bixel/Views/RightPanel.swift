@@ -72,7 +72,8 @@ struct LayersPopover: View {
                                     thumbWidth: model.width,
                                     thumbHeight: model.height,
                                     canDelete: model.layers.count > 1,
-                                    onSelect: { model.activeLayer = layer.index },
+                                    activeToolSymbol: isSelected ? model.tool.symbol : nil,
+                                    onSelect: { model.selectLayer(layer.index) },
                                     onToggle: { model.toggleLayerVisibility(layer.index) },
                                     onRename: { model.renameLayer(layer.index, name: $0) },
                                     onDelete: {
@@ -119,7 +120,7 @@ struct LayersPopover: View {
                                     }
                             )
                             .onTapGesture {
-                                model.activeLayer = layer.index
+                                model.selectLayer(layer.index)
                             }
                         }
                     }
@@ -253,17 +254,20 @@ struct LayersPopover: View {
 
     private func handleDragEnded(uiIndex: Int, layerIndex: Int, value: DragGesture.Value) {
         guard let sourceLayer = draggingLayerIndex, let sourceUI = draggingUIIndex else {
-            model.activeLayer = layerIndex
+            model.selectLayer(layerIndex)
             return
         }
         let targetUI = targetUIIndex ?? sourceUI
 
         withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
             if sourceUI != targetUI {
-                let targetLayer = (model.layers.count - 1) - targetUI
+                // UI rows are top-first; map the drop slot back to a global
+                // layer index in the bottom-first document order.
+                let reversed = Array(model.layers.reversed())
+                let targetLayer = reversed.indices.contains(targetUI) ? reversed[targetUI].index : sourceLayer
                 model.moveLayer(from: sourceLayer, to: targetLayer)
             } else {
-                model.activeLayer = sourceLayer
+                model.selectLayer(sourceLayer)
             }
             draggingLayerIndex = nil
             draggingUIIndex = nil
@@ -306,6 +310,7 @@ struct ProcreateLayerRow: View {
     let thumbWidth: Int
     let thumbHeight: Int
     let canDelete: Bool
+    let activeToolSymbol: String?
     let onSelect: () -> Void
     let onToggle: () -> Void
     let onRename: (String) -> Void
@@ -340,16 +345,26 @@ struct ProcreateLayerRow: View {
                     .textFieldStyle(.plain)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(selected ? .white : StudioTheme.textPrimary)
-                } else {
-                    Text(layer.name)
-                        .font(.system(size: 13, weight: selected ? .semibold : .regular))
-                        .foregroundColor(selected ? .white : Color.white.opacity(0.88))
-                        .lineLimit(1)
-                        .onTapGesture(count: 2) {
-                            draft = layer.name
-                            editing = true
-                        }
-                }
+                                } else {
+                                    HStack(spacing: 5) {
+                                        Text(layer.name)
+                                            .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                                            .foregroundColor(selected ? .white : Color.white.opacity(0.88))
+                                            .lineLimit(1)
+                                            .onTapGesture(count: 2) {
+                                                draft = layer.name
+                                                editing = true
+                                            }
+                                        if let symbol = activeToolSymbol {
+                                            Image(systemName: symbol)
+                                                .font(.system(size: 9, weight: .bold))
+                                                .foregroundColor(selected ? .white : StudioTheme.accent)
+                                                .frame(width: 16, height: 16)
+                                                .background(Circle().fill(selected ? Color.white.opacity(0.25) : StudioTheme.accentSoft))
+                                                .help("Drawing on this layer")
+                                        }
+                                    }
+                                }
 
                 if let sub = layer.subtitle {
                     Text(sub)
@@ -513,6 +528,13 @@ struct ColorPopover: View {
                     .fill(Color(red: Double(model.currentColor.r)/255, green: Double(model.currentColor.g)/255, blue: Double(model.currentColor.b)/255))
                     .frame(width: 28, height: 28)
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.white.opacity(0.2), lineWidth: 1))
+                    .onDrag {
+                        NSItemProvider(item: ColorDropPayload(model.currentColor).jsonData as NSData,
+                                       typeIdentifier: ColorDropPayload.typeIdentifier)
+                    } preview: {
+                        ColorDropPreview(color: model.currentColor)
+                    }
+                    .help("Drag onto the canvas to fill")
                 Text(model.currentColor.hex.uppercased())
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundColor(Color.white.opacity(0.85))
@@ -532,6 +554,12 @@ struct ColorPopover: View {
                                     .stroke(c == model.currentColor ? Color.white : Color.white.opacity(0.12), lineWidth: c == model.currentColor ? 2 : 0.5)
                             )
                             .onTapGesture { model.currentColor = c }
+                            .onDrag {
+                                NSItemProvider(item: ColorDropPayload(c).jsonData as NSData,
+                                               typeIdentifier: ColorDropPayload.typeIdentifier)
+                            } preview: {
+                                ColorDropPreview(color: c)
+                            }
                     }
                 }
                 .padding(.horizontal, 16)
@@ -573,6 +601,31 @@ struct RightPanel: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - ColorDrop drag preview
+
+/// Floating preview shown while dragging a color out of the palette, so it
+/// reads as a deliberate "pour this color" gesture rather than a swatch.
+struct ColorDropPreview: View {
+    let color: BixelColor
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color(red: Double(color.r) / 255,
+                            green: Double(color.g) / 255,
+                            blue: Double(color.b) / 255))
+                .frame(width: 44, height: 44)
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: 2))
+                .shadow(color: .black.opacity(0.4), radius: 6, y: 3)
+            Image(systemName: "paintbrush.pointed.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.5), radius: 1)
+        }
+        .padding(8)
     }
 }
 

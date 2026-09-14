@@ -81,6 +81,31 @@ final class Document: @unchecked Sendable {
         Int(bixel_doc_add_layer(handle, name))
     }
 
+    /// Add a layer owned by `frame` (per-frame layer stacks). Returns the new
+    /// global layer index, or -1 for an invalid frame.
+    func addLayerForFrame(_ name: String?, frame: Int) -> Int {
+        Int(bixel_doc_add_layer_for_frame(handle, name, UInt32(frame)))
+    }
+
+    /// Owning frame of a global layer index, or -1 when out of range.
+    func layerFrame(_ index: Int) -> Int {
+        let frame = bixel_doc_layer_frame(handle, UInt32(index))
+        return frame == UInt32.max ? -1 : Int(frame)
+    }
+
+    /// Stable layer identity that survives reorders and undo.
+    func layerUID(_ index: Int) -> UInt64 {
+        bixel_doc_layer_uid(handle, UInt32(index))
+    }
+
+    /// Global layer indices owned by `frame`, bottom-first.
+    func frameLayers(_ frame: Int) -> [Int] {
+        let ptr = bixel_doc_frame_layers_json(handle, UInt32(frame))
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
+    }
+
     func removeLayer(_ index: Int) {
         bixel_doc_remove_layer(handle, UInt32(index))
     }

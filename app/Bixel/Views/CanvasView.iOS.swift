@@ -114,6 +114,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private let selectionHandlesLayer = CAShapeLayer()
     private let rotationHandleLayer = CAShapeLayer()
     private let borderLayer = CALayer()
+    /// Procreate-style outline shown while a palette color is dragged in.
+    private let colorDropHighlightLayer = CAShapeLayer()
     private let workspaceDimLayer = CAShapeLayer()
     private let floatingImageLayer = CALayer()
     private let floatingOutlineLayer = CAShapeLayer()
@@ -139,6 +141,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private var panRecognizer: UIPanGestureRecognizer!
     private var twoFingerTapRecognizer: UITapGestureRecognizer!
     private var threeFingerTapRecognizer: UITapGestureRecognizer!
+    private var longPressRecognizer: UILongPressGestureRecognizer!
+    private var isLongPressEyedropper = false
     private let hudLabel = UILabel()
 
     override init(frame: CGRect) {
@@ -215,6 +219,17 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         borderLayer.borderWidth = 1.0
         artboardLayer.addSublayer(borderLayer)
 
+        colorDropHighlightLayer.fillColor = UIColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.12).cgColor
+        colorDropHighlightLayer.strokeColor = UIColor.white.withAlphaComponent(0.9).cgColor
+        colorDropHighlightLayer.lineWidth = 2.0
+        colorDropHighlightLayer.lineDashPattern = [7, 5]
+        colorDropHighlightLayer.isHidden = true
+        artboardLayer.addSublayer(colorDropHighlightLayer)
+
+        // Procreate-style ColorDrop: fill the layer when a palette color is
+        // dragged onto the canvas.
+        addInteraction(UIDropInteraction(delegate: self))
+
         workspaceDimLayer.fillColor = UIColor.black.cgColor
         workspaceDimLayer.fillRule = .evenOdd
         workspaceDimLayer.opacity = Float(Self.workspaceDimAlpha)
@@ -246,6 +261,16 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         threeFingerTapRecognizer.numberOfTapsRequired = 1
         threeFingerTapRecognizer.delegate = self
         addGestureRecognizer(threeFingerTapRecognizer)
+
+        // Long-press: Procreate-style canvas color pick with magnifying loupe.
+        // Touches keep flowing so we can abort the in-flight pencil dot ourselves
+        // and ignore further stroke movement while the loupe is active.
+        longPressRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
+        longPressRecognizer.minimumPressDuration = 0.28
+        longPressRecognizer.numberOfTouchesRequired = 1
+        longPressRecognizer.cancelsTouchesInView = false
+        longPressRecognizer.delegate = self
+        addGestureRecognizer(longPressRecognizer)
 
         twoFingerTapRecognizer.require(toFail: threeFingerTapRecognizer)
         panRecognizer.require(toFail: twoFingerTapRecognizer)
@@ -304,6 +329,8 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         }
         canvasImageLayer.frame = localFrame
         borderLayer.frame = localFrame
+        colorDropHighlightLayer.frame = localFrame
+        colorDropHighlightLayer.path = CGPath(rect: localFrame.insetBy(dx: 1, dy: 1), transform: nil)
         pixelGridLayer.frame = localFrame
 
         updatePixelGrid()
@@ -475,6 +502,47 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         showGestureHUD("Redo")
     }
 
+    // MARK: - Long-press Eyedropper
+
+    /// Place the loupe above the finger so it is never hidden under the touch.
+    private func loupePosition(for point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: max(96, point.y - 104))
+    }
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard let coordinator else { return }
+        let model = coordinator.model
+        // Only the drawing tools long-press into the eyedropper; the eyedropper
+        // tool itself picks directly from touchesBegan.
+        guard model.tool == .pencil || model.tool == .eraser || model.tool == .smudge else { return }
+
+        let point = gesture.location(in: self)
+        switch gesture.state {
+        case .began:
+            isLongPressEyedropper = true
+            model.abortStroke()
+            triggerHapticFeedback()
+            if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                model.startEyedropperSession(at: pixel, viewPosition: loupePosition(for: point), sourceTool: model.tool)
+            }
+        case .changed:
+            guard isLongPressEyedropper else { return }
+            if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                model.updateEyedropperSession(at: pixel, viewPosition: loupePosition(for: point))
+            }
+        case .ended:
+            guard isLongPressEyedropper else { return }
+            isLongPressEyedropper = false
+            model.commitEyedropperSession()
+        case .cancelled, .failed:
+            guard isLongPressEyedropper else { return }
+            isLongPressEyedropper = false
+            model.cancelEyedropperSession()
+        default:
+            break
+        }
+    }
+
     private func triggerHapticFeedback() {
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.prepare()
@@ -522,6 +590,7 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let coordinator else { return }
+        if isLongPressEyedropper { return }
         if (event?.allTouches?.count ?? 0) > 1 {
             coordinator.model.abortStroke()
             return
@@ -529,11 +598,25 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
         guard touches.count == 1, let touch = touches.first else { return }
         let point = touch.location(in: self)
         guard let pixel = coordinator.pixelCoordinate(point, in: self) else { return }
+        // The eyedropper tool samples live with the loupe instead of drawing.
+        if coordinator.model.tool == .eyedropper {
+            coordinator.model.startEyedropperSession(at: pixel, viewPosition: loupePosition(for: point), sourceTool: .eyedropper)
+            return
+        }
         coordinator.model.beginStroke(x: pixel.x, y: pixel.y)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let coordinator else { return }
+        if isLongPressEyedropper { return }
+        if coordinator.model.eyedropperSession?.isActive == true {
+            guard touches.count == 1, let touch = touches.first else { return }
+            let point = touch.location(in: self)
+            if let pixel = coordinator.pixelCoordinate(point, in: self, clamp: true) {
+                coordinator.model.updateEyedropperSession(at: pixel, viewPosition: loupePosition(for: point))
+            }
+            return
+        }
         if (event?.allTouches?.count ?? 0) > 1 {
             coordinator.model.abortStroke()
             return
@@ -546,6 +629,11 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let coordinator else { return }
+        if isLongPressEyedropper { return }
+        if coordinator.model.eyedropperSession?.isActive == true {
+            coordinator.model.commitEyedropperSession()
+            return
+        }
         guard (event?.allTouches?.count ?? 0) <= 1, let touch = touches.first else {
             coordinator.model.abortStroke()
             return
@@ -557,7 +645,49 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let coordinator else { return }
+        if coordinator.model.eyedropperSession?.isActive == true, coordinator.model.tool == .eyedropper {
+            coordinator.model.cancelEyedropperSession()
+        }
         coordinator.model.abortStroke()
+    }
+}
+
+// MARK: - ColorDrop (native drop handling)
+
+extension PixelCanvasUIView: UIDropInteractionDelegate {
+    func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+        session.hasItemsConforming(toTypeIdentifiers: [ColorDropPayload.typeIdentifier])
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: UIDropSession) {
+        setColorDropHighlight(true)
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) {
+        setColorDropHighlight(false)
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+        UIDropProposal(operation: .copy)
+    }
+
+    func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+        setColorDropHighlight(false)
+        guard let item = session.items.first else { return }
+        item.itemProvider.loadDataRepresentation(forTypeIdentifier: ColorDropPayload.typeIdentifier) { [weak self] data, _ in
+            guard let self, let data, let payload = ColorDropPayload(jsonData: data) else { return }
+            DispatchQueue.main.async {
+                self.coordinator?.model.dropFill(payload.color)
+            }
+        }
+    }
+
+    private func setColorDropHighlight(_ visible: Bool) {
+        guard colorDropHighlightLayer.isHidden == visible else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        colorDropHighlightLayer.isHidden = !visible
+        CATransaction.commit()
     }
 }
 #endif

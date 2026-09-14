@@ -177,7 +177,10 @@ struct FloatingImageImport {
 }
 
 struct LayerInfo: Identifiable {
-    let id: UUID
+    /// Stable identity from the Rust layer uid; survives reorders and undo.
+    let id: UInt64
+    /// Global layer index in the document. Layers are owned by one frame, so
+    /// this is the index used for every document call.
     let index: Int
     var name: String
     var visible: Bool
@@ -230,14 +233,20 @@ final class EditorModel: ObservableObject {
     }
 
     // Document state
-    @Published var frame: Int = 0 { didSet { notifyCanvasChanged() } }
+    @Published var frame: Int = 0 {
+        didSet {
+            notifyCanvasChanged()
+            // Layers are per-frame; switching frames swaps the whole layer stack.
+            if frame != oldValue { reloadLayers() }
+        }
+    }
     @Published var playing: Bool = false
     @Published var activeLayer: Int = 0
     @Published var layers: [LayerInfo] = []
     /// Stable identities for timeline frames so reordering animates as a move
     /// (index-keyed identities would just swap content in place).
     @Published private(set) var frameIDs: [UUID] = []
-    @Published private(set) var layerIDs: [UUID] = []
+    @Published private(set) var layerIDs: [UInt64] = []
     @Published var selectionRect: CGRect?
     @Published var transformRect: CGRect?
     /// Frames captured via copy/cut, ready to be pasted after the current frame.
@@ -363,23 +372,17 @@ final class EditorModel: ObservableObject {
         }
     }
 
-    private func ensureLayerIDs() {
-        let count = document.layerCount
-        if layerIDs.count == count { return }
-        if layerIDs.count < count {
-            layerIDs.append(contentsOf: (layerIDs.count..<count).map { _ in UUID() })
-        } else {
-            layerIDs.removeLast(layerIDs.count - count)
-        }
-    }
-
+    /// Rebuild the current frame's layer stack from the document. Layers are
+    /// per-frame, so this filters the global layer storage down to the layers
+    /// owned by `frame`, preserving their stacking order.
     func reloadLayers() {
-        ensureLayerIDs()
-        let prev = Dictionary(uniqueKeysWithValues: layers.map { ($0.index, ($0.blendMode, $0.subtitle)) })
-        layers = (0..<document.layerCount).map { i in
-            let existing = prev[i]
+        let current = document.frameLayers(frame)
+        let prev = Dictionary(uniqueKeysWithValues: layers.map { ($0.id, ($0.blendMode, $0.subtitle)) })
+        layers = current.map { i in
+            let uid = document.layerUID(i)
+            let existing = prev[uid]
             return LayerInfo(
-                id: layerIDs[i],
+                id: uid,
                 index: i,
                 name: document.layerName(i),
                 visible: document.isLayerVisible(i),
@@ -388,6 +391,21 @@ final class EditorModel: ObservableObject {
                 subtitle: existing?.1
             )
         }
+        layerIDs = layers.map(\.id)
+        if !layers.contains(where: { $0.index == activeLayer }) {
+            activeLayer = layers.last?.index ?? 0
+        }
+    }
+
+    /// The global layer index currently at a bottom-first stack position.
+    func layerIndex(atPosition position: Int) -> Int? {
+        guard layers.indices.contains(position) else { return nil }
+        return layers[position].index
+    }
+
+    /// The bottom-first stack position of a global layer index.
+    func layerPosition(of index: Int) -> Int? {
+        layers.firstIndex(where: { $0.index == index })
     }
 
     func setLayerBlendMode(_ index: Int, _ mode: String) {
@@ -398,22 +416,21 @@ final class EditorModel: ObservableObject {
     }
 
     func duplicateLayer(_ index: Int) {
-        guard index >= 0, index < document.layerCount else { return }
+        guard document.layerFrame(index) == frame else { return }
         document.snapshot()
         let name = "\(document.layerName(index)) Copy"
-        let newIdx = document.addLayer(name)
-        for f in 0..<document.frameCount {
-            let rgba = document.celRGBA(layer: index, frame: f)
-            document.loadImageData(rgba, width: width, height: height, layer: newIdx, frame: f)
-        }
-        let oldOpacity = document.layerOpacity(index)
-        document.setLayerOpacity(newIdx, oldOpacity)
+        let newIdx = document.addLayerForFrame(name, frame: frame)
+        guard newIdx >= 0 else { return }
+        let rgba = document.celRGBA(layer: index, frame: frame)
+        document.loadImageData(rgba, width: width, height: height, layer: newIdx, frame: frame)
+        document.setLayerOpacity(newIdx, document.layerOpacity(index))
+        document.setLayerVisible(newIdx, document.isLayerVisible(index))
         activeLayer = newIdx
         reloadLayers()
         if let origMode = layers.first(where: { $0.index == index })?.blendMode {
             setLayerBlendMode(newIdx, origMode)
         }
-        commitChange(allFrames: true)
+        commitChange(allFrames: false)
     }
 
     // MARK: - Selection and transform
@@ -762,20 +779,36 @@ final class EditorModel: ObservableObject {
 
     func addLayer() {
         document.snapshot()
-        activeLayer = document.addLayer()
+        let index = document.addLayerForFrame(nil, frame: frame)
+        if index >= 0 { activeLayer = index }
         reloadLayers()
-        commitChange(allFrames: true)
+        commitChange(allFrames: false)
+    }
+
+    /// Select a layer in the panel. Selecting a layer arms a drawing tool when
+    /// the current tool cannot draw, so tapping a layer never leaves the canvas
+    /// mysteriously inert.
+    func selectLayer(_ index: Int) {
+        guard document.layerFrame(index) == frame else { return }
+        activeLayer = index
+        if tool == .selection || tool == .transform || tool == .eyedropper {
+            selectTool(.pencil)
+        }
     }
 
     func deleteLayer() {
-        guard document.layerCount > 1 else { return }
+        guard layers.count > 1 else { return }
+        let position = layerPosition(of: activeLayer) ?? 0
         document.snapshot()
-        let removed = activeLayer
         document.removeLayer(activeLayer)
-        if layerIDs.indices.contains(removed) { layerIDs.remove(at: removed) }
-        activeLayer = max(0, activeLayer - 1)
         reloadLayers()
-        commitChange(allFrames: true)
+        let newPosition = min(position, max(0, layers.count - 1))
+        if layers.indices.contains(newPosition) {
+            activeLayer = layers[newPosition].index
+        } else {
+            activeLayer = layers.last?.index ?? 0
+        }
+        commitChange(allFrames: false)
     }
 
     func renameLayer(_ index: Int, name: String) {
@@ -792,28 +825,26 @@ final class EditorModel: ObservableObject {
         let newValue = !document.isLayerVisible(index)
         document.setLayerVisible(index, newValue)
         reloadLayers()
-        commitChange(allFrames: true)
+        commitChange(allFrames: false)
     }
 
     func setLayerOpacity(_ index: Int, _ value: Double) {
         document.setLayerOpacity(index, Float(value))
-        if layers.indices.contains(index) { layers[index].opacity = value }
-        commitChange(allFrames: true)
+        if let position = layerPosition(of: index) { layers[position].opacity = value }
+        commitChange(allFrames: false)
     }
 
-    /// Move a layer in the stack (0 = bottom); standard remove-then-insert.
+    /// Move a layer within the current frame's stack (0 = bottom). `from` and
+    /// `to` are global layer indices; the host maps them to stack positions.
     func moveLayer(from: Int, to: Int) {
         guard from != to, from >= 0, to >= 0,
-              from < document.layerCount, to < document.layerCount else { return }
+              document.layerFrame(from) == frame, document.layerFrame(to) == frame else { return }
         document.snapshot()
+        let movedUID = document.layerUID(from)
         document.reorderLayer(from: from, to: to)
-        if layerIDs.indices.contains(from), layerIDs.indices.contains(to) {
-            let id = layerIDs.remove(at: from)
-            layerIDs.insert(id, at: to)
-        }
-        activeLayer = to
         reloadLayers()
-        commitChange(allFrames: true)
+        if let match = layers.first(where: { $0.id == movedUID }) { activeLayer = match.index }
+        commitChange(allFrames: false)
     }
 
     /// Thumbnail CGImage for a layer at the current frame. Downsampled so layer
@@ -1166,6 +1197,44 @@ final class EditorModel: ObservableObject {
         opacity = 1.0
     }
 
+    // MARK: - ColorDrop
+
+    /// Procreate-style ColorDrop: fill the active layer (or just the current
+    /// selection) with the dragged color. Whole-layer fill replaces the cel;
+    /// with a marquee only the selected pixels change.
+    func dropFill(_ color: BixelColor) {
+        guard activeLayer >= 0, document.layerFrame(activeLayer) == frame else { return }
+        document.snapshot()
+        let byteCount = width * height * 4
+        var pixels = document.celRGBA(layer: activeLayer, frame: frame)
+        if pixels.count != byteCount { pixels = [UInt8](repeating: 0, count: byteCount) }
+
+        let rect = (transformRect ?? selectionRect)?.integral
+        if let rect {
+            let minX = max(0, Int(rect.minX)), maxX = min(width, Int(rect.maxX))
+            let minY = max(0, Int(rect.minY)), maxY = min(height, Int(rect.maxY))
+            if minX < maxX, minY < maxY {
+                for y in minY..<maxY {
+                    let row = y * width
+                    for x in minX..<maxX {
+                        let i = (row + x) * 4
+                        pixels[i] = color.r; pixels[i + 1] = color.g
+                        pixels[i + 2] = color.b; pixels[i + 3] = color.a
+                    }
+                }
+            }
+        } else {
+            for i in stride(from: 0, to: byteCount, by: 4) {
+                pixels[i] = color.r; pixels[i + 1] = color.g
+                pixels[i + 2] = color.b; pixels[i + 3] = color.a
+            }
+        }
+
+        document.loadImageData(pixels, width: width, height: height, layer: activeLayer, frame: frame)
+        currentColor = color
+        commitChange()
+    }
+
     // MARK: - Animation
 
     func togglePlayback() { playing ? pause() : play() }
@@ -1198,17 +1267,40 @@ final class EditorModel: ObservableObject {
     }
 
     func addFrame() {
+        document.snapshot()
         frame = document.addFrame(durationMs: 125)
         commitChange(allFrames: true)
     }
 
     func duplicateFrame() {
-        // Copy the current frame's active layer cel into a brand-new frame.
+        // Copy every layer of the current frame into a brand-new frame so the
+        // duplicate keeps the same stack (not just a flattened composite).
         document.snapshot()
-        let src = document.compositeRGBA(frame: frame)
-        let newFrame = document.addFrame(durationMs: 125)
-        document.loadImageData(src, width: width, height: height, layer: 0, frame: newFrame)
+        let sources = document.frameLayers(frame)
+        let sourceModes = layers.map(\.blendMode)
+        let duration = document.frameDuration(frame)
+        let sourceFrame = frame
+        let newFrame = document.addFrame(durationMs: duration)
+        let seeded = document.frameLayers(newFrame)
+        for (i, source) in sources.enumerated() {
+            let dest: Int
+            if i == 0, let first = seeded.first {
+                dest = first
+                document.renameLayer(dest, name: document.layerName(source))
+            } else {
+                dest = document.addLayerForFrame(document.layerName(source), frame: newFrame)
+                guard dest >= 0 else { continue }
+            }
+            let rgba = document.celRGBA(layer: source, frame: sourceFrame)
+            document.loadImageData(rgba, width: width, height: height, layer: dest, frame: newFrame)
+            document.setLayerOpacity(dest, document.layerOpacity(source))
+            document.setLayerVisible(dest, document.isLayerVisible(source))
+        }
         frame = newFrame
+        reloadLayers()
+        for (i, mode) in sourceModes.enumerated() where layers.indices.contains(i) {
+            layers[i].blendMode = mode
+        }
         commitChange(allFrames: true)
     }
 
@@ -1261,7 +1353,7 @@ final class EditorModel: ObservableObject {
     func copyFrame(at index: Int? = nil) {
         let index = index ?? frame
         guard index >= 0, index < frameCount else { return }
-        let layers = (0..<document.layerCount).map { document.celRGBA(layer: $0, frame: index) }
+        let layers = document.frameLayers(index).map { document.celRGBA(layer: $0, frame: index) }
         frameClipboard = [FrameClipboardItem(
             layers: layers,
             durationMs: document.frameDuration(index),
@@ -1292,7 +1384,16 @@ final class EditorModel: ObservableObject {
             let inserted = document.addFrame(durationMs: clip.durationMs)
             let dest = min(max(target, 0), document.frameCount - 1)
             if inserted != dest { document.reorderFrame(from: inserted, to: dest) }
-            for (layer, data) in clip.layers.enumerated() where layer < document.layerCount {
+            // `addFrame` seeds one empty layer; fill it and add the rest.
+            let seeded = document.frameLayers(dest)
+            for (i, data) in clip.layers.enumerated() {
+                let layer: Int
+                if i == 0, let first = seeded.first {
+                    layer = first
+                } else {
+                    layer = document.addLayerForFrame(nil, frame: dest)
+                    guard layer >= 0 else { continue }
+                }
                 document.loadImageData(data, width: clip.width, height: clip.height, layer: layer, frame: dest)
             }
             target = dest + 1
@@ -1371,8 +1472,19 @@ final class EditorModel: ObservableObject {
         AnimationExporter.exportVideo(model: self, scale: scale, minimumDuration: minimumDuration)
     }
 
-    func undo() { if document.undo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }
-    func redo() { if document.redo() { reloadLayers(); frame = min(frame, frameCount - 1); activeLayer = min(activeLayer, layers.count - 1); commitChange(allFrames: true) } }
+    func undo() {
+        guard document.undo() else { return }
+        let restoredFrame = min(frame, frameCount - 1)
+        if restoredFrame != frame { frame = restoredFrame } else { reloadLayers() }
+        commitChange(allFrames: true)
+    }
+
+    func redo() {
+        guard document.redo() else { return }
+        let restoredFrame = min(frame, frameCount - 1)
+        if restoredFrame != frame { frame = restoredFrame } else { reloadLayers() }
+        commitChange(allFrames: true)
+    }
 
     // MARK: - Canvas
 
@@ -1600,15 +1712,15 @@ final class EditorModel: ObservableObject {
 
         do {
             switch image.target {
-            case let .newFrame(layer: layer):
-                guard layer >= 0 && layer < document.layerCount else {
-                    throw StorageError.message("The floating import's target layer is no longer available.")
-                }
+            case .newFrame:
+                // A new frame owns a fresh layer stack; place the image on its
+                // seeded layer rather than a layer that belongs to another frame.
                 document.snapshot()
                 let newFrame = document.addFrame(durationMs: 125)
-                document.loadImageData(rasterized, width: width, height: height, layer: layer, frame: newFrame)
+                let newLayer = document.frameLayers(newFrame).last ?? 0
+                document.loadImageData(rasterized, width: width, height: height, layer: newLayer, frame: newFrame)
                 frame = newFrame
-                activeLayer = layer
+                activeLayer = newLayer
             case let .newLayer(frame: targetFrame, name: name):
                 guard targetFrame >= 0 && targetFrame < document.frameCount else {
                     throw StorageError.message("The floating import's target frame is no longer available.")
@@ -1695,8 +1807,8 @@ final class EditorModel: ObservableObject {
                 manifest: manifest, layerName: name, replace: false
             )
             frame = max(0, document.frameCount - added)
-            activeLayer = max(0, document.layerCount - 1)
             reloadLayers()
+            activeLayer = layers.last?.index ?? 0
             commitChange(allFrames: true)
         } catch { operationError = error.localizedDescription }
     }
@@ -1736,7 +1848,7 @@ final class EditorModel: ObservableObject {
             "width": width,
             "height": height,
             "frame_count": frameCount,
-            "layer_count": document.layerCount,
+            "layer_count": layers.count,
             "frame": frame,
             "active_layer": activeLayer,
             "tool": tool.rawValue,
@@ -1846,46 +1958,50 @@ final class EditorModel: ObservableObject {
 
         case "add_layer":
             document.snapshot()
-            let index = document.addLayer(op["name"] as? String)
+            let index = document.addLayerForFrame(op["name"] as? String, frame: frame)
+            guard index >= 0 else { throw AgentOpError("cannot add a layer to frame \(frame)") }
+            reloadLayers()
             activeLayer = index
             return ["index": index]
 
         case "remove_layer":
             let index = try int("index")
-            guard document.layerCount > 1 else { throw AgentOpError("cannot remove the last layer") }
-            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            guard document.layerFrame(index) == frame else { throw AgentOpError("layer \(index) does not belong to frame \(frame)") }
+            guard layers.count > 1 else { throw AgentOpError("cannot remove the last layer") }
             document.snapshot()
             document.removeLayer(index)
-            activeLayer = min(activeLayer, document.layerCount - 1)
+            reloadLayers()
             return [:]
 
         case "rename_layer":
             let index = try int("index")
-            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            guard document.layerFrame(index) == frame else { throw AgentOpError("layer \(index) does not belong to frame \(frame)") }
             document.snapshot()
             document.renameLayer(index, name: try string("name"))
             return [:]
 
         case "reorder_layer":
             let from = try int("from"), to = try int("to")
-            guard from >= 0, to >= 0, from < document.layerCount, to < document.layerCount else {
-                throw AgentOpError("layer reorder out of range")
+            guard document.layerFrame(from) == frame, document.layerFrame(to) == frame else {
+                throw AgentOpError("layer reorder requires layers on the current frame")
             }
             document.snapshot()
+            let movedUID = document.layerUID(from)
             document.reorderLayer(from: from, to: to)
-            activeLayer = to
+            reloadLayers()
+            if let match = layers.first(where: { $0.id == movedUID }) { activeLayer = match.index }
             return [:]
 
         case "set_layer_visible":
             let index = try int("index")
-            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            guard document.layerFrame(index) == frame else { throw AgentOpError("layer \(index) does not belong to frame \(frame)") }
             document.snapshot()
             document.setLayerVisible(index, try bool("visible"))
             return [:]
 
         case "set_layer_opacity":
             let index = try int("index")
-            guard index >= 0, index < document.layerCount else { throw AgentOpError("layer \(index) is out of range") }
+            guard document.layerFrame(index) == frame else { throw AgentOpError("layer \(index) does not belong to frame \(frame)") }
             let value = try double("opacity")
             document.snapshot()
             document.setLayerOpacity(index, Float(min(1, max(0, value))))
@@ -1984,6 +2100,7 @@ final class EditorModel: ObservableObject {
                 cellWidth: width, cellHeight: height, name: op["name"] as? String ?? "Sheet"
             )
             activeLayer = index
+            reloadLayers()
             return ["layer": index]
 
         case "add_animation":
@@ -1996,7 +2113,8 @@ final class EditorModel: ObservableObject {
                 replace: op["replace"] as? Bool ?? false
             )
             frame = max(0, document.frameCount - added)
-            activeLayer = max(0, document.layerCount - 1)
+            reloadLayers()
+            activeLayer = layers.last?.index ?? 0
             return ["frames_added": added]
 
         case "export_png":
@@ -2023,8 +2141,10 @@ final class EditorModel: ObservableObject {
     }
 
     private func validateAgentCel(layer: Int, frame index: Int) throws {
-        guard layer >= 0, layer < document.layerCount else { throw AgentOpError("layer \(layer) is out of range") }
         guard index >= 0, index < frameCount else { throw AgentOpError("frame \(index) is out of range") }
+        guard layer >= 0, layer < document.layerCount, document.layerFrame(layer) == index else {
+            throw AgentOpError("layer \(layer) does not belong to frame \(index)")
+        }
     }
 
     /// Load a PNG from the conversation workspace for a placement op.

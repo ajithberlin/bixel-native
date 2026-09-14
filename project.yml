@@ -89,6 +89,11 @@ targets:
         NSLocalNetworkUsageDescription: "Bixel connects to your iPad on the local network to sync projects and share the AI assistant."
         NSBonjourServices:
           - "_bixel-remote._tcp"
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.bixel.studio.color-drop
+            UTTypeDescription: Bixel Color
+            UTTypeConformsTo:
+              - public.data
     preBuildScripts:
       - name: Build Rust engine
         script: |
@@ -145,6 +150,11 @@ targets:
         NSBonjourServices:
           - "_bixel-remote._tcp"
         NSCameraUsageDescription: "Bixel uses the camera to scan the pairing QR code shown on your Mac."
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.bixel.studio.color-drop
+            UTTypeDescription: Bixel Color
+            UTTypeConformsTo:
+              - public.data
     preBuildScripts:
       - name: Build Rust engine
         script: |

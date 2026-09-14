@@ -419,6 +419,13 @@ struct TopBar: View {
                         .strokeBorder(isSel ? StudioTheme.procreateBlue : (isHov ? Color.white.opacity(0.7) : Color.white.opacity(0.35)), lineWidth: isSel ? 2.5 : 1)
                         .frame(width: 26, height: 26)
                 }
+                .onDrag {
+                    NSItemProvider(item: ColorDropPayload(model.currentColor).jsonData as NSData,
+                                   typeIdentifier: ColorDropPayload.typeIdentifier)
+                } preview: {
+                    ColorDropPreview(color: model.currentColor)
+                }
+                .help("Drag onto the canvas to fill the active layer")
             } else {
                 Image(systemName: "square.grid.2x2")
                     .font(.system(size: 16, weight: .semibold))

@@ -209,6 +209,53 @@ pub unsafe extern "C" fn bixel_doc_layer_count(ptr: *const BixelDoc) -> u32 {
     unsafe { doc_ref(ptr) }.lock().unwrap().layers.len() as u32
 }
 
+/// Add a layer owned by `frame` (per-frame layer stacks). Returns the new
+/// global layer index, or -1 for an invalid frame.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_add_layer_for_frame(
+    ptr: *mut BixelDoc,
+    name: *const c_char,
+    frame: u32,
+) -> i32 {
+    let name = arg_str(name);
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .add_layer_for_frame(frame as usize, Some(&name))
+        .map_or(-1, |index| index as i32)
+}
+
+/// Owning frame of a global layer index, or `u32::MAX` when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_layer_frame(ptr: *const BixelDoc, layer: u32) -> u32 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .layer_frame(layer as usize)
+        .map_or(u32::MAX, |frame| frame as u32)
+}
+
+/// Stable identity of a layer (survives reorders/undo), or 0 when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_layer_uid(ptr: *const BixelDoc, layer: u32) -> u64 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .layers
+        .get(layer as usize)
+        .map(|l| l.uid)
+        .unwrap_or(0)
+}
+
+/// Global layer indices owned by `frame`, bottom-first, as a JSON array.
+/// Free with [`bixel_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_frame_layers_json(ptr: *const BixelDoc, frame: u32) -> *mut c_char {
+    let doc = unsafe { doc_ref(ptr) }.lock().unwrap();
+    let layers = doc.frame_layers(frame as usize);
+    out_cstr(serde_json::to_string(&layers).unwrap_or_else(|_| "[]".into()))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_doc_set_pixel(
     ptr: *mut BixelDoc,
