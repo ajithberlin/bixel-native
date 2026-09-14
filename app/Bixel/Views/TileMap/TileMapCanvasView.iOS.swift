@@ -663,6 +663,7 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Touches
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         guard let coordinator else { return }
         if (event?.allTouches?.count ?? 0) > 1 { return }
         guard touches.count == 1, let touch = touches.first else { return }

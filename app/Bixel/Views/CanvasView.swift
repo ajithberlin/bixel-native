@@ -878,6 +878,7 @@ final class PixelCanvas: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         if spaceDown {
             panning = true
             lastPanPoint = convert(event.locationInWindow, from: nil)
@@ -1217,6 +1218,10 @@ final class PixelCanvas: NSView {
         guard let coordinator else { return }
         let viewport = coordinator.viewport
         let model = coordinator.model
+
+        if event.keyCode == 53 {
+            NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
+        }
 
         if model.floatingImport != nil {
             switch event.keyCode {

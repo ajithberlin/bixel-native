@@ -5,6 +5,7 @@
 // left brush dock, floating layers card, color popover, and timeline — floats over it.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum StudioScreen {
     case home
@@ -18,10 +19,12 @@ struct ContentView: View {
     @State private var showProjects = false
     @State private var showNewDocument = false
     @State private var showAI = false
-    @State private var showLayers = true
+    @State private var showLayers = false
     @State private var showColor = false
     @State private var showTimeline = false
     @State private var showAssets = false
+    @State private var layersButtonFrame: CGRect = .zero
+    @State private var colorButtonFrame: CGRect = .zero
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
@@ -108,6 +111,16 @@ struct ContentView: View {
                 .onReceive(NotificationCenter.default.publisher(for: .studioRestorePurchases)) { _ in
                     Task { await subscriptionManager.restorePurchases() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .studioDismissPopovers)) { _ in
+                    if showLayers || showColor {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            showLayers = false
+                            showColor = false
+                        }
+                    }
+                }
+                .onPreferenceChange(LayersButtonFrameKey.self) { layersButtonFrame = $0 }
+                .onPreferenceChange(ColorButtonFrameKey.self) { colorButtonFrame = $0 }
 
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -211,7 +224,7 @@ struct ContentView: View {
         }
         .onAppear {
             currentScreen = .home
-            showLayers = true
+            showLayers = false
             showAssets = false
             #if os(macOS)
             if openAssistantOnLaunch { showAI = true }
@@ -453,6 +466,16 @@ struct ContentView: View {
                     Color.clear.frame(height: 52)
                     if showLayers {
                         LayersPopover(model: model)
+                            .background(
+                                FloatingPopoverTracker(
+                                    excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                    onDismiss: {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showLayers = false
+                                        }
+                                    }
+                                )
+                            )
                             .padding(.trailing, 16)
                             .transition(.asymmetric(
                                 insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -460,6 +483,16 @@ struct ContentView: View {
                             ))
                     } else if showColor {
                         ColorPopover(model: model)
+                            .background(
+                                FloatingPopoverTracker(
+                                    excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                    onDismiss: {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showColor = false
+                                        }
+                                    }
+                                )
+                            )
                             .padding(.trailing, 16)
                             .transition(.asymmetric(
                                 insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -635,6 +668,16 @@ struct ContentView: View {
                 Color.clear.frame(height: 52)
                 if showLayers {
                     MapLayersPanel(model: mapModel)
+                        .background(
+                            FloatingPopoverTracker(
+                                excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                onDismiss: {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        showLayers = false
+                                    }
+                                }
+                            )
+                        )
                         .padding(.trailing, 16)
                         .transition(.asymmetric(
                             insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -692,7 +735,7 @@ struct ContentView: View {
                 onImportTiledMap: {
                     #if os(macOS)
                     let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [.json]
+                    panel.allowedContentTypes = [.json, UTType(filenameExtension: "tmj") ?? .json]
                     panel.begin { response in
                         guard response == .OK, let url = panel.url else { return }
                         projects.importTiledMap(from: url)
@@ -705,6 +748,7 @@ struct ContentView: View {
     }
 }
 extension Notification.Name {
+    static let studioDismissPopovers = Notification.Name("studio.dismissPopovers")
     static let studioShowHelp = Notification.Name("studio.showHelp")
     static let studioUndo = Notification.Name("studio.undo")
     static let studioRedo = Notification.Name("studio.redo")
@@ -730,3 +774,127 @@ extension Notification.Name {
     static let studioCustomerCenter = Notification.Name("studio.customerCenter")
     static let studioRestorePurchases = Notification.Name("studio.restorePurchases")
 }
+
+// MARK: - Anchor Button Frames
+
+struct LayersButtonFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+struct ColorButtonFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+// MARK: - Floating Popover Click Tracker
+
+#if os(macOS)
+struct FloatingPopoverTracker: NSViewRepresentable {
+    var excludedFrames: [CGRect] = []
+    var onDismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(excludedFrames: excludedFrames, onDismiss: onDismiss)
+    }
+
+    func makeNSView(context: Context) -> TrackerView {
+        let view = TrackerView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackerView, context: Context) {
+        context.coordinator.excludedFrames = excludedFrames
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.attachMonitorIfNeeded(for: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: TrackerView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    final class Coordinator: NSObject {
+        var excludedFrames: [CGRect]
+        var onDismiss: () -> Void
+        private var monitor: Any?
+        private weak var trackingView: NSView?
+
+        init(excludedFrames: [CGRect], onDismiss: @escaping () -> Void) {
+            self.excludedFrames = excludedFrames
+            self.onDismiss = onDismiss
+        }
+
+        func attachMonitorIfNeeded(for view: NSView) {
+            trackingView = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak view] event in
+                guard let self, let view, let window = view.window else { return event }
+                // Ignore events targeting other windows (e.g. child popover windows like blend mode picker)
+                guard event.window === window else { return event }
+
+                let clickLoc = event.locationInWindow
+                let cardRect = view.convert(view.bounds, to: nil)
+
+                // If click is inside the popover card itself, do not dismiss
+                if cardRect.contains(clickLoc) {
+                    return event
+                }
+
+                // Check excluded toggle button frames (converted to window coordinates)
+                let windowHeight = window.contentView?.bounds.height ?? window.frame.height
+                let swiftUIPoint = CGPoint(x: clickLoc.x, y: windowHeight - clickLoc.y)
+                for frame in self.excludedFrames where !frame.isEmpty {
+                    if frame.contains(swiftUIPoint) {
+                        return event
+                    }
+                }
+
+                // Click was outside the card and not on the toggle button
+                DispatchQueue.main.async {
+                    self.onDismiss()
+                }
+                return event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            removeMonitor()
+        }
+    }
+
+    final class TrackerView: NSView {
+        weak var coordinator: Coordinator?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                coordinator?.attachMonitorIfNeeded(for: self)
+            } else {
+                coordinator?.removeMonitor()
+            }
+        }
+    }
+}
+#else
+struct FloatingPopoverTracker: View {
+    var excludedFrames: [CGRect] = []
+    var onDismiss: () -> Void
+    var body: some View {
+        Color.clear
+    }
+}
+#endif

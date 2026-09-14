@@ -155,7 +155,7 @@ struct HomePageView: View {
         }
         .fileImporter(
             isPresented: $showImportFilePicker,
-            allowedContentTypes: [.image, .json],
+            allowedContentTypes: [.image, .json, UTType(filenameExtension: "tmj") ?? .json],
             allowsMultipleSelection: true
         ) { result in
             switch result {
@@ -1159,6 +1159,13 @@ struct HomePageView: View {
         let scopedURLs = uniqueAccessURLs.filter { $0.startAccessingSecurityScopedResource() }
         defer {
             scopedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
+        }
+
+        if let tiledMapURL = urls.first(where: { $0.pathExtension.lowercased() == "tmj" }) {
+            if let project = store.importTiledMap(from: tiledMapURL, createProject: true) {
+                onOpenProject(project)
+            }
+            return
         }
 
         let manifestURL = urls.first { $0.pathExtension.lowercased() == "json" }

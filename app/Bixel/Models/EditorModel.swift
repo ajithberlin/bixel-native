@@ -943,6 +943,7 @@ final class EditorModel: ObservableObject {
     }
 
     func beginStroke(x: Int, y: Int) {
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         lastPoint = nil
         strokeChanged = false
         switch tool {

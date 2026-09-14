@@ -589,6 +589,7 @@ final class PixelCanvasUIView: UIView, UIGestureRecognizerDelegate {
     // MARK: - Drawing Touches (Finger & Apple Pencil)
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         guard let coordinator else { return }
         if isLongPressEyedropper { return }
         if (event?.allTouches?.count ?? 0) > 1 {

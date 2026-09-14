@@ -642,10 +642,8 @@ final class ProjectStore: ObservableObject {
     /// path (used by the tileset importer so the map JSON references the file).
     func persistImageAsset(data: Data, name: String) -> String? {
         guard let base = projectRoot else { return nil }
-        let stem = name.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "-", options: .regularExpression)
-        let path = "assets/\(UUID().uuidString.prefix(8))-\(stem).png"
         do {
-            try ProjectStorage.write(base: base, path: path, data: data)
+            let path = try persistImageAsset(data: data, name: name, base: base)
             refreshAssets()
             return path
         } catch {
@@ -654,24 +652,48 @@ final class ProjectStore: ObservableObject {
         }
     }
 
+    private func persistImageAsset(data: Data, name: String, base: URL) throws -> String {
+        let stem = name.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "-", options: .regularExpression)
+        let path = "assets/\(UUID().uuidString.prefix(8))-\(stem).png"
+        try ProjectStorage.write(base: base, path: path, data: data)
+        return path
+    }
+
     /// Create a brand-new map document from an imported Tiled JSON file and open
     /// it (round-trip: export → reimport must reopen identically).
-    func importTiledMap(from url: URL) {
-        guard let base = projectRoot, !assistant.busy else { return }
+    @discardableResult
+    func importTiledMap(from url: URL, createProject: Bool = false) -> StudioProject? {
+        guard !assistant.busy else { return nil }
+        let hasSecurityScope = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasSecurityScope { url.stopAccessingSecurityScopedResource() }
+        }
+
+        var createdProject: StudioProject?
+        let base: URL
         do {
+            if !createProject, let existingBase = projectRoot {
+                base = existingBase
+            } else {
+                let id = UUID().uuidString
+                let value = try ProjectStorage.request(base: root, ["op": "create", "id": id, "name": url.deletingPathExtension().lastPathComponent])!
+                let project = try decode(StudioProject.self, value)
+                createdProject = project
+                base = root.appendingPathComponent(project.id)
+            }
+
             let sourceData = try Data(contentsOf: url)
             let preparedJSON = try TileMapImport.prepareMapJSON(
                 sourceData,
                 sourceDirectory: url.deletingLastPathComponent()
             ) { [weak self] data, name in
-                guard let self, let path = self.persistImageAsset(data: data, name: name) else {
+                guard let self else {
                     throw StorageError.message("Could not copy imported tileset image into the project.")
                 }
-                return path
+                return try self.persistImageAsset(data: data, name: name, base: base)
             }
             let json = preparedJSON
             let model = try TileMapModel(json: json)
-            try flush()
             let name = url.deletingPathExtension().lastPathComponent
             let item = WorkspaceDocument(name: name, mode: .map,
                                          width: model.map.columns, height: model.map.rows,
@@ -679,6 +701,22 @@ final class ProjectStore: ObservableObject {
                                          infinite: model.map.isInfinite,
                                          orientation: model.map.orientation.tiled)
             try model.map.save(base: base, path: item.path)
+
+            if let createdProject {
+                var next = WorkspaceCatalog()
+                next.documents = [item]
+                next.activeDocumentID = item.id
+                try writeCatalog(next, base: base)
+                let mapPixels = model.map.compositeRGBA()
+                if let (thumbPNG, _) = Self.downsampleAndEncodeThumbnail(pixels: mapPixels, width: model.map.pixelWidth, height: model.map.pixelHeight) {
+                    try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
+                }
+                refresh()
+                try open(createdProject)
+                return createdProject
+            }
+
+            try flush()
             var next = catalog
             next.documents.append(item); next.activeDocumentID = item.id
             try writeCatalog(next, base: base)
@@ -691,8 +729,14 @@ final class ProjectStore: ObservableObject {
                 try? ProjectStorage.write(base: base, path: "thumbnail.png", data: thumbPNG)
                 if let currentID = current?.id { self.projectThumbnails[currentID] = thumbCG }
             }
+            return nil
         } catch {
+            if let createdProject {
+                try? FileManager.default.removeItem(at: root.appendingPathComponent(createdProject.id))
+                refresh()
+            }
             self.error = error.localizedDescription
+            return nil
         }
     }
 

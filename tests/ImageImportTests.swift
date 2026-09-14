@@ -24,6 +24,32 @@ struct ImageImportTests {
             "The Home import action must not be compiled out on iOS"
         )
 
+        precondition(
+            homePage.contains("pathExtension.lowercased() == \"tmj\""),
+            "The Home import action must route Tiled .tmj files to the scene importer"
+        )
+        precondition(
+            homePage.contains("importTiledMap(from: tiledMapURL, createProject: true)"),
+            "A Home .tmj import must create a standalone scene project"
+        )
+
+        let contentView = try String(
+            contentsOf: repoRoot.appendingPathComponent("app/Bixel/Views/ContentView.swift"),
+            encoding: .utf8
+        )
+        precondition(
+            contentView.contains("UTType(filenameExtension: \"tmj\")"),
+            "The scene picker must allow Tiled .tmj files"
+        )
+
+        let tinyPNG = try XCTinyPNG.make()
+        var validImageWithLargePayload = tinyPNG
+        validImageWithLargePayload.append(Data(repeating: 0xA5, count: 32_000_001))
+        precondition(
+            AIService.pngToRGBA(validImageWithLargePayload) != nil,
+            "Valid images must not be rejected based only on encoded file size"
+        )
+
         let editorModel = try String(
             contentsOf: repoRoot.appendingPathComponent("app/Bixel/Models/EditorModel.swift"),
             encoding: .utf8
@@ -72,5 +98,14 @@ struct ImageImportTests {
         )
 
         print("Image import tests passed!")
+    }
+}
+
+private enum XCTinyPNG {
+    static func make() throws -> Data {
+        guard let data = pngData(from: [255, 0, 255, 255], width: 1, height: 1) else {
+            throw NSError(domain: "ImageImportTests", code: 1)
+        }
+        return data
     }
 }

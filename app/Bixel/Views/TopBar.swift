@@ -103,6 +103,11 @@ struct TopBar: View {
                 height: 28,
                 action: {
                     showActions.toggle()
+                    if showActions {
+                        showLayers = false
+                        showColor = false
+                        showAI = false
+                    }
                 }
             ) { isSel, _ in
                 Image(systemName: "wrench")
@@ -133,6 +138,8 @@ struct TopBar: View {
                     width: 28,
                     height: 28,
                     action: {
+                        showLayers = false
+                        showColor = false
                         model.selectTool((model.tool == .selection) ? .pencil : .selection)
                     }
                 ) { isSel, _ in
@@ -151,6 +158,8 @@ struct TopBar: View {
                     width: 28,
                     height: 28,
                     action: {
+                        showLayers = false
+                        showColor = false
                         model.selectTool((model.tool == .transform) ? .pencil : .transform)
                     }
                 ) { isSel, _ in
@@ -204,6 +213,8 @@ struct TopBar: View {
                 width: 28,
                 height: 28,
                 action: {
+                    showLayers = false
+                    showColor = false
                     model.selectTool(.pencil)
                 }
             ) { isSel, _ in
@@ -221,6 +232,8 @@ struct TopBar: View {
                 width: 28,
                 height: 28,
                 action: {
+                    showLayers = false
+                    showColor = false
                     model.selectTool(.smudge)
                 }
             ) { isSel, _ in
@@ -238,6 +251,8 @@ struct TopBar: View {
                 width: 28,
                 height: 28,
                 action: {
+                    showLayers = false
+                    showColor = false
                     model.selectTool(.eraser)
                 }
             ) { isSel, _ in
@@ -253,7 +268,15 @@ struct TopBar: View {
             // Always on macOS; on iPad once a Mac is connected.
             if assistantAvailable {
                 AICopilotButton(isPresented: showAI) {
-                    withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAI.toggle()
+                        if showAI {
+                            showLayers = false
+                            showColor = false
+                            showAssets = false
+                            showActions = false
+                        }
+                    }
                 }
             }
             helpButton
@@ -275,7 +298,15 @@ struct TopBar: View {
             // Always on macOS; on iPad once a Mac is connected.
             if assistantAvailable {
                 AICopilotButton(isPresented: showAI) {
-                    withAnimation(.easeInOut(duration: 0.2)) { showAI.toggle() }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAI.toggle()
+                        if showAI {
+                            showLayers = false
+                            showColor = false
+                            showAssets = false
+                            showActions = false
+                        }
+                    }
                 }
             }
             helpButton
@@ -322,6 +353,8 @@ struct TopBar: View {
             width: 26,
             height: 26,
             action: {
+                showLayers = false
+                showColor = false
                 mapModel.tool = tool
             }
         ) { isSel, _ in
@@ -343,7 +376,12 @@ struct TopBar: View {
             action: {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     showLayers.toggle()
-                    if showLayers { showColor = false }
+                    if showLayers {
+                        showColor = false
+                        showAI = false
+                        showAssets = false
+                        showActions = false
+                    }
                 }
             }
         ) { isSel, _ in
@@ -351,6 +389,11 @@ struct TopBar: View {
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: LayersButtonFrameKey.self, value: geo.frame(in: .global))
+            }
+        )
     }
 
     private var assetLibraryToggle: some View {
@@ -364,6 +407,12 @@ struct TopBar: View {
             action: {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     showAssets.toggle()
+                    if showAssets {
+                        showLayers = false
+                        showColor = false
+                        showAI = false
+                        showActions = false
+                    }
                 }
             }
         ) { isSel, _ in
@@ -406,7 +455,12 @@ struct TopBar: View {
             action: {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     showColor.toggle()
-                    if showColor { showLayers = false }
+                    if showColor {
+                        showLayers = false
+                        showAI = false
+                        showAssets = false
+                        showActions = false
+                    }
                 }
             }
         ) { isSel, isHov in
@@ -432,6 +486,11 @@ struct TopBar: View {
                     .foregroundColor(isSel ? StudioTheme.procreateBlue : Color.white.opacity(0.85))
             }
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: ColorButtonFrameKey.self, value: geo.frame(in: .global))
+            }
+        )
     }
 
     private var helpButton: some View {

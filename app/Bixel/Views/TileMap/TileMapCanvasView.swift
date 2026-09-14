@@ -821,6 +821,7 @@ final class MapCanvas: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         if spaceDown {
             panning = true
             lastPanPoint = convert(event.locationInWindow, from: nil)

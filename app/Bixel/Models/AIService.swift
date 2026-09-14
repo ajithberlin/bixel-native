@@ -496,17 +496,16 @@ enum AIService {
     }
 
     static func pngToRGBA(_ data: Data) -> (rgba: [UInt8], width: Int, height: Int)? {
-        guard data.count <= 32_000_000,
-              let src = CGImageSourceCreateWithData(data as CFData, nil),
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-              let sourceWidth = properties[kCGImagePropertyPixelWidth] as? Int,
-              let sourceHeight = properties[kCGImagePropertyPixelHeight] as? Int,
+              let sourceWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let sourceHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
               sourceWidth > 0, sourceHeight > 0, sourceWidth <= 4096, sourceHeight <= 4096,
               let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
         let w = cg.width
         let h = cg.height
         var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        let ctx = CGContext(
+        guard let ctx = CGContext(
             data: &rgba,
             width: w,
             height: h,
@@ -514,8 +513,8 @@ enum AIService {
             bytesPerRow: w * 4,
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )
-        ctx?.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        ) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
         return (rgba, w, h)
     }
 
