@@ -73,6 +73,23 @@ struct MapCellRect {
     }
 }
 
+private enum ImageTransformHandle {
+    case move
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+}
+
+private struct ImageTransformDrag {
+    var layer: Int
+    var handle: ImageTransformHandle
+    var start: CGPoint
+    var initial: CGRect
+    var preserveAspect: Bool
+    var changed = false
+}
+
 /// The armed brush: a raw-GID pattern plus the tileset it came from.
 struct MapBrush {
     var pattern: MapTilePattern
@@ -125,6 +142,9 @@ final class TileMapModel: ObservableObject {
 
     /// Object editing state (phase 2): the object under the pointer, if any.
     @Published var selectedObjectID: Int?
+    /// When enabled, image corner handles can change width and height
+    /// independently. The default keeps imported artwork proportional.
+    @Published var imageFreeformResize = false
 
     let canvasChanged = PassthroughSubject<Void, Never>()
     private(set) var canvasRevision = 0
@@ -134,6 +154,7 @@ final class TileMapModel: ObservableObject {
     private var strokeChanged = false
     private var moveOrigin: (x: Int, y: Int)?
     private var moveGrab: (x: Int, y: Int)?
+    private var imageTransformDrag: ImageTransformDrag?
 
     var width: Int { map.columns }
     var height: Int { map.rows }
@@ -145,7 +166,16 @@ final class TileMapModel: ObservableObject {
         activeLayer < layers.count && layers[activeLayer].type == "object"
     }
 
-    var activeIsTile: Bool { !isObjectActive }
+    var activeIsTile: Bool {
+        guard activeLayer < layers.count else { return true }
+        return layers[activeLayer].type == "tile"
+    }
+
+    var activeIsImage: Bool {
+        activeLayer < layers.count && layers[activeLayer].type == "image"
+    }
+
+    var isTransformingImage: Bool { imageTransformDrag != nil }
 
     init(width: Int, height: Int, tileWidth: Int = 16, tileHeight: Int = 16) {
         self.map = TileMap(width: width, height: height, tileWidth: tileWidth, tileHeight: tileHeight)
@@ -562,6 +592,152 @@ final class TileMapModel: ObservableObject {
     func uploadImageLayer(_ index: Int, rgba: [UInt8]) {
         _ = map.setImageLayerPixels(index, rgba: rgba)
         objectWillChange.send()
+    }
+
+    // MARK: - Image layer transforms
+
+    /// Return the current display frame of an image layer in map pixels.
+    func imageLayerFrame(_ index: Int) -> CGRect? {
+        guard let row = layers.first(where: { $0.index == index }), row.type == "image",
+              let width = row.displayWidth ?? row.imageWidth,
+              let height = row.displayHeight ?? row.imageHeight,
+              width > 0, height > 0 else { return nil }
+        guard let x = row.x, let y = row.y else { return nil }
+        return CGRect(x: x, y: y,
+                      width: CGFloat(width), height: CGFloat(height))
+    }
+
+    /// Select the topmost visible image under a document-pixel point.
+    @discardableResult
+    func selectImageLayer(at point: CGPoint) -> Bool {
+        guard let index = imageLayer(at: point) else { return false }
+        activeLayer = index
+        selectedObjectID = nil
+        objectWillChange.send()
+        return true
+    }
+
+    func hasImageLayer(at point: CGPoint) -> Bool {
+        imageLayer(at: point) != nil
+    }
+
+    private func imageLayer(at point: CGPoint) -> Int? {
+        for row in layers.reversed() where row.type == "image" && row.visible {
+            guard let frame = imageLayerFrame(row.index),
+                  frame.insetBy(dx: -8, dy: -8).contains(point) else { continue }
+            return row.index
+        }
+        return nil
+    }
+
+    /// Begin a move or corner resize on the image under the pointer. Returns
+    /// false when the pointer did not hit an image transform affordance.
+    @discardableResult
+    func beginImageTransform(at point: CGPoint, zoom: CGFloat, preserveAspect: Bool = true) -> Bool {
+        let layer = activeIsImage && imageLayerFrame(activeLayer)?.insetBy(dx: -8, dy: -8).contains(point) == true
+            ? activeLayer
+            : imageLayer(at: point)
+        guard let layer, let frame = imageLayerFrame(layer) else { return false }
+        activeLayer = layer
+        selectedObjectID = nil
+
+        let tolerance = max(4, 8 / max(0.25, zoom))
+        let corners: [(CGPoint, ImageTransformHandle)] = [
+            (CGPoint(x: frame.minX, y: frame.minY), .topLeft),
+            (CGPoint(x: frame.maxX, y: frame.minY), .topRight),
+            (CGPoint(x: frame.minX, y: frame.maxY), .bottomLeft),
+            (CGPoint(x: frame.maxX, y: frame.maxY), .bottomRight),
+        ]
+        let handle = corners.first(where: { hypot($0.0.x - point.x, $0.0.y - point.y) <= tolerance })?.1
+            ?? (frame.contains(point) ? .move : nil)
+        guard let handle else { return false }
+        imageTransformDrag = ImageTransformDrag(layer: layer, handle: handle,
+                                                start: point, initial: frame,
+                                                preserveAspect: preserveAspect)
+        objectWillChange.send()
+        return true
+    }
+
+    func continueImageTransform(to point: CGPoint) {
+        guard var drag = imageTransformDrag else { return }
+        let point = CGPoint(x: point.x.rounded(), y: point.y.rounded())
+        let next: CGRect
+        switch drag.handle {
+        case .move:
+            next = CGRect(x: drag.initial.minX + point.x - drag.start.x,
+                          y: drag.initial.minY + point.y - drag.start.y,
+                          width: drag.initial.width, height: drag.initial.height)
+        case .topLeft:
+            next = resizedImageFrame(initial: drag.initial, pointer: point,
+                                     anchor: CGPoint(x: drag.initial.maxX, y: drag.initial.maxY),
+                                     preserveAspect: drag.preserveAspect)
+        case .topRight:
+            next = resizedImageFrame(initial: drag.initial, pointer: point,
+                                     anchor: CGPoint(x: drag.initial.minX, y: drag.initial.maxY),
+                                     preserveAspect: drag.preserveAspect)
+        case .bottomLeft:
+            next = resizedImageFrame(initial: drag.initial, pointer: point,
+                                     anchor: CGPoint(x: drag.initial.maxX, y: drag.initial.minY),
+                                     preserveAspect: drag.preserveAspect)
+        case .bottomRight:
+            next = resizedImageFrame(initial: drag.initial, pointer: point,
+                                     anchor: CGPoint(x: drag.initial.minX, y: drag.initial.minY),
+                                     preserveAspect: drag.preserveAspect)
+        }
+
+        let width = min(16_384, max(1, Int(next.width.rounded())))
+        let height = min(16_384, max(1, Int(next.height.rounded())))
+        let x = drag.handle == .move ? next.minX : (next.minX.rounded())
+        let y = drag.handle == .move ? next.minY : (next.minY.rounded())
+        if !drag.changed,
+           x == drag.initial.minX,
+           y == drag.initial.minY,
+           width == Int(drag.initial.width),
+           height == Int(drag.initial.height) {
+            return
+        }
+
+        if !drag.changed {
+            map.snapshot()
+            drag.changed = true
+        }
+        guard map.setImageLayerTransform(drag.layer, x: x, y: y,
+                                         displayWidth: width, displayHeight: height) else { return }
+        imageTransformDrag = drag
+        reloadLayers()
+        notifyCanvasChanged()
+        objectWillChange.send()
+    }
+
+    func endImageTransform() {
+        guard let drag = imageTransformDrag else { return }
+        imageTransformDrag = nil
+        if drag.changed {
+            commitChange()
+        } else {
+            objectWillChange.send()
+        }
+    }
+
+    private func resizedImageFrame(initial: CGRect, pointer: CGPoint, anchor: CGPoint,
+                                   preserveAspect: Bool) -> CGRect {
+        let rawWidth = abs(anchor.x - pointer.x)
+        let rawHeight = abs(anchor.y - pointer.y)
+        let width: CGFloat
+        let height: CGFloat
+        if preserveAspect {
+            let widthScale = rawWidth / max(1, initial.width)
+            let heightScale = rawHeight / max(1, initial.height)
+            let scale = abs(widthScale - 1) >= abs(heightScale - 1) ? widthScale : heightScale
+            width = max(1, (initial.width * scale).rounded())
+            height = max(1, (initial.height * scale).rounded())
+        } else {
+            width = max(1, rawWidth.rounded())
+            height = max(1, rawHeight.rounded())
+        }
+        return CGRect(x: min(anchor.x, anchor.x + (pointer.x < anchor.x ? -width : width)),
+                      y: min(anchor.y, anchor.y + (pointer.y < anchor.y ? -height : height)),
+                      width: width, height: height)
     }
 
     func removeTileset(_ index: Int) {

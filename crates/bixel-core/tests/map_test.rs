@@ -512,6 +512,66 @@ fn image_layer_round_trips_through_tiled_json() {
 }
 
 #[test]
+fn image_layer_transform_moves_scales_and_round_trips() {
+    let mut map = TileMap::new(8, 8, 1, 1);
+    let pixels = vec![
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 0, 255,
+    ];
+    let idx = map.add_image_layer(Some("Reference"), "assets/reference.png", 2, 2, 0.0, 0.0);
+    assert!(map.set_image_layer_pixels(idx, &pixels));
+
+    assert!(map.set_image_layer_transform(idx, 1.0, 2.0, 4, 4));
+    let layer = map.image_layer(idx).unwrap();
+    assert_eq!((layer.x, layer.y), (1.0, 2.0));
+    assert_eq!((layer.display_width, layer.display_height), (4, 4));
+
+    // Scaling is nearest-neighbour: each source pixel occupies a 2×2 block.
+    let out = map.composite();
+    let p = |x: usize, y: usize| (y * 8 + x) * 4;
+    assert_eq!(&out[p(1, 2)..p(1, 2) + 4], &[255, 0, 0, 255]);
+    assert_eq!(&out[p(4, 2)..p(4, 2) + 4], &[0, 255, 0, 255]);
+    assert_eq!(&out[p(1, 5)..p(1, 5) + 4], &[0, 0, 255, 255]);
+    assert_eq!(&out[p(4, 5)..p(4, 5) + 4], &[255, 255, 0, 255]);
+
+    map.snapshot();
+    assert!(map.set_image_layer_transform(idx, 0.0, 0.0, 1, 1));
+    assert!(map.undo());
+    let restored = map.image_layer(idx).unwrap();
+    assert_eq!((restored.x, restored.y), (1.0, 2.0));
+    assert_eq!((restored.display_width, restored.display_height), (4, 4));
+    assert!(map.redo());
+    let redone = map.image_layer(idx).unwrap();
+    assert_eq!((redone.x, redone.y), (0.0, 0.0));
+    assert_eq!((redone.display_width, redone.display_height), (1, 1));
+
+    let json = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&json).unwrap();
+    let layer = value["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["type"] == "imagelayer")
+        .unwrap();
+    assert_eq!(layer["bixel_display_width"], 1);
+    assert_eq!(layer["bixel_display_height"], 1);
+    let restored = TileMap::from_tiled_json(&json).unwrap();
+    let image_index = restored.layers.iter().position(|l| l.is_image()).unwrap();
+    let restored = restored.image_layer(image_index).unwrap();
+    assert_eq!((restored.display_width, restored.display_height), (1, 1));
+}
+
+#[test]
+fn image_layer_transform_rejects_zero_dimensions() {
+    let mut map = TileMap::new(4, 4, 1, 1);
+    let idx = map.add_image_layer(Some("Reference"), "assets/reference.png", 2, 2, 3.0, 4.0);
+    assert!(!map.set_image_layer_transform(idx, 9.0, 10.0, 0, 2));
+    let layer = map.image_layer(idx).unwrap();
+    assert_eq!((layer.x, layer.y), (3.0, 4.0));
+    assert_eq!((layer.display_width, layer.display_height), (2, 2));
+}
+
+#[test]
 fn isometric_and_staggered_projection_round_trip() {
     let iso = MapGeometry::new(
         Orientation::Isometric, 4, 4, 32, 16, StaggerAxis::Y, StaggerIndex::Odd,

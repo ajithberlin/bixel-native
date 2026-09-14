@@ -780,6 +780,10 @@ struct MapLayerRow: Codable, Identifiable {
     var image: String?
     var imageWidth: Int?
     var imageHeight: Int?
+    var displayWidth: Int?
+    var displayHeight: Int?
+    var x: Double?
+    var y: Double?
 }
 
 /// One map object on an object layer (rect or point, in tile-pixels).
@@ -1061,6 +1065,16 @@ final class TileMap: @unchecked Sendable {
         rgba.withUnsafeBufferPointer { raw in
             bixel_map_set_image_layer_pixels(handle, UInt32(index), raw.baseAddress, UInt(raw.count))
         }
+    }
+
+    /// Move and/or resize an image layer in map pixels. Source pixels remain
+    /// unchanged; the core composites the layer with nearest-neighbour scaling.
+    @discardableResult
+    func setImageLayerTransform(_ index: Int, x: Double, y: Double,
+                                displayWidth: Int, displayHeight: Int) -> Bool {
+        bixel_map_set_image_layer_transform(handle, UInt32(index), x, y,
+                                            UInt32(max(1, displayWidth)),
+                                            UInt32(max(1, displayHeight)))
     }
 
     /// Read an image layer's RGBA pixels back out of the engine.

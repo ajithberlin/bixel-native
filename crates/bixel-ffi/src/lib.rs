@@ -2390,6 +2390,26 @@ pub unsafe extern "C" fn bixel_map_set_image_layer_pixels(
     unsafe { map(ptr) }.lock().unwrap().set_image_layer_pixels(index as usize, pixels)
 }
 
+/// Move and/or resize an image layer in map pixels. The source pixels remain
+/// unchanged and the core uses nearest-neighbour sampling while compositing.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_image_layer_transform(
+    ptr: *mut BixelMap,
+    index: u32,
+    x: f64,
+    y: f64,
+    display_width: u32,
+    display_height: u32,
+) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().set_image_layer_transform(
+        index as usize,
+        x,
+        y,
+        display_width,
+        display_height,
+    )
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_image_layer_pixels(
     ptr: *const BixelMap,
@@ -2474,6 +2494,10 @@ pub unsafe extern "C" fn bixel_map_layers_json(ptr: *const BixelMap) -> *mut c_c
                     base["image"] = serde_json::json!(data.image);
                     base["imageWidth"] = serde_json::json!(data.image_width);
                     base["imageHeight"] = serde_json::json!(data.image_height);
+                    base["displayWidth"] = serde_json::json!(data.display_width);
+                    base["displayHeight"] = serde_json::json!(data.display_height);
+                    base["x"] = serde_json::json!(data.x);
+                    base["y"] = serde_json::json!(data.y);
                 }
             }
             base

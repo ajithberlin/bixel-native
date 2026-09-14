@@ -1129,6 +1129,9 @@ struct MapLayersPanel: View {
             if model.isObjectActive, let row = model.layers.first(where: { $0.index == model.activeLayer }) {
                 objectInspector(layerIndex: row.index)
             }
+            if model.activeIsImage {
+                imageInspector
+            }
         }
         .frame(width: 280)
         .procreatePanel(radius: 16)
@@ -1247,6 +1250,25 @@ struct MapLayersPanel: View {
     }
 
     @State private var editingDraft = ""
+
+    private var imageInspector: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Divider().overlay(StudioTheme.hairline)
+            Text("Image transform")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Toggle("Freeform resize", isOn: $model.imageFreeformResize)
+                .font(.system(size: 10))
+                .toggleStyle(.switch)
+            Text(model.imageFreeformResize
+                 ? "Corner handles change width and height independently."
+                 : "Corner handles preserve the image ratio.")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
 
     // MARK: Object inspector
 

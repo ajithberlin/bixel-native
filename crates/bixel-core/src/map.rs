@@ -31,6 +31,8 @@ pub const MAX_MAP_DIM: usize = 4096;
 /// Safety cap on the dense storage an infinite map may grow to per side.
 pub const MAX_INF_DIM: usize = 2048;
 pub const MAX_UNDO: usize = 50;
+/// Maximum display dimension for an interactively resized reference image.
+pub const MAX_IMAGE_DISPLAY_DIM: u32 = 16_384;
 
 fn prop_type(value: &Value) -> &'static str {
     match value {
@@ -235,6 +237,10 @@ pub struct ImageLayerData {
     pub image: String,
     pub image_width: u32,
     pub image_height: u32,
+    /// Display dimensions in map pixels. The source pixels remain at their
+    /// original size so resizing uses nearest-neighbour sampling.
+    pub display_width: u32,
+    pub display_height: u32,
     /// Pixel offset from the map origin (Tiled `x`/`y`).
     pub x: f64,
     pub y: f64,
@@ -603,8 +609,8 @@ impl TileMap {
                     let y = data.y.floor() as i64;
                     min_x = min_x.min(x);
                     min_y = min_y.min(y);
-                    max_x = max_x.max(x + data.image_width as i64);
-                    max_y = max_y.max(y + data.image_height as i64);
+                    max_x = max_x.max(x + data.display_width as i64);
+                    max_y = max_y.max(y + data.display_height as i64);
                     any = true;
                 }
                 MapLayer::Objects(_) => {}
@@ -843,6 +849,8 @@ impl TileMap {
             image: image.to_string(),
             image_width,
             image_height,
+            display_width: image_width,
+            display_height: image_height,
             x,
             y,
             pixels: Arc::new(Vec::new()),
@@ -866,6 +874,36 @@ impl TileMap {
             Some(MapLayer::Image(data)) => Some(data),
             _ => None,
         }
+    }
+
+    /// Move and/or resize an image layer in map-pixel coordinates. The source
+    /// pixels stay unchanged; compositing scales them with nearest-neighbour
+    /// sampling to keep pixel-art references crisp.
+    pub fn set_image_layer_transform(
+        &mut self,
+        index: usize,
+        x: f64,
+        y: f64,
+        display_width: u32,
+        display_height: u32,
+    ) -> bool {
+        if !x.is_finite()
+            || !y.is_finite()
+            || display_width == 0
+            || display_height == 0
+            || display_width > MAX_IMAGE_DISPLAY_DIM
+            || display_height > MAX_IMAGE_DISPLAY_DIM
+        {
+            return false;
+        }
+        let Some(data) = self.image_layer_mut(index) else {
+            return false;
+        };
+        data.x = x;
+        data.y = y;
+        data.display_width = display_width;
+        data.display_height = display_height;
+        true
     }
 
     /// Store an image layer's RGBA pixels used for compositing.
@@ -1677,12 +1715,22 @@ impl TileMap {
                         continue;
                     }
                     let (iw, ih) = (data.image_width as usize, data.image_height as usize);
-                    if iw == 0 || ih == 0 || data.pixels.len() < iw * ih * 4 {
+                    let (dw, dh) = (data.display_width as usize, data.display_height as usize);
+                    if iw == 0 || ih == 0 || dw == 0 || dh == 0 || data.pixels.len() < iw * ih * 4 {
                         continue;
                     }
                     let alpha = (data.opacity * 255.0).round().clamp(0.0, 255.0) as u32;
                     blit_image(
-                        &mut out, w, h, data.x - x0 as f64, data.y - y0 as f64, iw, ih, alpha,
+                        &mut out,
+                        w,
+                        h,
+                        data.x - x0 as f64,
+                        data.y - y0 as f64,
+                        iw,
+                        ih,
+                        dw,
+                        dh,
+                        alpha,
                         &data.pixels,
                     );
                 }
@@ -2020,6 +2068,7 @@ impl TileMap {
                     let extra = preserve(&raw, &[
                         "id", "name", "type", "image", "imagewidth", "imageheight",
                         "x", "y", "visible", "opacity", "properties",
+                        "bixel_display_width", "bixel_display_height",
                     ]);
                     layers.push(MapLayer::Image(ImageLayerData {
                         id,
@@ -2029,6 +2078,16 @@ impl TileMap {
                         image,
                         image_width,
                         image_height,
+                        display_width: raw
+                            .get("bixel_display_width")
+                            .and_then(Value::as_u64)
+                            .map(|v| v.min(u32::MAX as u64) as u32)
+                            .unwrap_or(image_width),
+                        display_height: raw
+                            .get("bixel_display_height")
+                            .and_then(Value::as_u64)
+                            .map(|v| v.min(u32::MAX as u64) as u32)
+                            .unwrap_or(image_height),
                         x: raw.get("x").and_then(Value::as_f64).unwrap_or(0.0),
                         y: raw.get("y").and_then(Value::as_f64).unwrap_or(0.0),
                         pixels: Arc::new(Vec::new()),
@@ -2281,6 +2340,8 @@ fn layer_json(layer: &MapLayer, infinite: bool, origin_x: i32, origin_y: i32) ->
                 "image": data.image,
                 "x": data.x,
                 "y": data.y,
+                "bixel_display_width": data.display_width,
+                "bixel_display_height": data.display_height,
                 "visible": data.visible,
                 "opacity": data.opacity,
             }));
@@ -2425,31 +2486,35 @@ fn blit_tile(
 }
 
 /// Source-over composite one RGBA image onto the map at pixel offset `(ox, oy)`,
-/// clipped to the map bounds and scaled by `layer_alpha` (0..=255).
+/// clipped to the map bounds and nearest-neighbour scaled to the display size.
 fn blit_image(
     out: &mut [u8],
     map_px_w: usize,
     map_px_h: usize,
     ox: f64,
     oy: f64,
-    img_w: usize,
-    img_h: usize,
+    src_w: usize,
+    src_h: usize,
+    dst_w: usize,
+    dst_h: usize,
     layer_alpha: u32,
     src: &[u8],
 ) {
     let ox = ox.round() as i64;
     let oy = oy.round() as i64;
-    for y in 0..img_h {
+    for y in 0..dst_h {
         let dy = oy + y as i64;
         if dy < 0 || dy >= map_px_h as i64 {
             continue;
         }
-        for x in 0..img_w {
+        let sy = y * src_h / dst_h;
+        for x in 0..dst_w {
             let dx = ox + x as i64;
             if dx < 0 || dx >= map_px_w as i64 {
                 continue;
             }
-            let s = (y * img_w + x) * 4;
+            let sx = x * src_w / dst_w;
+            let s = (sy * src_w + sx) * 4;
             let sa = src[s + 3] as u32;
             if sa == 0 {
                 continue;

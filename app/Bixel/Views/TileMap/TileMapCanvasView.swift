@@ -74,18 +74,44 @@ struct TileMapCanvasView: NSViewRepresentable {
         }
 
         func begin(at point: CGPoint, in view: MapCanvas) {
+            if (model.tool == .move || model.tool == .select),
+               let pixel = documentPoint(point, in: view),
+               model.beginImageTransform(at: pixel, zoom: viewport.zoom,
+                                         preserveAspect: !model.imageFreeformResize) {
+                return
+            }
             guard let cell = cellCoordinate(point, in: view) else { return }
             model.beginStroke(x: cell.x, y: cell.y)
         }
 
         func drag(at point: CGPoint, in view: MapCanvas) {
+            if model.isTransformingImage, let pixel = documentPoint(point, in: view) {
+                model.continueImageTransform(to: pixel)
+                return
+            }
             guard let cell = cellCoordinate(point, in: view, clamp: true) else { return }
             model.continueStroke(x: cell.x, y: cell.y)
         }
 
         func end(at point: CGPoint, in view: MapCanvas) {
+            if model.isTransformingImage {
+                model.endImageTransform()
+                return
+            }
             guard let cell = cellCoordinate(point, in: view, clamp: true) else { return }
             model.endStroke(x: cell.x, y: cell.y)
+        }
+
+        fileprivate func documentPoint(_ point: CGPoint, in view: MapCanvas) -> CGPoint? {
+            if model.isInfinite {
+                let doc = viewport.viewToDocF(point, viewSize: view.bounds.size)
+                return CGPoint(x: doc.x, y: doc.y)
+            }
+            let origin = viewport.artboardOrigin(viewSize: view.bounds.size,
+                                                 canvasWidth: model.map.pixelWidth,
+                                                 height: model.map.pixelHeight)
+            return CGPoint(x: (point.x - origin.x) / viewport.zoom,
+                           y: (origin.y + CGFloat(model.map.pixelHeight) * viewport.zoom - point.y) / viewport.zoom)
         }
 
         func commitLine(from startView: CGPoint, to endView: CGPoint, dragged: Bool, in view: MapCanvas) {
@@ -123,6 +149,7 @@ final class MapCanvas: NSView {
     private let gridAxisLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
     private let objectLayer = CAShapeLayer()
+    private let imageTransformLayer = CAShapeLayer()
     private let brushPreviewLayer = CALayer()
     private let ghostLayer = CAShapeLayer()
     private let borderLayer = CALayer()
@@ -218,6 +245,13 @@ final class MapCanvas: NSView {
         objectLayer.fillColor = NSColor(red: 0.95, green: 0.4, blue: 0.2, alpha: 0.12).cgColor
         objectLayer.isHidden = true
         artboardLayer.addSublayer(objectLayer)
+
+        imageTransformLayer.strokeColor = NSColor.systemBlue.cgColor
+        imageTransformLayer.lineWidth = 1.5
+        imageTransformLayer.lineDashPattern = [5, 3]
+        imageTransformLayer.fillColor = nil
+        imageTransformLayer.isHidden = true
+        artboardLayer.addSublayer(imageTransformLayer)
 
         brushPreviewLayer.magnificationFilter = .nearest
         brushPreviewLayer.minificationFilter = .nearest
@@ -351,6 +385,7 @@ final class MapCanvas: NSView {
             gridAxisLayer.frame = full
             selectionLayer.frame = full
             objectLayer.frame = full
+            imageTransformLayer.frame = full
             ghostLayer.frame = full
             updateGrid(model: model, viewSize: bounds.size)
             CATransaction.commit()
@@ -388,6 +423,7 @@ final class MapCanvas: NSView {
         gridAxisLayer.frame = artboardBounds
         selectionLayer.frame = artboardBounds
         objectLayer.frame = artboardBounds
+        imageTransformLayer.frame = artboardBounds
         ghostLayer.frame = artboardBounds
         updateGrid(model: model, viewSize: bounds.size)
         CATransaction.commit()
@@ -619,6 +655,28 @@ final class MapCanvas: NSView {
             selectionLayer.path = nil
         }
 
+        // Imported image transform frame and corner handles.
+        if model.activeIsImage, let frame = model.imageLayerFrame(model.activeLayer) {
+            imageTransformLayer.isHidden = false
+            let p = canvasPoint(frame.minX, frame.minY, model: model, viewSize: bounds.size)
+            let rect = CGRect(x: p.x, y: p.y,
+                              width: frame.width * zoom, height: frame.height * zoom)
+            let path = CGMutablePath()
+            path.addRect(rect)
+            let size: CGFloat = 8
+            for handle in [rect.origin,
+                           CGPoint(x: rect.maxX, y: rect.minY),
+                           CGPoint(x: rect.minX, y: rect.maxY),
+                           CGPoint(x: rect.maxX, y: rect.maxY)] {
+                path.addRect(CGRect(x: handle.x - size / 2, y: handle.y - size / 2,
+                                    width: size, height: size))
+            }
+            imageTransformLayer.path = path
+        } else {
+            imageTransformLayer.isHidden = true
+            imageTransformLayer.path = nil
+        }
+
         // Object rects on the active object layer.
         if model.isObjectActive {
             objectLayer.isHidden = false
@@ -784,7 +842,9 @@ final class MapCanvas: NSView {
             } else {
                 canMoveTiles = false
             }
-            if !canMoveTiles {
+            let hitsImage = coordinator.documentPoint(point, in: self)
+                .map { coordinator.model.hasImageLayer(at: $0) } ?? false
+            if !canMoveTiles && !hitsImage {
                 panning = true
                 lastPanPoint = point
                 NSCursor.closedHand.set()

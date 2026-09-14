@@ -33,7 +33,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Bixel connects to your Mac on the local network to sync projects and share the AI assistant.</string>
 	<key>RevenueCatAPIKey</key>
-	<string>appl_RxyNleGUVFCdwNVZemafcSzICuv</string>
+	<string>$(REVENUECAT_API_KEY)</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

@@ -95,18 +95,51 @@ struct TileMapCanvasView: UIViewRepresentable {
         }
 
         func begin(at point: CGPoint, in view: UIView) {
+            if (model.tool == .move || model.tool == .select),
+               let pixel = documentPoint(point, in: view),
+               model.beginImageTransform(at: pixel, zoom: viewport.zoom,
+                                         preserveAspect: !model.imageFreeformResize) {
+                return
+            }
             guard let cell = cellCoordinate(point, in: view) else { return }
             model.beginStroke(x: cell.x, y: cell.y)
         }
 
         func drag(at point: CGPoint, in view: UIView) {
+            if model.isTransformingImage, let pixel = documentPoint(point, in: view) {
+                model.continueImageTransform(to: pixel)
+                return
+            }
             guard let cell = cellCoordinate(point, in: view, clamp: true) else { return }
             model.continueStroke(x: cell.x, y: cell.y)
         }
 
         func end(at point: CGPoint, in view: UIView) {
+            if model.isTransformingImage {
+                model.endImageTransform()
+                return
+            }
             guard let cell = cellCoordinate(point, in: view, clamp: true) else { return }
             model.endStroke(x: cell.x, y: cell.y)
+        }
+
+        private func documentPoint(_ point: CGPoint, in view: UIView) -> CGPoint? {
+            let viewSize = view.bounds.size
+            guard viewSize.width > 0, viewSize.height > 0 else { return nil }
+            if model.isInfinite {
+                let originX = (viewSize.width - viewport.rightInset) / 2 + viewport.pan.x
+                let originY = viewSize.height / 2 - viewport.pan.y
+                return CGPoint(x: (point.x - originX) / viewport.zoom,
+                               y: (point.y - originY) / viewport.zoom)
+            }
+            let mapW = CGFloat(model.map.pixelWidth)
+            let mapH = CGFloat(model.map.pixelHeight)
+            let appKitOrigin = viewport.artboardOrigin(viewSize: viewSize,
+                                                       canvasWidth: Int(mapW), height: Int(mapH))
+            let topLeftX = appKitOrigin.x
+            let topLeftY = viewSize.height - (appKitOrigin.y + mapH * viewport.zoom)
+            return CGPoint(x: (point.x - topLeftX) / viewport.zoom,
+                           y: (point.y - topLeftY) / viewport.zoom)
         }
     }
 }
@@ -126,6 +159,7 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private let wholeMapLayer = CALayer()
     private let cellGridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
+    private let imageTransformLayer = CAShapeLayer()
     private let overlayLayer = CAShapeLayer()
 
     // Geometry caches
@@ -203,6 +237,13 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         selectionLayer.isHidden = true
         artboardLayer.addSublayer(selectionLayer)
 
+        imageTransformLayer.strokeColor = UIColor.systemBlue.cgColor
+        imageTransformLayer.lineWidth = 1.5
+        imageTransformLayer.lineDashPattern = [5, 3]
+        imageTransformLayer.fillColor = nil
+        imageTransformLayer.isHidden = true
+        artboardLayer.addSublayer(imageTransformLayer)
+
         // Overlays
         overlayLayer.fillColor = nil
         artboardLayer.addSublayer(overlayLayer)
@@ -275,6 +316,7 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
             wholeMapLayer.frame = full
             cellGridLayer.frame = full
             selectionLayer.frame = full
+            imageTransformLayer.frame = full
             overlayLayer.frame = full
             updateCellGrid()
             CATransaction.commit()
@@ -304,6 +346,7 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         wholeMapLayer.frame = localFrame
         cellGridLayer.frame = localFrame
         selectionLayer.frame = localFrame
+        imageTransformLayer.frame = localFrame
         overlayLayer.frame = localFrame
 
         updateCellGrid()
@@ -408,6 +451,27 @@ final class MapCanvasUIView: UIView, UIGestureRecognizerDelegate {
         } else {
             selectionLayer.isHidden = true
             selectionLayer.path = nil
+        }
+
+        if model.activeIsImage, let frame = model.imageLayerFrame(model.activeLayer) {
+            imageTransformLayer.isHidden = false
+            let p = canvasPoint(frame.minX, frame.minY, model: model, viewSize: bounds.size)
+            let rect = CGRect(x: p.x, y: p.y,
+                              width: frame.width * zoom, height: frame.height * zoom)
+            let path = CGMutablePath()
+            path.addRect(rect)
+            let size: CGFloat = 8
+            for handle in [rect.origin,
+                           CGPoint(x: rect.maxX, y: rect.minY),
+                           CGPoint(x: rect.minX, y: rect.maxY),
+                           CGPoint(x: rect.maxX, y: rect.maxY)] {
+                path.addRect(CGRect(x: handle.x - size / 2, y: handle.y - size / 2,
+                                    width: size, height: size))
+            }
+            imageTransformLayer.path = path
+        } else {
+            imageTransformLayer.isHidden = true
+            imageTransformLayer.path = nil
         }
     }
 
