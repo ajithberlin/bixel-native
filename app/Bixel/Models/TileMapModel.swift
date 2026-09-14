@@ -1150,6 +1150,8 @@ final class TileMapModel: ObservableObject {
         }
         state["tilesets"] = map.tilesetsInfo().map { info -> [String: Any] in
             ["index": info.index, "name": info.name, "first_gid": Int(info.firstGid),
+             "image": info.image, "margin": info.margin, "spacing": info.spacing,
+             "image_width": info.imageWidth, "image_height": info.imageHeight,
              "tile_width": info.tileWidth, "tile_height": info.tileHeight,
              "columns": info.columns, "tile_count": info.tileCount]
         }
@@ -1200,8 +1202,21 @@ final class TileMapModel: ObservableObject {
             throw AgentOpError("'\(name)' requires a number '\(key)'")
         }
         func uint32(_ key: String) throws -> UInt32 {
-            guard let value = op[key] as? Int, value >= 0 else { throw AgentOpError("'\(name)' requires a non-negative integer '\(key)'") }
-            return UInt32(value)
+            if let num = op[key] as? NSNumber {
+                return num.uint32Value
+            }
+            if let value = op[key] as? Int {
+                return UInt32(bitPattern: Int32(truncatingIfNeeded: value))
+            }
+            if let str = op[key] as? String {
+                if (str.hasPrefix("0x") || str.hasPrefix("0X")), let val = UInt32(str.dropFirst(2), radix: 16) {
+                    return val
+                }
+                if let val = UInt32(str) {
+                    return val
+                }
+            }
+            throw AgentOpError("'\(name)' requires a valid tile GID for '\(key)'")
         }
         func layer() throws -> Int {
             let index = try int("layer")
@@ -1245,8 +1260,17 @@ final class TileMapModel: ObservableObject {
             tiles.reserveCapacity(width * height)
             for row in rows {
                 for cell in row {
-                    guard let value = cell as? Int, value >= 0 else { throw AgentOpError("'map_stamp' tiles must be non-negative integers") }
-                    tiles.append(UInt32(value))
+                    if let num = cell as? NSNumber {
+                        tiles.append(num.uint32Value)
+                    } else if let intVal = cell as? Int {
+                        tiles.append(UInt32(bitPattern: Int32(truncatingIfNeeded: intVal)))
+                    } else if let str = cell as? String, (str.hasPrefix("0x") || str.hasPrefix("0X")), let val = UInt32(str.dropFirst(2), radix: 16) {
+                        tiles.append(val)
+                    } else if let str = cell as? String, let val = UInt32(str) {
+                        tiles.append(val)
+                    } else {
+                        throw AgentOpError("'map_stamp' tiles must be valid integers or hex GID strings")
+                    }
                 }
             }
             let pattern = MapTilePattern(width: width, height: height, tiles: tiles)
@@ -1445,6 +1469,43 @@ final class TileMapModel: ObservableObject {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url)
             return ["path": path, "bytes": data.count]
+
+        case "map_read_region":
+            let target = try layer()
+            let x = try int("x"), y = try int("y")
+            let w = try int("width"), h = try int("height")
+            guard w > 0, h > 0 else { throw AgentOpError("map_read_region needs positive width and height") }
+            let pattern = map.readRegion(layer: target, x: x, y: y, w: w, h: h)
+            var rows: [[Int]] = []
+            for row in 0..<h {
+                var rowData: [Int] = []
+                for col in 0..<w {
+                    rowData.append(Int(pattern.tiles[row * w + col]))
+                }
+                rows.append(rowData)
+            }
+            return ["x": x, "y": y, "width": w, "height": h, "tiles": rows]
+
+        case "map_get_tile":
+            let target = try layer()
+            let x = try int("x"), y = try int("y")
+            let gid = map.getTile(layer: target, x: x, y: y)
+            return ["x": x, "y": y, "tile": Int(gid)]
+
+        case "map_replace":
+            let target = try layer()
+            let oldGid = try uint32("old_tile")
+            let newGid = try uint32("new_tile")
+            let x = op["x"] as? Int ?? 0
+            let y = op["y"] as? Int ?? 0
+            let w = op["width"] as? Int ?? map.columns
+            let h = op["height"] as? Int ?? map.rows
+            map.snapshot()
+            let changed = map.replace(layer: target, x: x, y: y, w: w, h: h, from: oldGid, to: newGid)
+            return ["cells": changed]
+
+        case "map_get_json":
+            return ["json": map.toJSON()]
 
         default:
             throw AgentOpError("unknown op '\(name)'")

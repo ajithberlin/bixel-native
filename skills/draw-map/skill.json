@@ -1,0 +1,25 @@
+{
+  "manifest_version": 1,
+  "name": "draw-map",
+  "version": "1.0.0",
+  "description": "Intelligent multi-layer tilemap scene generator, cataloger, and layer-stamping engine supporting Orthogonal and Isometric/Staggered maps, 8-way flip/rotation directions, tileset inspection, and non-destructive scene updates.",
+  "runtime": "python",
+  "entrypoint": "scripts/scene_builder.py",
+  "dependencies": {
+    "python": [
+      "Pillow",
+      "numpy"
+    ],
+    "requirements_file": "requirements.txt"
+  },
+  "projections": [
+    "orthogonal",
+    "isometric",
+    "staggered"
+  ],
+  "collaborates_with": [
+    "pixel-tileset-gen",
+    "tileset-asset-extender",
+    "pixel_image_gen"
+  ]
+}
