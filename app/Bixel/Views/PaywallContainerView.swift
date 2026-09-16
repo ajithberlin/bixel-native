@@ -22,12 +22,16 @@ struct PaywallContainerView: View {
         if subscriptionManager.isConfigured {
             PaywallView()
                 .onPurchaseCompleted { info in
-                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
+                    let isActive = info.entitlements[SubscriptionManager.entitlementID]?.isActive == true
+                    subscriptionManager.applyAdFreeEntitlement(isActive: isActive)
+                    if isActive {
                         dismiss()
                     }
                 }
                 .onRestoreCompleted { info in
-                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
+                    let isActive = info.entitlements[SubscriptionManager.entitlementID]?.isActive == true
+                    subscriptionManager.applyAdFreeEntitlement(isActive: isActive)
+                    if isActive {
                         dismiss()
                     }
                 }

@@ -223,9 +223,25 @@ struct ProjectLoadingAdView: View {
                                 .strokeBorder(ad.accentColor.opacity(0.4), lineWidth: 1)
                         )
 
-                    Image(systemName: ad.iconSystemName)
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(ad.accentColor)
+                    if let iconURL = ad.iconURL ?? ad.imageURL {
+                        AsyncImage(url: iconURL) { phase in
+                            if case .success(let image) = phase {
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                Image(systemName: ad.iconSystemName)
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(ad.accentColor)
+                            }
+                        }
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                        Image(systemName: ad.iconSystemName)
+                            .font(.system(size: 24, weight: .bold))
+                            .foregroundColor(ad.accentColor)
+                    }
                 }
                 .frame(width: 52, height: 52)
 

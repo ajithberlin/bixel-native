@@ -1,8 +1,8 @@
 // AdManager.swift
 //
 // Sponsor message coordinator for Bixel Studio.
-// These are fixed, clearly labelled sponsor messages; no ad SDK or behavioural
-// targeting is bundled with the app.
+// The app loads clearly labelled house ads from a published feed and retains a
+// local fallback; no ad SDK or behavioural targeting is bundled with the app.
 
 import Foundation
 import SwiftUI
@@ -20,14 +20,99 @@ struct AdItem: Identifiable, Equatable {
     let description: String
     let callToAction: String
     let iconSystemName: String
+    let iconURL: URL?
+    let imageURL: URL?
     let accentColor: Color
     let destinationURL: URL
     let badgeText: String
+
+    init(
+        id: String,
+        advertiser: String,
+        headline: String,
+        description: String,
+        callToAction: String,
+        iconSystemName: String,
+        iconURL: URL? = nil,
+        imageURL: URL? = nil,
+        accentColor: Color,
+        destinationURL: URL,
+        badgeText: String
+    ) {
+        self.id = id
+        self.advertiser = advertiser
+        self.headline = headline
+        self.description = description
+        self.callToAction = callToAction
+        self.iconSystemName = iconSystemName
+        self.iconURL = iconURL
+        self.imageURL = imageURL
+        self.accentColor = accentColor
+        self.destinationURL = destinationURL
+        self.badgeText = badgeText
+    }
+}
+
+extension AdItem {
+    init?(remote creative: RemoteAdCreative) {
+        guard creative.isValid,
+              let id = creative.adID,
+              let product = creative.product,
+              let advertiser = creative.advertiser,
+              let headline = creative.headline,
+              let body = creative.body,
+              let callToAction = creative.callToAction,
+              let destinationURL = creative.destinationURL else {
+            return nil
+        }
+
+        self.init(
+            id: id,
+            advertiser: advertiser,
+            headline: headline,
+            description: body,
+            callToAction: callToAction,
+            iconSystemName: Self.fallbackIcon(for: creative.category),
+            iconURL: creative.iconURL,
+            imageURL: creative.imageURL,
+            accentColor: Self.accentColor(for: product),
+            destinationURL: destinationURL,
+            badgeText: "Sponsored"
+        )
+    }
+
+    private static func fallbackIcon(for category: String?) -> String {
+        switch category?.lowercased() {
+        case let category where category?.contains("education") == true:
+            return "book.fill"
+        case let category where category?.contains("restaurant") == true:
+            return "fork.knife"
+        case let category where category?.contains("cloud") == true:
+            return "cloud.fill"
+        default:
+            return "sparkles"
+        }
+    }
+
+    private static func accentColor(for product: String) -> Color {
+        switch product.lowercased() {
+        case "langcity":
+            return Color(red: 0.98, green: 0.47, blue: 0.28)
+        case "dinertech":
+            return Color(red: 0.18, green: 0.72, blue: 0.62)
+        case "alphberlin":
+            return Color(red: 0.34, green: 0.55, blue: 0.98)
+        default:
+            return Color(red: 0.70, green: 0.52, blue: 0.98)
+        }
+    }
 }
 
 @MainActor
 final class AdManager: ObservableObject {
     static let shared = AdManager()
+
+    static let remoteFeedURL = RemoteAdFeedLoader.defaultEndpoint
 
     // MARK: - Rotating Commercial Ad Inventory
 
@@ -95,6 +180,12 @@ final class AdManager: ObservableObject {
     private let subscriptionManager = SubscriptionManager.shared
     private var cancellables = Set<AnyCancellable>()
     private var rotationTimer: AnyCancellable?
+    private var remoteRefreshTimer: AnyCancellable?
+    private var remoteLoadTask: Task<Void, Never>?
+
+    /// Current inventory. The local sample ads remain in place until a valid
+    /// remote response arrives, and also act as the offline fallback.
+    @Published private(set) var ads: [AdItem] = AdManager.sampleAds
 
     /// Whether ads should be rendered. True for free users, false for ad-free lifetime customers.
     @Published private(set) var shouldShowAds: Bool = true
@@ -106,26 +197,70 @@ final class AdManager: ObservableObject {
     @Published private(set) var impressionCount: Int = 0
 
     var currentAd: AdItem {
-        Self.sampleAds[currentAdIndex % Self.sampleAds.count]
+        ads[currentAdIndex % ads.count]
     }
 
     private init() {
         // Observe entitlement changes: when isAdFree becomes true, shouldShowAds is false.
         subscriptionManager.$isAdFree
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] isAdFree in
                 guard let self = self else { return }
                 self.shouldShowAds = !isAdFree
                 if isAdFree {
                     self.stopRotation()
+                    self.stopRemoteFeedRefresh()
+                    self.remoteLoadTask?.cancel()
                 } else {
                     self.startRotation()
+                    self.scheduleRemoteFeedRefresh()
+                    self.loadRemoteAds()
                 }
             }
             .store(in: &cancellables)
+    }
 
-        if shouldShowAds {
-            startRotation()
+    /// Converts validated feed creatives into the existing ad inventory model.
+    static func makeAdItems(from creatives: [RemoteAdCreative]) -> [AdItem] {
+        creatives.compactMap { AdItem(remote: $0) }
+    }
+
+    private func scheduleRemoteFeedRefresh() {
+        remoteRefreshTimer?.cancel()
+        remoteRefreshTimer = Timer.publish(every: 6 * 60 * 60, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                self?.loadRemoteAds()
+            }
+    }
+
+    private func stopRemoteFeedRefresh() {
+        remoteRefreshTimer?.cancel()
+        remoteRefreshTimer = nil
+    }
+
+    private func loadRemoteAds() {
+        guard !subscriptionManager.isAdFree else { return }
+
+        remoteLoadTask?.cancel()
+        remoteLoadTask = Task { [weak self] in
+            guard let self else { return }
+
+            do {
+                let creatives = try await RemoteAdFeedLoader(endpoint: Self.remoteFeedURL).load()
+                let remoteAds = Self.makeAdItems(from: creatives)
+                guard !remoteAds.isEmpty, !Task.isCancelled, !self.subscriptionManager.isAdFree else {
+                    return
+                }
+
+                self.ads = remoteAds
+                self.currentAdIndex = 0
+            } catch is CancellationError {
+                // A purchase or a newer refresh cancelled this request.
+            } catch {
+                // Keep the last successful inventory, which starts as the local
+                // sample inventory, when the feed is unavailable.
+                print("[AdManager] Remote ad feed unavailable: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -147,20 +282,20 @@ final class AdManager: ObservableObject {
 
     func nextAd() {
         withAnimation(.easeInOut(duration: 0.3)) {
-            currentAdIndex = (currentAdIndex + 1) % Self.sampleAds.count
+            currentAdIndex = (currentAdIndex + 1) % ads.count
         }
         recordImpression()
     }
 
     func previousAd() {
         withAnimation(.easeInOut(duration: 0.3)) {
-            currentAdIndex = (currentAdIndex - 1 + Self.sampleAds.count) % Self.sampleAds.count
+            currentAdIndex = (currentAdIndex - 1 + ads.count) % ads.count
         }
         recordImpression()
     }
 
     func selectAd(at index: Int) {
-        guard index >= 0 && index < Self.sampleAds.count else { return }
+        guard index >= 0 && index < ads.count else { return }
         withAnimation(.easeInOut(duration: 0.3)) {
             currentAdIndex = index
         }

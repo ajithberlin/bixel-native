@@ -137,13 +137,21 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
     #if canImport(RevenueCat)
     private func updateEntitlements(from info: CustomerInfo) {
-        let active = info.entitlements[Self.entitlementID]?.isActive == true
-        if self.isAdFree != active {
-            self.isAdFree = active
-            print("[SubscriptionManager] 'ad_free' entitlement updated: \(active)")
-        }
+        applyAdFreeEntitlement(isActive: info.entitlements[Self.entitlementID]?.isActive == true)
     }
     #endif
+
+    /// Apply a freshly verified entitlement to the shared UI state.
+    ///
+    /// RevenueCatUI reports the updated customer info directly to its paywall
+    /// completion handlers. Keeping this update separate from the SDK delegate
+    /// means the ad banner disappears immediately after a successful purchase,
+    /// even when the delegate callback is delayed or omitted.
+    func applyAdFreeEntitlement(isActive: Bool) {
+        guard isAdFree != isActive else { return }
+        isAdFree = isActive
+        print("[SubscriptionManager] 'ad_free' entitlement updated: \(isActive)")
+    }
 
     // MARK: - Offerings Retrieval
 

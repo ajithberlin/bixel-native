@@ -28,7 +28,7 @@ is provided; replace anything marked **(your choice)** with your own.
 | Field | Suggested value |
 |---|---|
 | Price | **Free** (monetize via the in-app lifetime unlock) |
-| Availability | All countries/regions, or select as needed |
+| Availability | Specific countries/regions; exclude **China mainland** unless the China-compliant build and metadata are ready |
 | Distribution | Public |
 
 ---
@@ -48,8 +48,9 @@ Answer **Data Collection** based on what the app actually does:
 Privacy Policy URL: `https://ajithberlin.github.io/bixel-native/privacy.html`.
 Tracking: **No** — the app does not track users across apps/websites.
 The app does not bundle a Google Mobile Ads SDK or use behavioural advertising.
-Fixed sponsor messages are clearly labelled and link to the sponsor's website
-only when the user chooses to open them.
+It fetches clearly labelled house-ad creatives from a published HTTPS feed; no
+advertising identifier or cross-app tracking is used. Selecting a sponsor link
+opens that sponsor's website only when the user chooses to open it.
 
 ---
 
@@ -225,6 +226,23 @@ app version under **In-App Purchases**.
 ---
 
 ## 10. Submission checklist
+
+### China mainland storefront
+
+The app includes an optional Codex provider integration and the associated
+metadata must not be used for a China mainland submission without confirming
+the required local compliance. For the current build, use the storefront
+exclusion path:
+
+1. In App Store Connect, open **Pricing and Availability** → **App
+   Availability** → **Manage Availability**.
+2. Choose **Specific Countries or Regions** and deselect **China mainland**.
+3. Confirm the change before submitting the version for review.
+
+If China mainland distribution is required later, prepare a separate
+China-compliant release plan with professional legal advice, disable the
+restricted provider in that build, and use localized metadata and screenshots
+that contain no restricted provider references.
 
 - [ ] App record created with bundle ID `com.bixel.studio`.
 - [ ] App Sandbox + In-App Purchase capabilities enabled on the App ID.
