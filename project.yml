@@ -141,7 +141,7 @@ targets:
         CFBundleName: Bixel
         CFBundleDisplayName: Bixel Studio
         CFBundleShortVersionString: "1.0.3"
-        CFBundleVersion: "4"
+        CFBundleVersion: "1"
         ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: "© 2026 Ajith Berlin A"
         RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
