@@ -7,7 +7,7 @@ struct SubscriptionEntitlementTests {
         let manager = SubscriptionManager.shared
 
         precondition(!manager.isAdFree, "A fresh customer must not start ad-free")
-        precondition(AdManager.shared.shouldShowAds, "Ads should be visible for a free customer")
+        precondition(!AdManager.shared.shouldShowAds, "Ads stay hidden until the remote feed loads")
 
         manager.applyAdFreeEntitlement(isActive: true)
 
@@ -17,7 +17,7 @@ struct SubscriptionEntitlementTests {
         manager.applyAdFreeEntitlement(isActive: false)
 
         precondition(!manager.isAdFree, "A revoked entitlement must clear shared state")
-        precondition(AdManager.shared.shouldShowAds, "Ads must return when entitlement is inactive")
+        precondition(!AdManager.shared.shouldShowAds, "Ads stay hidden until a remote creative is available")
         print("Subscription entitlement tests passed")
     }
 }

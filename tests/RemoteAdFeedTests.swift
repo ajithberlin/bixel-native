@@ -105,7 +105,7 @@ struct RemoteAdFeedTests {
         RemoteAdURLProtocol.responseData = Data("{\"ads\":[]}".utf8)
         do {
             _ = try await loader.load()
-            preconditionFailure("An empty feed must fall back instead of replacing the inventory")
+            preconditionFailure("An empty feed must not become a renderable ad inventory")
         } catch {}
 
         print("Remote ad feed tests passed")

@@ -18,10 +18,6 @@ struct ProjectLoadingAdView: View {
     @State private var timer: Timer? = nil
     @State private var spinnerAngle: Double = 0
 
-    private var ad: AdItem {
-        adManager.currentAd
-    }
-
     var body: some View {
         ZStack {
             // Blurred dark backdrop
@@ -29,56 +25,16 @@ struct ProjectLoadingAdView: View {
                 .background(.ultraThinMaterial)
                 .ignoresSafeArea()
 
-            // Centered Modal Dialog
-            VStack(spacing: 0) {
-                // 1. Loading Header Bar
-                loadingHeader
-                    .padding(.horizontal, 22)
-                    .padding(.top, 20)
-                    .padding(.bottom, 16)
-
-                // Progress Bar
-                progressBar
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 18)
-
-                Divider()
-                    .overlay(Color.white.opacity(0.08))
-
-                // 2. Featured Sponsor Card
-                sponsorCard
-                    .padding(20)
-
-                Divider()
-                    .overlay(Color.white.opacity(0.08))
-
-                // 3. Action Footer
-                footer
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 14)
+            if let ad = adManager.currentAd {
+                loadingContent(for: ad)
+            } else {
+                feedLoadingContent
             }
-            .frame(width: 530)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.12, green: 0.13, blue: 0.16),
-                                Color(red: 0.09, green: 0.10, blue: 0.12)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .strokeBorder(ad.accentColor.opacity(0.35), lineWidth: 1.2)
-                    )
-            )
-            .shadow(color: Color.black.opacity(0.65), radius: 32, y: 12)
         }
         .onAppear {
-            adManager.recordImpression()
+            if adManager.currentAd != nil {
+                adManager.recordImpression()
+            }
             startLoading()
         }
         .onDisappear {
@@ -89,7 +45,73 @@ struct ProjectLoadingAdView: View {
 
     // MARK: - Loading Header
 
-    private var loadingHeader: some View {
+    private func loadingContent(for ad: AdItem) -> some View {
+        VStack(spacing: 0) {
+            // 1. Loading Header Bar
+            loadingHeader(for: ad)
+                .padding(.horizontal, 22)
+                .padding(.top, 20)
+                .padding(.bottom, 16)
+
+            // Progress Bar
+            progressBar(for: ad)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 18)
+
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+
+            // 2. Featured Sponsor Card
+            sponsorCard(for: ad)
+                .padding(20)
+
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+
+            // 3. Action Footer
+            footer
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+        }
+        .frame(width: 530)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.12, green: 0.13, blue: 0.16),
+                            Color(red: 0.09, green: 0.10, blue: 0.12)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(ad.accentColor.opacity(0.35), lineWidth: 1.2)
+                )
+        )
+        .shadow(color: Color.black.opacity(0.65), radius: 32, y: 12)
+    }
+
+    private var feedLoadingContent: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading sponsor message…")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundColor(StudioTheme.textSecondary)
+        }
+        .frame(width: 300, height: 140)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(red: 0.10, green: 0.11, blue: 0.14))
+        )
+    }
+
+    // MARK: - Loading Header
+
+    private func loadingHeader(for ad: AdItem) -> some View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
@@ -178,7 +200,7 @@ struct ProjectLoadingAdView: View {
 
     // MARK: - Progress Bar
 
-    private var progressBar: some View {
+    private func progressBar(for ad: AdItem) -> some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
@@ -202,7 +224,7 @@ struct ProjectLoadingAdView: View {
 
     // MARK: - Featured Sponsor Card
 
-    private var sponsorCard: some View {
+    private func sponsorCard(for ad: AdItem) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 // Sponsor Icon Box

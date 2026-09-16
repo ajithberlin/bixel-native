@@ -24,8 +24,8 @@ struct AdBannerView: View {
     }
 
     var body: some View {
-        if adManager.shouldShowAds {
-            bannerContainer
+        if adManager.shouldShowAds, let ad = adManager.currentAd {
+            bannerContainer(for: ad)
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .bottom)),
                     removal: .opacity.combined(with: .scale(scale: 0.96))
@@ -34,10 +34,8 @@ struct AdBannerView: View {
         }
     }
 
-    private var bannerContainer: some View {
-        let ad = adManager.currentAd
-
-        return HStack(spacing: 14) {
+    private func bannerContainer(for ad: AdItem) -> some View {
+        HStack(spacing: 14) {
             // MARK: - Sponsor Icon / Brand Avatar Container
             Button {
                 adManager.clickCurrentAd()
