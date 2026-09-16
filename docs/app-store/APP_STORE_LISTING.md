@@ -185,6 +185,16 @@ the rest of the app is unaffected.
 
 All projects are stored locally under the app container. The app does not collect
 analytics.
+
+The Devices pane provides an optional Mac host for the paired Bixel iPad app.
+To test it, open Settings → Devices, enable “Remote Access,” and choose “Show
+pairing code.” When enabled, Bixel creates a Network.framework `NWListener` and
+advertises the Bonjour service `_bixel-remote._tcp` so a paired iPad can initiate
+encrypted local-network connections for project sync and the Mac-hosted AI
+assistant. The listener is off by default and is only started after the user
+enables Remote Access. The ChatGPT (Codex) sign-in flow also uses a localhost
+callback on port 1455; OpenRouter, Codex, and the ad feed use outgoing HTTPS
+connections.
 ```
 
 ---

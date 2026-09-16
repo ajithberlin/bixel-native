@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.3</string>
 	<key>CFBundleVersion</key>
-	<string>4</string>
+	<string>5</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSBonjourServices</key>
@@ -33,7 +33,11 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Bixel connects to your Mac on the local network to sync projects and share the AI assistant.</string>
 	<key>RevenueCatAPIKey</key>
-	<string>$(REVENUECAT_API_KEY)</string>
+	<string>appl_RxyNleGUVFCdwNVZemafcSzICuv</string>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>2</integer>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

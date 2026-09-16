@@ -121,7 +121,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bixel.studio
         PRODUCT_NAME: Bixel
         ARCHS: arm64
-        TARGETED_DEVICE_FAMILY: "1,2"
+        TARGETED_DEVICE_FAMILY: "2"
         SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
         HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
@@ -149,6 +149,8 @@ targets:
         NSBonjourServices:
           - "_bixel-remote._tcp"
         NSCameraUsageDescription: "Bixel uses the camera to scan the pairing QR code shown on your Mac."
+        UIDeviceFamily:
+          - 2
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: com.bixel.studio.color-drop
             UTTypeDescription: Bixel Color

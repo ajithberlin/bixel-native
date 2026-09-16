@@ -33,6 +33,11 @@ if rg -q 'GADApplicationIdentifier|ca-app-pub-' "$PROJECT" "$ROOT/app/Bixel/Info
   exit 1
 fi
 
+if ! rg -q '^        TARGETED_DEVICE_FAMILY: "2"$' "$PROJECT"; then
+  echo "The iOS target must be restricted to iPad devices" >&2
+  exit 1
+fi
+
 if ! rg -q 'Privacy Policy|Support' "$ABOUT"; then
   echo "The app About pane must expose legal and support links" >&2
   exit 1
