@@ -145,6 +145,17 @@ struct ProjectLoadingAdView: View {
                         .background(RoundedRectangle(cornerRadius: 3).fill(ad.accentColor.opacity(0.16)))
                 }
 
+                Button {
+                    adManager.reportCurrentAd()
+                } label: {
+                    Image(systemName: "exclamationmark.bubble")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.plain)
+                .help("Report this ad")
+
                 if let onDismiss = onDismiss {
                     Button {
                         timer?.invalidate()

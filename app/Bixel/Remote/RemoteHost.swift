@@ -70,8 +70,21 @@ final class RemoteSession {
 final class RemoteHost: ObservableObject {
     static let shared = RemoteHost()
 
+    static let remoteEnabledKey = "bixel.remoteAccessEnabled"
+
+    @Published var isEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isEnabled, forKey: Self.remoteEnabledKey)
+            if isEnabled {
+                start()
+            } else {
+                stop()
+            }
+        }
+    }
+
     @Published private(set) var isAdvertising = false
-    @Published private(set) var status = "Not sharing"
+    @Published private(set) var status: String
     @Published private(set) var pairingOffer: RemotePairingOffer?
     @Published private(set) var pairingSecondsRemaining = 0
     @Published private(set) var peers: [String] = []
@@ -89,6 +102,15 @@ final class RemoteHost: ObservableObject {
     private var pairingTimer: Timer?
 
     static let pairingTTL: TimeInterval = 120
+
+    init() {
+        let enabled = UserDefaults.standard.bool(forKey: Self.remoteEnabledKey)
+        self.isEnabled = enabled
+        self.status = enabled ? "Starting…" : "Remote access is turned off"
+        if enabled {
+            start()
+        }
+    }
 
     func start() {
         guard listener == nil else { return }
@@ -132,14 +154,18 @@ final class RemoteHost: ObservableObject {
         sessions.removeAll()
         DispatchQueue.main.async {
             self.isAdvertising = false
-            self.status = "Not sharing"
+            self.status = self.isEnabled ? "Not sharing" : "Remote access is turned off"
             self.peers = []
         }
     }
 
     /// Begin a time-limited pairing window and publish the QR offer.
     func beginPairing() {
-        start()
+        if !isEnabled {
+            isEnabled = true
+        } else {
+            start()
+        }
         pairingToken = RemoteHandshake.randomToken()
         pairingDeadline = Date().addingTimeInterval(Self.pairingTTL)
         refreshPairingOffer()

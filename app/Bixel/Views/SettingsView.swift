@@ -45,6 +45,15 @@ enum AppSettings {
     }
 }
 
+/// Public pages linked from the app and from App Store Connect metadata.
+/// Keeping these URLs in one place prevents the About pane and the listing
+/// from drifting apart when the support site changes.
+enum AppLinks {
+    static let support = URL(string: "https://ajithberlin.github.io/bixel-native/support.html")!
+    static let privacy = URL(string: "https://ajithberlin.github.io/bixel-native/privacy.html")!
+    static let terms = URL(string: "https://ajithberlin.github.io/bixel-native/terms.html")!
+}
+
 /// Uses SwiftUI's supported Settings presentation on macOS 14+, with the
 /// scene action selectors retained for older macOS releases.
 struct AppSettingsButton<Label: View>: View {
@@ -912,6 +921,16 @@ struct AboutSettingsPane: View {
                     aboutRow("Secrets", paths?.secrets ?? "goose secret store", showsDivider: false)
                 }
 
+                SettingsSection(title: "Legal & Support", systemImage: "questionmark.circle",
+                                footer: "Bixel Studio stores projects locally. Optional AI requests go directly to the provider you choose.") {
+                    legalRow("Support", "Troubleshooting, bug reports, and contact information", AppLinks.support,
+                             systemImage: "lifepreserver", color: StudioTheme.accent)
+                    legalRow("Privacy Policy", "How local projects, AI requests, and purchases are handled", AppLinks.privacy,
+                             systemImage: "hand.raised", color: .teal)
+                    legalRow("Terms of Service", "Software licence and use of AI features", AppLinks.terms,
+                             systemImage: "doc.text", color: .orange, showsDivider: false)
+                }
+
                 HStack {
                     Spacer()
                     Text("© \(Calendar.current.component(.year, from: Date())) Bixel Studio")
@@ -956,6 +975,21 @@ struct AboutSettingsPane: View {
 
     private func aboutRow(_ title: String, _ value: String, showsDivider: Bool = true) -> some View {
         SettingsRow(title: title, subtitle: value, showsDivider: showsDivider) { EmptyView() }
+    }
+
+    private func legalRow(_ title: String, _ subtitle: String, _ url: URL,
+                          systemImage: String, color: Color,
+                          showsDivider: Bool = true) -> some View {
+        SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage,
+                    tint: color, showsDivider: showsDivider) {
+            Link(destination: url) {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Open link")
+        }
     }
 
     private func pathRow(_ title: String, _ value: String?) -> some View {

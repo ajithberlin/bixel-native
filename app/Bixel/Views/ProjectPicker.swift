@@ -154,9 +154,15 @@ struct ProjectPicker: View {
 
     private var footer: some View {
         HStack {
+            #if os(macOS)
+            Text("Saved in Application Support / Bixel / Projects")
+                .font(.caption)
+                .foregroundColor(StudioTheme.textDisabled)
+            #else
             Text("Saved in Documents / Bixel / Projects")
                 .font(.caption)
                 .foregroundColor(StudioTheme.textDisabled)
+            #endif
             Spacer()
             #if os(macOS)
             if let current = store.current {

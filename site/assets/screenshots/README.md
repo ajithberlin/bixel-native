@@ -1,12 +1,14 @@
-# Bixel Studio App Screenshots Guide
+# Bixel Studio Website Media
 
 This directory holds the official screenshots featured on the [Bixel Studio Website](../../index.html) and in the [Handbook](../../handbook/index.html).
 
-Currently, high-resolution styled vector placeholders are active. Whenever you want to attach real screenshots from the macOS app, simply save your captured screenshots here with the matching filenames below (PNG or JPG). The website and handbook will automatically load them!
+These finalized product images are used by the Bixel Studio website and handbook.
+They are marketing artwork and documentation media, not a substitute for the
+actual macOS app or for App Store review screenshots.
 
 ---
 
-## 📸 Screenshot Slots & Checklist
+## Media catalog
 
 | Filename | Placement | Recommended App State / View | Recommended Resolution |
 | :--- | :--- | :--- | :--- |
@@ -18,12 +20,4 @@ Currently, high-resolution styled vector placeholders are active. Whenever you w
 
 ---
 
-## 💡 How to Capture Great Screenshots on macOS
-
-1. Launch Bixel Studio:
-   ```bash
-   ./scripts/start.sh --run
-   ```
-2. Press **Cmd + Shift + 4**, then press **Spacebar** to take a window screenshot with Apple's drop shadow.
-3. Save or move the captured image into this folder (`site/assets/screenshots/`) with the corresponding name from the table above (e.g., `interface-overview.png`).
-4. Commit and push to `main` — GitHub Actions will immediately deploy the updated site!
+The App Store submission uses separate, current captures of the running app.

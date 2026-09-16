@@ -40,8 +40,10 @@ struct ContentView: View {
     @State private var aiGenerationError: String?
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
     /// On iPad the assistant is only offered while a Mac is connected.
     @ObservedObject private var remote = RemoteClient.shared
+    #endif
 
     private var assistantAvailable: Bool {
         #if os(macOS)

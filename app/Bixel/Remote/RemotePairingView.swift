@@ -50,56 +50,78 @@ private struct RemoteHostSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 GroupBox {
-                    VStack(spacing: 12) {
-                        if let offer = host.pairingOffer, let image = remoteQRImage(from: offer.urlString()) {
-                            Image(platformImage: image)
-                                .interpolation(.none)
-                                .resizable()
-                                .frame(width: 220, height: 220)
-                                .padding(8)
-                                .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
-                            Text("Scan with Bixel on your iPad")
-                                .font(.system(size: 12, weight: .medium))
-                            Text("Code expires in \(host.pairingSecondsRemaining)s")
-                                .font(.system(size: 11))
-                                .foregroundColor(.orange)
-                            Button("Hide code") { host.endPairing() }
-                        } else {
-                            Image(systemName: "qrcode")
-                                .font(.system(size: 42, weight: .light))
-                                .foregroundColor(StudioTheme.textDisabled)
-                            Text(host.status)
-                                .font(.system(size: 12))
-                                .foregroundColor(StudioTheme.textSecondary)
-                            Button("Show pairing code") { host.beginPairing() }
-                                .buttonStyle(.borderedProminent)
-                                .tint(StudioTheme.accent)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(14)
-                }
-
-                if !host.peers.isEmpty {
-                    GroupBox("Paired devices") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(host.peers.enumerated()), id: \.offset) { _, name in
-                                HStack {
-                                    Image(systemName: "ipad")
-                                    Text(name)
-                                    Spacer()
-                                }
-                                .font(.system(size: 12))
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle(isOn: $host.isEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Enable Remote Access")
+                                    .font(.system(size: 13, weight: .medium))
+                                Text("Allow iPads to connect, sync projects, and access the AI assistant")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(StudioTheme.textSecondary)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(8)
+                        .toggleStyle(.switch)
+                    }
+                    .padding(12)
+                }
+
+                if host.isEnabled {
+                    GroupBox {
+                        VStack(spacing: 12) {
+                            if let offer = host.pairingOffer, let image = remoteQRImage(from: offer.urlString()) {
+                                Image(platformImage: image)
+                                    .interpolation(.none)
+                                    .resizable()
+                                    .frame(width: 220, height: 220)
+                                    .padding(8)
+                                    .background(Color.white, in: RoundedRectangle(cornerRadius: 12))
+                                Text("Scan with Bixel on your iPad")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("Code expires in \(host.pairingSecondsRemaining)s")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.orange)
+                                Button("Hide code") { host.endPairing() }
+                            } else {
+                                Image(systemName: "qrcode")
+                                    .font(.system(size: 42, weight: .light))
+                                    .foregroundColor(StudioTheme.textDisabled)
+                                Text(host.status)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(StudioTheme.textSecondary)
+                                Button("Show pairing code") { host.beginPairing() }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(StudioTheme.accent)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(14)
+                    }
+
+                    if !host.peers.isEmpty {
+                        GroupBox("Paired devices") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(host.peers.enumerated()), id: \.offset) { _, name in
+                                    HStack {
+                                        Image(systemName: "ipad")
+                                        Text(name)
+                                        Spacer()
+                                    }
+                                    .font(.system(size: 12))
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                        }
                     }
                 }
             }
             .padding(20)
         }
-        .onAppear { host.start() }
+        .onAppear {
+            if host.isEnabled {
+                host.start()
+            }
+        }
     }
 }
 

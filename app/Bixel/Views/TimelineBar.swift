@@ -15,8 +15,10 @@ struct TimelineBar: View {
     @State private var isPredictHovered = false
     @State private var showPredict = false
     @State private var predictText = ""
+    #if os(iOS)
     /// On iPad the predict-next-frame tile appears once a Mac is connected.
     @ObservedObject private var remote = RemoteClient.shared
+    #endif
 
     private var assistantAvailable: Bool {
         #if os(macOS)

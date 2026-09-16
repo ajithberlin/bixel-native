@@ -208,6 +208,18 @@ struct AdBannerView: View {
             .onHover { isCtaHovered = $0 }
             .help("Open \(ad.advertiser) website")
 
+            // Apple requires an obvious way to report inappropriate ads.
+            Button {
+                adManager.reportCurrentAd()
+            } label: {
+                Image(systemName: "exclamationmark.bubble")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help("Report this ad")
+
             // MARK: - "Remove Ads" Paywall Trigger
             Button {
                 onPresentPaywall()

@@ -28,9 +28,11 @@ struct TopBar: View {
 
     @State private var showActions = false
     @State private var showSelectPopover = false
+    #if os(iOS)
     /// Observing the client lets the AI entry point appear on iPad once a Mac
     /// is connected (the assistant runs on the Mac).
     @ObservedObject private var remote = RemoteClient.shared
+    #endif
 
     private var isMap: Bool { mapModel != nil }
 

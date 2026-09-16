@@ -20,47 +20,48 @@ import CryptoKit
 import Security
 import Network
 
-// MARK: - Keychain
+// MARK: - Credentials Store
 
 enum RemoteKeychain {
     static let service = "com.bixel.remote"
 
+    private static var storageDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("Bixel/remote/keychain", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [
+                .posixPermissions: 0o700
+            ])
+        }
+        return dir
+    }
+
+    private static func fileURL(account: String) -> URL {
+        let safeName = account.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression)
+        return storageDirectory.appendingPathComponent("\(safeName).dat")
+    }
+
     static func data(account: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let url = fileURL(account: account)
+        return try? Data(contentsOf: url)
     }
 
     @discardableResult
     static func set(_ data: Data, account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        let attributes: [String: Any] = [kSecValueData as String: data]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess {
+        let url = fileURL(account: account)
+        do {
+            try data.write(to: url, options: [.atomic, .completeFileProtection])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             return true
+        } catch {
+            return false
         }
-        var add = query
-        add[kSecValueData as String] = data
-        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func remove(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
+        let url = fileURL(account: account)
+        try? FileManager.default.removeItem(at: url)
     }
 }
 

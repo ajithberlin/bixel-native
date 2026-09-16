@@ -5,7 +5,7 @@ project is restored at launch. Completed edits autosave, preserving layers,
 visibility, frame durations, and pixels. Project switching is blocked during an
 assistant turn; stop it and wait for completion before switching.
 
-The host resolves `FileManager.documentDirectory`, then uses:
+The host resolves `FileManager.applicationSupportDirectory` on macOS (and sandbox `documentDirectory` on iOS), then uses:
 
 ```
 Bixel/Projects/<project UUID>/
@@ -18,7 +18,7 @@ Bixel/Projects/<project UUID>/
 ```
 
 The picker’s **AI Files** button opens the generated-files folder. This is durable
-storage in Documents, despite the cache folder name; it is not an OS-purgeable
+storage in Application Support, despite the cache folder name; it is not an OS-purgeable
 temporary directory. A future iPad host can pass its own sandbox Documents URL to
 the same Rust storage API. The current UI and renderer remain macOS-specific.
 

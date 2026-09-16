@@ -82,11 +82,10 @@ targets:
         LSApplicationCategoryType: public.app-category.graphics-design
         NSHighResolutionCapable: true
         ITSAppUsesNonExemptEncryption: false
-        GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
+        NSHumanReadableCopyright: "© 2026 Ajith Berlin A"
         RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
-        NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication
-        NSLocalNetworkUsageDescription: "Bixel connects to your iPad on the local network to sync projects and share the AI assistant."
+        NSLocalNetworkUsageDescription: "Bixel can pair with your iPad on the local network to sync projects and share the AI assistant."
         NSBonjourServices:
           - "_bixel-remote._tcp"
         UTExportedTypeDeclarations:
@@ -144,7 +143,7 @@ targets:
         CFBundleShortVersionString: "1.0.1"
         CFBundleVersion: "4"
         ITSAppUsesNonExemptEncryption: false
-        GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
+        NSHumanReadableCopyright: "© 2026 Ajith Berlin A"
         RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
         NSLocalNetworkUsageDescription: "Bixel connects to your Mac on the local network to sync projects and share the AI assistant."
         NSBonjourServices:

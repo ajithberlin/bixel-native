@@ -20,8 +20,6 @@
 	<string>1.0.1</string>
 	<key>CFBundleVersion</key>
 	<string>4</string>
-	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-5686188892396495~6976293226</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSBonjourServices</key>
@@ -30,6 +28,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Bixel uses the camera to scan the pairing QR code shown on your Mac.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Ajith Berlin A</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Bixel connects to your Mac on the local network to sync projects and share the AI assistant.</string>
 	<key>RevenueCatAPIKey</key>

@@ -51,12 +51,17 @@ final class ProjectStore: ObservableObject {
     /// Canonical on-disk projects root. Shared with the remote sync engine so
     /// the Mac can serve the same projects it shows in the UI.
     nonisolated static var defaultRoot: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Bixel/Projects", isDirectory: true)
+        #if os(macOS)
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #else
+        let base = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        #endif
+        return base.appendingPathComponent("Bixel/Projects", isDirectory: true)
     }
 
     init(root: URL? = nil) {
         let resolvedRoot = root ?? Self.defaultRoot
+        try? FileManager.default.createDirectory(at: resolvedRoot, withIntermediateDirectories: true)
         self.root = resolvedRoot
         self.aiGallery = AIGalleryStore(root: resolvedRoot)
         EditorBridge.shared.attach(store: self)

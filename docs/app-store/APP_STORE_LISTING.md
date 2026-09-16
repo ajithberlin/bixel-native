@@ -45,11 +45,11 @@ Answer **Data Collection** based on what the app actually does:
 | Usage / Diagnostics | No | No analytics or crash SDK is bundled. |
 | User Content | No | Projects, images and prompts stay on device; prompts are sent to the configured AI provider only when the user invokes an AI action. |
 
-Privacy Policy URL: `https://bixel.studio/privacy` **(replace with your real URL)**.
+Privacy Policy URL: `https://ajithberlin.github.io/bixel-native/privacy.html`.
 Tracking: **No** — the app does not track users across apps/websites.
-If you later ship the Google Mobile Ads SDK (the `GADApplicationIdentifier` key is
-present in `Info.plist` but no ad SDK is linked), you must re-declare advertising
-identifiers and add ATT.
+The app does not bundle a Google Mobile Ads SDK or use behavioural advertising.
+Fixed sponsor messages are clearly labelled and link to the sponsor's website
+only when the user chooses to open them.
 
 ---
 
@@ -120,9 +120,9 @@ Draw, animate and build tilemaps in one native Mac studio. Includes an AI assist
 
 | Field | Value |
 |---|---|
-| Support URL | `https://bixel.studio/support` **(replace)** |
-| Marketing URL | `https://bixel.studio` **(replace)** |
-| Privacy Policy URL | `https://bixel.studio/privacy` **(replace)** |
+| Support URL | `https://ajithberlin.github.io/bixel-native/support.html` |
+| Marketing URL | `https://ajithberlin.github.io/bixel-native/` |
+| Privacy Policy URL | `https://ajithberlin.github.io/bixel-native/privacy.html` |
 
 ### Build
 
@@ -135,7 +135,7 @@ First public release of Bixel Studio for Mac.
 ### Copyright
 
 ```
-2026 <Your Name / Company> **(your choice)**
+2026 Ajith Berlin A
 ```
 
 ---
