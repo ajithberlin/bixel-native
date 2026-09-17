@@ -109,17 +109,26 @@ def motion_between(c1: np.ndarray, c2: np.ndarray) -> float:
 
 
 def score_sheet(path: str, args) -> dict:
-    a = np.asarray(Image.open(path).convert('RGB'))
+    source = np.asarray(Image.open(path).convert('RGBA'))
+    a = source[..., :3]
+    alpha = source[..., 3]
+    has_alpha = np.any(alpha < 255)
     H, W = a.shape[:2]
-    bg, spread = sample_background(a)
-    fg = np.abs(a.astype(int) - bg.astype(int)).sum(axis=2) > args.tol
+    if has_alpha:
+        # True alpha is the source of truth. Transparent RGB padding is often
+        # black, so sampling it as a matte would mis-score black artwork.
+        bg, spread = np.array([0, 0, 0]), 0
+        fg = alpha > 0
+    else:
+        bg, spread = sample_background(a)
+        fg = np.abs(a.astype(int) - bg.astype(int)).sum(axis=2) > args.tol
     coverage = float(fg.mean())
     rows = detect_rows(fg)
 
     errors, warnings, penalties, hints = [], [], [], []
 
     # --- extraction-contract violations -> errors / warnings -------------
-    if spread > 30:
+    if spread > 30 and not has_alpha:
         errors.append(f'bg corner-spread {spread} > 30 (not a flat color)')
         hints.append('render a perfectly flat solid chroma green #00FF00 '
                      'background, one uniform color, no gradient, no lighting, '
@@ -221,6 +230,7 @@ def score_sheet(path: str, args) -> dict:
         'errors': errors, 'warnings': warnings,
         'metrics': {
             'bg_rgb': bg.astype(int).tolist(), 'bg_spread': spread,
+            'has_alpha': bool(has_alpha),
             'fg_coverage': round(coverage, 4),
             'rows_found': len(rows), 'frames_per_row': [len(r) for r in rows],
             'identity_hist': round(ident_hist, 3),

@@ -7,7 +7,11 @@
   "params_schema": {
     "type": "object",
     "properties": {
-      "action": { "type": "string", "description": "The motion to advance, e.g. 'walk forward one step'. Keep it a small increment." }
+      "action": { "type": "string", "description": "The motion to advance, e.g. 'walk forward one step'. Keep it a small increment." },
+      "transparent": {
+        "type": "boolean",
+        "description": "Match the source frame's real alpha background by default; set true for a no-background frame or false for an opaque scene."
+      }
     }
   }
 }

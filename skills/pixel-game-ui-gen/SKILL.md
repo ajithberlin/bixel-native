@@ -22,7 +22,11 @@ Ask only when BOTH theme and layout are absent; otherwise proceed with defaults.
 ## Workflow
 
 1. **Normalize the layout.** Convert the user's input into a precise piece list: piece type, position (fraction of canvas), size, and which are interactive. If the user supplies a wireframe image, read positions directly from it and keep them — the layout is the contract, the theme is the variable.
-2. **Generate the UI** with the image-generation tool: transparent background, 1:1, 1K. Use this prompt skeleton:
+2. **Generate the UI** with the image-generation tool: request PNG output
+   with a real transparent background (alpha=0 outside the pieces), 1:1, 1K.
+   If the provider cannot return alpha, use a flat `#00FF00` or `#FF00FF`
+   fallback and run `pixel-remove-bg` in Python before slicing. Use this
+   prompt skeleton:
 
    > Pixel art game UI sheet, [theme] style, [color1] and [color2] palette. Arranged EXACTLY like this layout: [piece list with positions]. Crisp 1px outlines, flat shading with subtle inner highlight, consistent border radius and border width across all pieces, no text, no letters, no numbers, no shadows outside the pieces, pieces clearly separated from each other, video game UI asset.
 

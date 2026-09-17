@@ -34,7 +34,11 @@ fn quantize_reduces_colors() {
             colors.insert((out.data[i], out.data[i + 1], out.data[i + 2]));
         }
     }
-    assert!(colors.len() <= 2, "expected <=2 colors, got {}", colors.len());
+    assert!(
+        colors.len() <= 2,
+        "expected <=2 colors, got {}",
+        colors.len()
+    );
 }
 
 #[test]
@@ -60,7 +64,11 @@ fn compress_to_bits_maps_bit_depth() {
     for i in (0..out.data.len()).step_by(4) {
         colors.insert((out.data[i], out.data[i + 1], out.data[i + 2]));
     }
-    assert!(colors.len() <= 2, "1-bit should map to <=2 colors, got {}", colors.len());
+    assert!(
+        colors.len() <= 2,
+        "1-bit should map to <=2 colors, got {}",
+        colors.len()
+    );
 }
 
 #[test]
@@ -77,7 +85,10 @@ fn file_compressor_crops_transparent_margins_before_downscaling() {
     let compressed = image::downscale_nearest(&cropped, 0.5);
 
     assert_eq!((compressed.width, compressed.height), (1, 2));
-    assert!(compressed.data.chunks_exact(4).all(|p| p == [220, 90, 40, 255]));
+    assert!(compressed
+        .data
+        .chunks_exact(4)
+        .all(|p| p == [220, 90, 40, 255]));
 }
 
 #[test]
@@ -98,6 +109,20 @@ fn remove_background_strips_border_region() {
     assert_eq!(out.pixel(0, 0)[3], 0, "corner should be transparent");
     assert_eq!(out.pixel(3, 3)[3], 0, "corner should be transparent");
     assert_eq!(out.pixel(1, 1), pixel(255, 0, 0, 255), "center stays");
+}
+
+#[test]
+fn remove_background_key_clears_near_chroma_pixels() {
+    let mut img = RgbaImage::new(3, 1);
+    img.set_pixel(0, 0, pixel(0, 220, 0, 255));
+    img.set_pixel(1, 0, pixel(220, 60, 40, 255));
+    img.set_pixel(2, 0, pixel(10, 190, 10, 255));
+
+    let out = image::remove_background_key(&img, [0, 255, 0], 96.0);
+
+    assert_eq!(out.pixel(0, 0), pixel(0, 0, 0, 0));
+    assert_eq!(out.pixel(1, 0), pixel(220, 60, 40, 255));
+    assert_eq!(out.pixel(2, 0), pixel(0, 0, 0, 0));
 }
 
 #[test]

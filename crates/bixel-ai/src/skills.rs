@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AiError;
 use crate::image::{self, RgbaImage};
-use crate::image_gen::ImageGenerator;
+use crate::image_gen::{ImageGenerationOptions, ImageGenerator};
 
 /// The model role a skill needs (or `None` for local/deterministic skills).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -100,7 +100,10 @@ pub struct FrameMeta {
 
 impl FrameMeta {
     pub fn new(duration_ms: u32, tag: Option<String>) -> Self {
-        FrameMeta { duration_ms: duration_ms.max(1), tag }
+        FrameMeta {
+            duration_ms: duration_ms.max(1),
+            tag,
+        }
     }
 }
 
@@ -261,7 +264,11 @@ fn spec_gen(
 ) -> SkillSpec {
     if model == ModelRole::Image {
         let props = params_schema["properties"].as_object_mut().unwrap();
-        let dimensions = if kind == SkillKind::Spritesheet { ["frame_width", "frame_height"] } else { ["width", "height"] };
+        let dimensions = if kind == SkillKind::Spritesheet {
+            ["frame_width", "frame_height"]
+        } else {
+            ["width", "height"]
+        };
         for key in dimensions {
             props.insert(key.into(), serde_json::json!({"type":"integer","minimum":1,"maximum":4096,"description":"Explicit output pixels per asset/frame; supply both dimensions together. Omit both to retain source size."}));
         }
@@ -286,7 +293,10 @@ fn spec_gen(
 // ------------------------------------------------------------- skill bodies
 
 fn require_image(input: &SkillInput) -> Result<&RgbaImage, AiError> {
-    input.image.as_ref().ok_or(AiError::Image("skill requires an input image".into()))
+    input
+        .image
+        .as_ref()
+        .ok_or(AiError::Image("skill requires an input image".into()))
 }
 
 fn image_gen(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOutput, AiError> {
@@ -296,10 +306,15 @@ fn image_gen(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOut
         input.params = serde_json::json!({});
     }
     if input.params.get("transparent").is_none() {
-        input.params["transparent"] = serde_json::Value::Bool(false);
+        input.params["transparent"] =
+            serde_json::Value::Bool(prompt_requests_transparency(&input.prompt));
     }
     generation_target(&input, None)?;
-    let style = input.params.get("style").and_then(|v| v.as_str()).unwrap_or("");
+    let style = input
+        .params
+        .get("style")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let style_hint = if style.trim().is_empty() {
         String::new()
     } else {
@@ -311,22 +326,31 @@ fn image_gen(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOut
         style_hint,
         generation_guidance(&input)
     );
-    let image = gen.generate_image(&prompt, input.image.as_ref())?;
+    let image =
+        gen.generate_image_with_options(&prompt, input.image.as_ref(), generation_options(&input))?;
     prepare_generated(image, &input, None)
 }
 
 fn generate_art(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     generation_target(&input, None)?;
-    let prompt = format!("{} {}", build_art_prompt(&input), generation_guidance(&input));
-    let image = gen.generate_image(&prompt, None)?;
+    let prompt = format!(
+        "{} {}",
+        build_art_prompt(&input),
+        generation_guidance(&input)
+    );
+    let image = gen.generate_image_with_options(&prompt, None, generation_options(&input))?;
     prepare_generated(image, &input, None)
 }
 
 fn spritesheet(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     let (cols, rows) = generation_grid(&input)?;
     generation_target(&input, Some((cols, rows)))?;
-    let prompt = format!("{} {}", build_spritesheet_prompt(&input, cols, rows), generation_guidance(&input));
-    let sheet = gen.generate_image(&prompt, None)?;
+    let prompt = format!(
+        "{} {}",
+        build_spritesheet_prompt(&input, cols, rows),
+        generation_guidance(&input)
+    );
+    let sheet = gen.generate_image_with_options(&prompt, None, generation_options(&input))?;
     prepare_generated(sheet, &input, Some((cols, rows)))
 }
 
@@ -341,15 +365,22 @@ fn next_frame(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOu
         input.params["width"] = serde_json::json!(current.width);
         input.params["height"] = serde_json::json!(current.height);
     }
-    // Match the source's alpha policy: transparent sprite frames stay
-    // transparent, opaque scenes stay opaque so no matte is invented.
+    // Match the source's alpha policy by default: transparent sprite frames
+    // stay transparent, opaque scenes stay opaque. An explicit no-background
+    // request is allowed to opt an opaque source into real alpha output.
     if input.params.get("transparent").is_none() {
         let has_alpha = current.data.chunks_exact(4).any(|p| p[3] < 255);
-        input.params["transparent"] = serde_json::Value::Bool(has_alpha);
+        input.params["transparent"] =
+            serde_json::Value::Bool(has_alpha || prompt_requests_transparency(&input.prompt));
     }
     generation_target(&input, None)?;
-    let prompt = format!("{} {}", build_next_frame_prompt(&input), generation_guidance(&input));
-    let frame = gen.generate_image(&prompt, Some(&current))?;
+    let prompt = format!(
+        "{} {}",
+        build_next_frame_prompt(&input),
+        generation_guidance(&input)
+    );
+    let frame =
+        gen.generate_image_with_options(&prompt, Some(&current), generation_options(&input))?;
     let mut output = prepare_generated(frame, &input, None)?;
     output.text = format!(
         "Predicted the next frame from the {} × {} source frame.",
@@ -360,20 +391,29 @@ fn next_frame(gen: &dyn ImageGenerator, mut input: SkillInput) -> Result<SkillOu
 
 fn pixel_image_gen(gen: &dyn ImageGenerator, input: SkillInput) -> Result<SkillOutput, AiError> {
     generation_target(&input, None)?;
-    let prompt = format!("{} {}", build_pixel_image_prompt(&input), generation_guidance(&input));
+    let prompt = format!(
+        "{} {}",
+        build_pixel_image_prompt(&input),
+        generation_guidance(&input)
+    );
     let reference = if let Some(img) = &input.image {
         Some(img.clone())
     } else {
         None
     };
-    let image = gen.generate_image(&prompt, reference.as_ref())?;
+    let image =
+        gen.generate_image_with_options(&prompt, reference.as_ref(), generation_options(&input))?;
     prepare_generated(image, &input, None)
 }
 
 // ---------------------------------------------------------------- prompts
 
 fn build_art_prompt(input: &SkillInput) -> String {
-    let style = input.params.get("style").and_then(|v| v.as_str()).unwrap_or("pixel art");
+    let style = input
+        .params
+        .get("style")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pixel art");
     format!(
         "Create a single {style} image. {}\nClean pixels, crisp edges, no text or watermark.",
         input.prompt
@@ -381,7 +421,11 @@ fn build_art_prompt(input: &SkillInput) -> String {
 }
 
 fn build_pixel_image_prompt(input: &SkillInput) -> String {
-    let style = input.params.get("style").and_then(|v| v.as_str()).unwrap_or("pixel art");
+    let style = input
+        .params
+        .get("style")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pixel art");
     let mut extra = String::new();
     if let Some(res) = input.params.get("resolution").and_then(|v| v.as_str()) {
         extra.push_str(&format!(" Resolution: {res}. "));
@@ -389,7 +433,12 @@ fn build_pixel_image_prompt(input: &SkillInput) -> String {
     if let Some(pal) = input.params.get("palette").and_then(|v| v.as_str()) {
         extra.push_str(&format!(" Palette: {pal}. "));
     }
-    if input.params.get("transparent").and_then(|v| v.as_bool()).unwrap_or(true) {
+    if input
+        .params
+        .get("transparent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+    {
         extra.push_str(" Fully transparent background. ");
     }
     format!(
@@ -507,6 +556,85 @@ mod preparation_tests {
 
         assert_eq!((image.width, image.height), (4, 4));
         assert!(image.data.chunks_exact(4).all(|p| p == [220, 90, 40, 255]));
+    }
+
+    #[test]
+    fn transparent_generation_clears_opaque_green_fallback_without_target() {
+        let mut source = RgbaImage::new(5, 5);
+        source.data.fill(0);
+        for pixel in source.data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[0, 255, 0, 255]);
+        }
+        source.set_pixel(2, 2, [220, 90, 40, 255]);
+
+        let output = prepare_generated(
+            source.clone(),
+            &input(serde_json::json!({"transparent": true})),
+            None,
+        )
+        .unwrap();
+        let image = output.image.unwrap();
+
+        assert_eq!(image.pixel(0, 0), [0, 0, 0, 0]);
+        assert_eq!(image.pixel(2, 2), [220, 90, 40, 255]);
+        assert_eq!(output.source_image.unwrap(), source);
+    }
+
+    #[test]
+    fn transparent_generation_clears_opaque_magenta_fallback_without_target() {
+        let mut source = RgbaImage::new(5, 5);
+        for pixel in source.data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[255, 0, 255, 255]);
+        }
+        source.set_pixel(2, 2, [220, 90, 40, 255]);
+
+        let output = prepare_generated(
+            source,
+            &input(serde_json::json!({"transparent": true})),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(output.image.unwrap().pixel(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn transparent_generation_clears_a_noisy_green_fallback_without_target() {
+        let mut source = RgbaImage::new(5, 5);
+        for pixel in source.data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[0, 220, 0, 255]);
+        }
+        source.set_pixel(0, 0, [0, 190, 0, 255]);
+        source.set_pixel(2, 2, [220, 90, 40, 255]);
+
+        let output = prepare_generated(
+            source,
+            &input(serde_json::json!({"transparent": true})),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(output.image.unwrap().pixel(0, 0), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn invalid_transparent_sheet_returns_a_cleaned_review_image() {
+        let mut source = RgbaImage::new(7, 5);
+        for pixel in source.data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[0, 255, 0, 255]);
+        }
+        let output = prepare_generated(
+            source,
+            &input(serde_json::json!({
+                "transparent": true,
+                "frame_width": 8,
+                "frame_height": 8
+            })),
+            Some((2, 1)),
+        )
+        .unwrap();
+
+        assert_eq!(output.image.unwrap().pixel(0, 0), [0, 0, 0, 0]);
     }
     #[test]
     fn uniform_backdrop_removed_without_erasing_enclosed_same_color() {
@@ -657,7 +785,7 @@ fn generation_guidance(input: &SkillInput) -> String {
         .and_then(|v| v.as_bool())
         .unwrap_or(true)
     {
-        "Use a truly transparent background, never a painted checkerboard. If alpha is unavailable, use a single flat contrasting backdrop with clear margins; keep the subject away from all edges.".to_owned()
+        "Request a truly transparent PNG background with real alpha=0 pixels, never a painted checkerboard. If the provider cannot return alpha, use one flat exact chroma fallback — #00FF00 green (preferred) or #FF00FF magenta — with clear margins and do not use that key color in the subject; the pixel-remove-bg Python skill must key it out before delivery.".to_owned()
     } else {
         "Create an opaque background as requested.".to_owned()
     };
@@ -676,6 +804,36 @@ fn generation_guidance(input: &SkillInput) -> String {
         guidance.push_str(&format!(" Palette: {palette}."));
     }
     guidance
+}
+
+fn generation_options(input: &SkillInput) -> ImageGenerationOptions {
+    ImageGenerationOptions {
+        transparent_background: input
+            .params
+            .get("transparent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
+    }
+}
+
+fn prompt_requests_transparency(prompt: &str) -> bool {
+    let prompt = prompt.to_ascii_lowercase();
+    [
+        "transparent",
+        "no background",
+        "no bg",
+        "without background",
+        "without a background",
+        "transparent background",
+        "transparent png",
+        "backgroundless",
+        "alpha background",
+        "isolated sprite",
+        "background removed",
+        "cutout",
+    ]
+    .iter()
+    .any(|phrase| prompt.contains(phrase))
 }
 
 /// Fit using nearest-neighbor sampling and transparent, centered padding.
@@ -715,11 +873,15 @@ fn fit_generated_opaque(source: &RgbaImage, width: usize, height: usize) -> Rgba
     out
 }
 
-/// Only remove a uniform edge-connected backdrop. Mixed edges can contain
-/// subject colors; preserving those pixels is safer than guessing a matte.
+/// Remove the requested chroma fallback, or a uniform edge-connected matte.
+/// Mixed non-chroma edges can contain subject colors; preserving those pixels
+/// is safer than guessing a matte.
 fn prepare_matte(source: &RgbaImage) -> RgbaImage {
     if source.data.chunks_exact(4).any(|p| p[3] < 255) {
         return source.clone();
+    }
+    if let Some(key) = detect_chroma_key(source) {
+        return image::remove_background_key(source, key, 96.0);
     }
     let color = source.pixel(0, 0);
     let uniform = (0..source.width)
@@ -735,6 +897,43 @@ fn prepare_matte(source: &RgbaImage) -> RgbaImage {
     } else {
         result
     }
+}
+
+/// Recognize the two fallback mattes requested by the generation prompts.
+/// Requiring two matching corners avoids treating a subject that merely
+/// touches one corner as a chroma screen.
+fn detect_chroma_key(source: &RgbaImage) -> Option<[u8; 3]> {
+    if source.width == 0 || source.height == 0 {
+        return None;
+    }
+    let corners = [
+        source.pixel(0, 0),
+        source.pixel(source.width - 1, 0),
+        source.pixel(0, source.height - 1),
+        source.pixel(source.width - 1, source.height - 1),
+    ];
+    let green = corners
+        .iter()
+        .filter(|p| {
+            let r = p[0] as i16;
+            let g = p[1] as i16;
+            let b = p[2] as i16;
+            g >= 120 && g - r >= 60 && g - b >= 60
+        })
+        .count();
+    if green >= 2 {
+        return Some([0, 255, 0]);
+    }
+    let magenta = corners
+        .iter()
+        .filter(|p| {
+            let r = p[0] as i16;
+            let g = p[1] as i16;
+            let b = p[2] as i16;
+            r >= 120 && b >= 120 && r - g >= 60 && b - g >= 60
+        })
+        .count();
+    (magenta >= 2).then_some([255, 0, 255])
 }
 
 /// Trim transparent padding only when the requested target would actually
@@ -757,36 +956,39 @@ fn prepare_generated(
     if source.width == 0 || source.height == 0 {
         return Err(AiError::Image("Model returned an empty image".into()));
     }
-    if let Some((cols, rows)) = grid {
-        if cols == 0 || rows == 0 || source.width % cols != 0 || source.height % rows != 0 {
-            return Ok(SkillOutput {
-                text: "Source retained unchanged: generated sheet dimensions do not divide evenly into the requested grid. No frames prepared; regenerate or crop before slicing.".into(),
-                image: Some(source.clone()), source_image: Some(source), ..Default::default()
-            });
-        }
-    }
     let transparent = input
         .params
         .get("transparent")
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    let working = if target.is_some() && transparent {
+    let working = if transparent {
         prepare_matte(&source)
     } else {
         source.clone()
     };
+    if let Some((cols, rows)) = grid {
+        if cols == 0 || rows == 0 || source.width % cols != 0 || source.height % rows != 0 {
+            return Ok(SkillOutput {
+                text: "Source retained unchanged: generated sheet dimensions do not divide evenly into the requested grid. No frames prepared; regenerate or crop before slicing.".into(),
+                image: Some(working), source_image: Some(source), ..Default::default()
+            });
+        }
+    }
     let mut frames = Vec::new();
     let prepared = if let Some((cols, rows)) = grid {
         frames = image::slice_grid(&working, cols, rows);
         if let Some((w, h)) = target {
-            frames = frames.iter().map(|f| {
-                if transparent {
-                    let cropped = trim_for_target(f, w, h);
-                    fit_generated(&cropped, w, h)
-                } else {
-                    fit_generated_opaque(f, w, h)
-                }
-            }).collect();
+            frames = frames
+                .iter()
+                .map(|f| {
+                    if transparent {
+                        let cropped = trim_for_target(f, w, h);
+                        fit_generated(&cropped, w, h)
+                    } else {
+                        fit_generated_opaque(f, w, h)
+                    }
+                })
+                .collect();
             let mut sheet = RgbaImage::new(w * cols, h * rows);
             for (i, f) in frames.iter().enumerate() {
                 for y in 0..h {

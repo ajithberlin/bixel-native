@@ -30,9 +30,13 @@ taste the model might otherwise apply.
    grid at that scale.
 4. **Honor the chosen palette.** Stick to the named palette or the described
    palette family; do not introduce off-palette colors.
-5. **Honor transparency.** A transparent background must be fully empty
-   (no backdrop, no vignette, no ground shadow baked into the image). A solid
-   background must be a single flat color.
+5. **Honor transparency.** For a no-background asset, request a PNG with a
+   real alpha channel: every background pixel must be alpha=0 (no backdrop,
+   vignette, checkerboard, or baked ground shadow). If the provider cannot
+   return alpha, use one flat chroma key instead — exact green `#00FF00` or
+   magenta `#FF00FF`, with clear margins — then load `pixel-remove-bg` and run
+   its Python key cleanup before delivering or slicing the asset. A solid
+   background is allowed only when the user asks for one.
 6. **Consistent light and perspective.** One lighting direction and one
    camera angle across the whole asset.
 7. **No text, labels, watermarks, borders, or frame lines** anywhere.

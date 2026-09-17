@@ -41,8 +41,9 @@ Usage:
     python3 freeform_pack.py sheet.png --actions auto --merge 48 \
         --out-image atlas.png --out-json atlas.json
 
-Background: sampled automatically from the image border (works for white,
-chroma green, or any near-flat color). Override with --key R,G,B.
+Background: real alpha is preserved when present. Opaque inputs are sampled
+automatically from the image border (works for white, chroma green, or any
+near-flat color). Override with --key R,G,B.
 
 JSON shape matches chroma_key_pack.py (cell, padding, pivot, per-action
 frame rects) plus a "layout": "freeform" marker and per-frame source rect.
@@ -447,10 +448,20 @@ def main() -> int:
     # 1) keyout + freeform sprite detection per sheet
     all_rows, all_names, crops = [], [], []  # crops[si] = per-sprite list
     for si, path in enumerate(args.sheets):
-        a = np.asarray(Image.open(path).convert('RGB'))
-        key = (np.array([int(x) for x in args.key.split(',')])
-               if args.key else detect_bg(a))
-        rgba = keyout(a, key, args.tol)
+        source = np.asarray(Image.open(path).convert('RGBA'))
+        a = source[..., :3]
+        has_alpha = np.any(source[..., 3] < 255)
+        if has_alpha and not args.key:
+            # Keep real provider alpha. Sampling transparent RGB padding as a
+            # matte can otherwise erase black or dark artwork.
+            key = None
+            rgba = source.copy()
+            dist = np.where(rgba[..., 3] > 0, args.tol + 1, 0)
+        else:
+            key = (np.array([int(x) for x in args.key.split(',')])
+                   if args.key else detect_bg(a))
+            rgba = keyout(a, key, args.tol)
+            dist = np.abs(a.astype(int) - key.astype(int)).sum(axis=2)
         fg = rgba[..., 3] > 0
         strip = 1 if args.strip_lines < 0 else args.strip_lines
         fg = strip_grid_lines(fg, strip)
@@ -459,7 +470,6 @@ def main() -> int:
         min_area = args.min_area or max(16, round(a.shape[0] * a.shape[1] * 1e-4))
         sprites = find_sprites(fg, merge, min_area,
                                stub_thick=max(8, round(min(a.shape[:2]) * 0.01)))
-        dist = np.abs(a.astype(int) - key.astype(int)).sum(axis=2)
         sprites, n_split, n_bad = split_oversized(sprites, dist, args.tol,
                                                   merge, min_area,
                                                   args.split_factor)
@@ -473,8 +483,9 @@ def main() -> int:
                   'Split them manually or regenerate with gaps.')
         sprites = reading_order(sprites)
         if not sprites:
+            background = 'alpha' if key is None else key.astype(int).tolist()
             print(f'ERROR: {path}: no sprites detected '
-                  f'(key={key.astype(int).tolist()} tol={args.tol}).')
+                  f'(key={background} tol={args.tol}).')
             return 1
 
         n_visual_rows = max(s['_row'] for s in sprites) + 1
@@ -506,7 +517,8 @@ def main() -> int:
         for ri in sorted(by_row):
             all_rows.append((si, by_row[ri]))
             all_names.append(names[ri])
-        print(f'{path}: key={key.astype(int).tolist()} tol={args.tol} '
+        background = 'alpha' if key is None else key.astype(int).tolist()
+        print(f'{path}: key={background} tol={args.tol} '
               f'strip={strip} merge={merge} min_area={min_area} '
               f'sprites={len(sprites)} '
               f'rows={n_visual_rows} '

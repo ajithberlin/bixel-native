@@ -1538,10 +1538,23 @@ pub unsafe extern "C" fn bixel_ai_generate_art(
 ) -> *mut u8 {
     let prompt = arg_str(prompt);
     let Some(gen) = image_gen() else { return std::ptr::null_mut() };
-    match gen.generate_image(&prompt, None) {
-        Ok(img) => match bixel_ai::image::encode_png(&img) {
-            Ok(png) => unsafe { return_bytes(png, out_len) },
-            Err(_) => std::ptr::null_mut(),
+    let input = bixel_ai::skills::SkillInput {
+        prompt,
+        image: None,
+        images: vec![],
+        params: serde_json::json!({}),
+    };
+    match bixel_ai::skills::Skills::run(
+        Some(gen.as_ref()),
+        bixel_ai::skills::SkillKind::GenerateArt,
+        input,
+    ) {
+        Ok(output) => match output.image.or(output.source_image) {
+            Some(img) => match bixel_ai::image::encode_png(&img) {
+                Ok(png) => unsafe { return_bytes(png, out_len) },
+                Err(_) => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
         },
         Err(_) => std::ptr::null_mut(),
     }
@@ -1566,7 +1579,7 @@ pub unsafe extern "C" fn bixel_ai_next_frame(
     // and alpha policy stay identical to the `next_frame` tool path.
     let action = arg_str(prompt);
     let input = bixel_ai::skills::SkillInput {
-        prompt: String::new(),
+        prompt: action.clone(),
         image: Some(current),
         images: vec![],
         params: serde_json::json!({ "action": action }),

@@ -10,7 +10,11 @@
       "style": { "type": "string", "description": "Optional visual style" },
       "width": { "type": "integer", "minimum": 1, "maximum": 4096 },
       "height": { "type": "integer", "minimum": 1, "maximum": 4096 },
-      "transparent": { "type": "boolean", "default": false },
+      "transparent": {
+        "type": "boolean",
+        "default": false,
+        "description": "Set true for sprites, icons, or any no-background asset; request real PNG alpha and clean a keyed fallback if the provider returns an opaque image."
+      },
       "palette": { "type": "string", "description": "Palette colors or style guidance" }
     }
   }

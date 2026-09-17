@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use crate::connection::ensure_goose_env;
 use crate::error::AiError;
 use crate::image::{decode_any, encode_png, RgbaImage};
-use crate::image_gen::ImageGenerator;
+use crate::image_gen::{ImageGenerationOptions, ImageGenerator};
 
 const ISSUER: &str = "https://auth.openai.com";
 const CODEX_API_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex";
@@ -88,9 +88,9 @@ impl CodexImageGen {
             id_token: Option<String>,
             expires_in: Option<i64>,
         }
-        let refreshed: RefreshResponse = resp
-            .json()
-            .map_err(|e| AiError::Provider(format!("ChatGPT token refresh response invalid: {e}")))?;
+        let refreshed: RefreshResponse = resp.json().map_err(|e| {
+            AiError::Provider(format!("ChatGPT token refresh response invalid: {e}"))
+        })?;
         token.access_token = refreshed.access_token;
         token.refresh_token = refreshed.refresh_token;
         if refreshed.id_token.is_some() {
@@ -128,7 +128,20 @@ impl ImageGenerator for CodexImageGen {
         &self.model
     }
 
-    fn generate_image(&self, prompt: &str, input: Option<&RgbaImage>) -> Result<RgbaImage, AiError> {
+    fn generate_image(
+        &self,
+        prompt: &str,
+        input: Option<&RgbaImage>,
+    ) -> Result<RgbaImage, AiError> {
+        self.generate_image_with_options(prompt, input, ImageGenerationOptions::default())
+    }
+
+    fn generate_image_with_options(
+        &self,
+        prompt: &str,
+        input: Option<&RgbaImage>,
+        options: ImageGenerationOptions,
+    ) -> Result<RgbaImage, AiError> {
         let token = self.valid_token()?;
 
         // The hosted tool generates from the conversation: an input image is
@@ -143,10 +156,15 @@ impl ImageGenerator for CodexImageGen {
         }
         content.push(serde_json::json!({ "type": "input_text", "text": prompt }));
 
+        let mut image_tool = serde_json::json!({ "type": "image_generation" });
+        if options.transparent_background {
+            image_tool["background"] = serde_json::json!("transparent");
+            image_tool["output_format"] = serde_json::json!("png");
+        }
         let body = serde_json::json!({
             "model": self.model,
             "input": [{ "role": "user", "content": content }],
-            "tools": [{ "type": "image_generation" }],
+            "tools": [image_tool],
             "store": false,
             "stream": true,
         });
@@ -183,7 +201,9 @@ fn parse_image_events(body: &str) -> Result<RgbaImage, AiError> {
         if data == "[DONE]" {
             break;
         }
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
         match event.get("type").and_then(|t| t.as_str()) {
             Some("response.output_item.done") => {
                 let item = &event["item"];
