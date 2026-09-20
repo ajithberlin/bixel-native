@@ -9,9 +9,12 @@ import SwiftUI
 struct BixelApp: App {
     init() {
         SubscriptionManager.shared.configure()
+        AIService.setup()
+        RemoteRouters.install()
     }
 
     var body: some Scene {
+        #if os(macOS)
         Window("Bixel Studio", id: "studio") {
             ContentView()
         }
@@ -80,10 +83,20 @@ struct BixelApp: App {
                 Button("Zoom to Fit") { post(.studioZoomFit) }
                     .keyboardShortcut("0", modifiers: .command)
             }
+            CommandGroup(replacing: .help) {
+                Button("Bixel Tools Reference & Guide…") { post(.studioShowHelp) }
+                    .keyboardShortcut("?", modifiers: .command)
+                Button("Quick Shortcuts Reference…") { post(.studioShowHelp) }
+            }
         }
         Settings {
             SettingsView()
         }
+        #elseif os(iOS)
+        WindowGroup {
+            ContentView()
+        }
+        #endif
     }
 
     private func post(_ name: Notification.Name) {

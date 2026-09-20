@@ -5,7 +5,6 @@
 // Forest Tiles, Tokyo Street, UI Icons, NPC Portraits, and templates.
 
 import SwiftUI
-import AppKit
 
 enum SamplePixelArt {
     struct TemplateItem: Identifiable {

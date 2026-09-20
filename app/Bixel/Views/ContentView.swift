@@ -5,6 +5,7 @@
 // left brush dock, floating layers card, color popover, and timeline — floats over it.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum StudioScreen {
     case home
@@ -18,13 +19,17 @@ struct ContentView: View {
     @State private var showProjects = false
     @State private var showNewDocument = false
     @State private var showAI = false
-    @State private var showLayers = true
+    @State private var showLayers = false
     @State private var showColor = false
     @State private var showTimeline = false
     @State private var showAssets = false
+    @State private var layersButtonFrame: CGRect = .zero
+    @State private var colorButtonFrame: CGRect = .zero
     @State private var assistantExpanded = false
     @State private var showPaywall = false
     @State private var showCustomerCenter = false
+    @State private var showHelpDocument = false
+    @State private var showSettings = false
     @State private var loadingProject: StudioProject? = nil
     @State private var showLoadingAd = false
     @State private var pendingPostAction: (() -> Void)? = nil
@@ -35,6 +40,18 @@ struct ContentView: View {
     @State private var aiGenerationError: String?
     @StateObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    /// On iPad the assistant is only offered while a Mac is connected.
+    @ObservedObject private var remote = RemoteClient.shared
+    #endif
+
+    private var assistantAvailable: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return remote.state.isConnected
+        #endif
+    }
 
     @AppStorage("bixel.openAssistantOnLaunch") private var openAssistantOnLaunch = false
     @AppStorage("bixel.defaultSnapping") private var defaultSnapping = true
@@ -91,9 +108,21 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onReceive(NotificationCenter.default.publisher(for: .studioUnlockLifetime)) { _ in showPaywall = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioCustomerCenter)) { _ in showCustomerCenter = true }
+                .onReceive(NotificationCenter.default.publisher(for: .studioShowHelp)) { _ in showHelpDocument = true }
+                .onReceive(NotificationCenter.default.publisher(for: AppSettings.openRequest)) { _ in showSettings = true }
                 .onReceive(NotificationCenter.default.publisher(for: .studioRestorePurchases)) { _ in
                     Task { await subscriptionManager.restorePurchases() }
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .studioDismissPopovers)) { _ in
+                    if showLayers || showColor {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            showLayers = false
+                            showColor = false
+                        }
+                    }
+                }
+                .onPreferenceChange(LayersButtonFrameKey.self) { layersButtonFrame = $0 }
+                .onPreferenceChange(ColorButtonFrameKey.self) { colorButtonFrame = $0 }
 
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -103,10 +132,20 @@ struct ContentView: View {
                     syncAnimationAssistVisibility()
                 }
                 .onChange(of: scenePhase) { phase in
-                    if phase != .active { flushProject() }
+                    if phase != .active {
+                        flushProject()
+                    } else {
+                        #if os(iOS)
+                        RemoteClient.shared.reconnectIfNeeded()
+                        #endif
+                    }
                 }
+                #if os(macOS)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in flushProject() }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in flushProject() }
+                #else
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in flushProject() }
+                #endif
 
             Color.clear
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -115,7 +154,7 @@ struct ContentView: View {
                 } message: { Text(projects.error ?? "") }
 
             // Interstitial Loading Ad Overlay (when opening / launching a project)
-            if showLoadingAd, let project = loadingProject {
+            if showLoadingAd && !subscriptionManager.isAdFree, let project = loadingProject {
                 ProjectLoadingAdView(
                     project: project,
                     onFinish: {
@@ -147,7 +186,9 @@ struct ContentView: View {
                 .zIndex(100)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 1040, minHeight: 680)
+        #endif
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.2), value: showAI)
@@ -155,6 +196,7 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.2), value: showColor)
         .animation(.easeInOut(duration: 0.2), value: showAssets)
         .animation(.easeInOut(duration: 0.22), value: currentScreen)
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showProjects) {
             ProjectPicker(store: projects, onSelectProject: { project in
                 handleOpenProject(project)
@@ -163,6 +205,7 @@ struct ContentView: View {
         .sheet(isPresented: $showNewDocument) { NewWorkspaceDocument(store: projects) }
         .sheet(isPresented: $showPaywall) { PaywallContainerView() }
         .sheet(isPresented: $showCustomerCenter) { CustomerCenterContainerView() }
+        .sheet(isPresented: $showHelpDocument) { ToolsHelpView() }
         .sheet(item: $generatedImageDraft, onDismiss: handleGeneratedImageReviewDismissed) { draft in
             AIGeneratedImageReviewView(
                 draft: draft,
@@ -183,14 +226,16 @@ struct ContentView: View {
         }
         .onAppear {
             currentScreen = .home
-            showLayers = true
+            showLayers = false
             showAssets = false
+            #if os(macOS)
             if openAssistantOnLaunch { showAI = true }
+            #endif
         }
     }
 
     private func handleOpenProject(_ project: StudioProject, postAction: (() -> Void)? = nil) {
-        if AdManager.shared.shouldShowAds {
+        if !subscriptionManager.isAdFree && AdManager.shared.shouldShowAds {
             loadingProject = project
             pendingPostAction = postAction
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -301,7 +346,12 @@ struct ContentView: View {
 
     private func performZoomFit() {
         if let map = activeMap {
-            viewport.zoomToFitCurrent(canvasWidth: map.map.pixelWidth, height: map.map.pixelHeight)
+            if map.isInfinite {
+                viewport.zoomToFitInfinite(viewSize: viewport.lastViewSize,
+                                           contentBounds: map.contentPixelBounds())
+            } else {
+                viewport.zoomToFitCurrent(canvasWidth: map.map.pixelWidth, height: map.map.pixelHeight)
+            }
         } else {
             viewport.zoomToFitCurrent(canvasWidth: model.width, height: model.height)
         }
@@ -340,8 +390,9 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
 
-            // Right Window: Full-Height Connected AI Agent Pane
-            if showAI {
+            // Right Window: Full-Height Connected AI Agent Pane. Always on
+            // macOS; on iPad once a Mac is connected.
+            if assistantAvailable && showAI {
                 Rectangle()
                     .fill(StudioTheme.hairlineStrong)
                     .frame(width: 1)
@@ -351,6 +402,7 @@ struct ContentView: View {
                 AIPanel(
                     model: model,
                     session: assistant,
+                    store: projects,
                     onClose: {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showAI = false
@@ -416,6 +468,16 @@ struct ContentView: View {
                     Color.clear.frame(height: 52)
                     if showLayers {
                         LayersPopover(model: model)
+                            .background(
+                                FloatingPopoverTracker(
+                                    excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                    onDismiss: {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showLayers = false
+                                        }
+                                    }
+                                )
+                            )
                             .padding(.trailing, 16)
                             .transition(.asymmetric(
                                 insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -423,6 +485,16 @@ struct ContentView: View {
                             ))
                     } else if showColor {
                         ColorPopover(model: model)
+                            .background(
+                                FloatingPopoverTracker(
+                                    excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                    onDismiss: {
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            showColor = false
+                                        }
+                                    }
+                                )
+                            )
                             .padding(.trailing, 16)
                             .transition(.asymmetric(
                                 insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -481,11 +553,13 @@ struct ContentView: View {
                     viewport: viewport,
                     projectName: projects.current?.name ?? "Bixel Project",
                     onShowProjects: {
+                        try? projects.flush()
                         withAnimation(.easeInOut(duration: 0.22)) {
                             currentScreen = .home
                         }
                     },
                     onGoHome: {
+                        try? projects.flush()
                         withAnimation(.easeInOut(duration: 0.22)) {
                             currentScreen = .home
                         }
@@ -495,7 +569,8 @@ struct ContentView: View {
                     showAI: $showAI,
                     showTimeline: $showTimeline,
                     showAssets: $showAssets,
-                    onNewDocument: { showNewDocument = true }
+                    onNewDocument: { showNewDocument = true },
+                    onShowHelp: { showHelpDocument = true }
                 )
 
                 EyedropperBannerOverlay(model: model)
@@ -519,15 +594,17 @@ struct ContentView: View {
     private var spriteBottomChrome: some View {
         VStack(spacing: 8) {
             if showTimeline && projects.activeDocument?.supportsAnimationAssist == true {
-                TimelineBar(model: model, onPredictNextFrame: predictNextFrame)
+                TimelineBar(model: model, viewport: viewport, onPredictNextFrame: predictNextFrame)
                     .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
             }
 
-            AdBannerView(onPresentPaywall: { showPaywall = true })
-                .fixedSize(horizontal: false, vertical: true)
+            if !subscriptionManager.isAdFree {
+                AdBannerView(onPresentPaywall: { showPaywall = true })
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 8)
@@ -595,6 +672,16 @@ struct ContentView: View {
                 Color.clear.frame(height: 52)
                 if showLayers {
                     MapLayersPanel(model: mapModel)
+                        .background(
+                            FloatingPopoverTracker(
+                                excludedFrames: [layersButtonFrame, colorButtonFrame],
+                                onDismiss: {
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        showLayers = false
+                                    }
+                                }
+                            )
+                        )
                         .padding(.trailing, 16)
                         .transition(.asymmetric(
                             insertion: .scale(scale: 0.95, anchor: .topTrailing).combined(with: .opacity),
@@ -611,9 +698,11 @@ struct ContentView: View {
             Spacer()
             MapWorkspaceFeedback(model: mapModel)
                 .padding(.bottom, 8)
-            AdBannerView(onPresentPaywall: { showPaywall = true })
-                .padding(.horizontal, 20)
-                .padding(.bottom, 6)
+            if !subscriptionManager.isAdFree {
+                AdBannerView(onPresentPaywall: { showPaywall = true })
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 6)
+            }
             HStack(alignment: .bottom) {
                 Spacer()
                 MiniMapOverlay(model: mapModel, viewport: viewport)
@@ -630,11 +719,13 @@ struct ContentView: View {
                 viewport: viewport,
                 projectName: projects.current?.name ?? "Bixel Project",
                 onShowProjects: {
+                    try? projects.flush()
                     withAnimation(.easeInOut(duration: 0.22)) {
                         currentScreen = .home
                     }
                 },
                 onGoHome: {
+                    try? projects.flush()
                     withAnimation(.easeInOut(duration: 0.22)) {
                         currentScreen = .home
                     }
@@ -645,14 +736,17 @@ struct ContentView: View {
                 showTimeline: $showTimeline,
                 showAssets: $showAssets,
                 onNewDocument: { showNewDocument = true },
+                onShowHelp: { showHelpDocument = true },
                 mapModel: mapModel,
                 onImportTiledMap: {
+                    #if os(macOS)
                     let panel = NSOpenPanel()
-                    panel.allowedContentTypes = [.json]
+                    panel.allowedContentTypes = [.json, UTType(filenameExtension: "tmj") ?? .json]
                     panel.begin { response in
                         guard response == .OK, let url = panel.url else { return }
                         projects.importTiledMap(from: url)
                     }
+                    #endif
                 }
             )
             Spacer()
@@ -660,6 +754,8 @@ struct ContentView: View {
     }
 }
 extension Notification.Name {
+    static let studioDismissPopovers = Notification.Name("studio.dismissPopovers")
+    static let studioShowHelp = Notification.Name("studio.showHelp")
     static let studioUndo = Notification.Name("studio.undo")
     static let studioRedo = Notification.Name("studio.redo")
     static let studioZoomIn = Notification.Name("studio.zoomIn")
@@ -684,3 +780,127 @@ extension Notification.Name {
     static let studioCustomerCenter = Notification.Name("studio.customerCenter")
     static let studioRestorePurchases = Notification.Name("studio.restorePurchases")
 }
+
+// MARK: - Anchor Button Frames
+
+struct LayersButtonFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+struct ColorButtonFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
+    }
+}
+
+// MARK: - Floating Popover Click Tracker
+
+#if os(macOS)
+struct FloatingPopoverTracker: NSViewRepresentable {
+    var excludedFrames: [CGRect] = []
+    var onDismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(excludedFrames: excludedFrames, onDismiss: onDismiss)
+    }
+
+    func makeNSView(context: Context) -> TrackerView {
+        let view = TrackerView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackerView, context: Context) {
+        context.coordinator.excludedFrames = excludedFrames
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.attachMonitorIfNeeded(for: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: TrackerView, coordinator: Coordinator) {
+        coordinator.removeMonitor()
+    }
+
+    final class Coordinator: NSObject {
+        var excludedFrames: [CGRect]
+        var onDismiss: () -> Void
+        private var monitor: Any?
+        private weak var trackingView: NSView?
+
+        init(excludedFrames: [CGRect], onDismiss: @escaping () -> Void) {
+            self.excludedFrames = excludedFrames
+            self.onDismiss = onDismiss
+        }
+
+        func attachMonitorIfNeeded(for view: NSView) {
+            trackingView = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self, weak view] event in
+                guard let self, let view, let window = view.window else { return event }
+                // Ignore events targeting other windows (e.g. child popover windows like blend mode picker)
+                guard event.window === window else { return event }
+
+                let clickLoc = event.locationInWindow
+                let cardRect = view.convert(view.bounds, to: nil)
+
+                // If click is inside the popover card itself, do not dismiss
+                if cardRect.contains(clickLoc) {
+                    return event
+                }
+
+                // Check excluded toggle button frames (converted to window coordinates)
+                let windowHeight = window.contentView?.bounds.height ?? window.frame.height
+                let swiftUIPoint = CGPoint(x: clickLoc.x, y: windowHeight - clickLoc.y)
+                for frame in self.excludedFrames where !frame.isEmpty {
+                    if frame.contains(swiftUIPoint) {
+                        return event
+                    }
+                }
+
+                // Click was outside the card and not on the toggle button
+                DispatchQueue.main.async {
+                    self.onDismiss()
+                }
+                return event
+            }
+        }
+
+        func removeMonitor() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        deinit {
+            removeMonitor()
+        }
+    }
+
+    final class TrackerView: NSView {
+        weak var coordinator: Coordinator?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                coordinator?.attachMonitorIfNeeded(for: self)
+            } else {
+                coordinator?.removeMonitor()
+            }
+        }
+    }
+}
+#else
+struct FloatingPopoverTracker: View {
+    var excludedFrames: [CGRect] = []
+    var onDismiss: () -> Void
+    var body: some View {
+        Color.clear
+    }
+}
+#endif

@@ -13,6 +13,7 @@ options:
   bundleIdPrefix: com.bixel
   deploymentTarget:
     macOS: "13.0"
+    iOS: "17.0"
   createIntermediateGroups: true
   xcodeVersion: "15.0"
 
@@ -41,6 +42,7 @@ targets:
       - path: app/Bixel
         excludes:
           - "Info.plist"
+          - "Info-iOS.plist"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bixel.studio
@@ -74,21 +76,91 @@ targets:
       properties:
         CFBundleName: Bixel
         CFBundleDisplayName: Bixel Studio
-        CFBundleShortVersionString: "1.0.1"
-        CFBundleVersion: "4"
+        CFBundleShortVersionString: "1.0.3"
+        CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
         LSApplicationCategoryType: public.app-category.graphics-design
         NSHighResolutionCapable: true
         ITSAppUsesNonExemptEncryption: false
-        GADApplicationIdentifier: "ca-app-pub-5686188892396495~6976293226"
+        NSHumanReadableCopyright: "© 2026 Ajith Berlin A"
         RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
-        NSHumanReadableCopyright: ""
         NSPrincipalClass: NSApplication
+        NSLocalNetworkUsageDescription: "Bixel can pair with your iPad on the local network to sync projects and share the AI assistant."
+        NSBonjourServices:
+          - "_bixel-remote._tcp"
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.bixel.studio.color-drop
+            UTTypeDescription: Bixel Color
+            UTTypeConformsTo:
+              - public.data
     preBuildScripts:
       - name: Build Rust engine
         script: |
           set -euo pipefail
           "$SRCROOT/scripts/configure-revenuecat-info.sh"
+          "$SRCROOT/scripts/build-rust.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+
+  Bixel-iOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    dependencies:
+      - package: RevenueCat
+        product: RevenueCat
+      - package: RevenueCat
+        product: RevenueCatUI
+    sources:
+      - path: app/Bixel
+        excludes:
+          - "Info.plist"
+          - "Info-iOS.plist"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bixel.studio
+        PRODUCT_NAME: Bixel
+        ARCHS: arm64
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_OBJC_BRIDGING_HEADER: app/Bixel/Support/Bixel-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/generated"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/generated"
+        OTHER_LDFLAGS: "-lbixel -framework Security -framework CoreFoundation -framework SystemConfiguration"
+        ENABLE_BITCODE: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        DEVELOPMENT_TEAM: 4NDFXD8NQ6
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+        Release:
+          CODE_SIGN_STYLE: Automatic
+    info:
+      path: app/Bixel/Info-iOS.plist
+      properties:
+        CFBundleName: Bixel
+        CFBundleDisplayName: Bixel Studio
+        CFBundleShortVersionString: "1.0.3"
+        CFBundleVersion: "1"
+        ITSAppUsesNonExemptEncryption: false
+        NSHumanReadableCopyright: "© 2026 Ajith Berlin A"
+        RevenueCatAPIKey: "$(REVENUECAT_API_KEY)"
+        NSLocalNetworkUsageDescription: "Bixel connects to your Mac on the local network to sync projects and share the AI assistant."
+        NSBonjourServices:
+          - "_bixel-remote._tcp"
+        NSCameraUsageDescription: "Bixel uses the camera to scan the pairing QR code shown on your Mac."
+        UIDeviceFamily:
+          - 2
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.bixel.studio.color-drop
+            UTTypeDescription: Bixel Color
+            UTTypeConformsTo:
+              - public.data
+    preBuildScripts:
+      - name: Build Rust engine
+        script: |
+          set -euo pipefail
+          BIXEL_INFO_PLIST_PATH="$SRCROOT/app/Bixel/Info-iOS.plist" "$SRCROOT/scripts/configure-revenuecat-info.sh"
           "$SRCROOT/scripts/build-rust.sh"
         basedOnDependencyAnalysis: false
         showEnvVars: false
@@ -103,3 +175,9 @@ schemes:
     run:
       config: Debug
       customWorkingDirectory: $(SRCROOT)
+  Bixel-iOS:
+    build:
+      targets:
+        Bixel-iOS: all
+    run:
+      config: Debug

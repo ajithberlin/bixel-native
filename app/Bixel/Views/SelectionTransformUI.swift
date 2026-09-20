@@ -21,24 +21,46 @@ struct SelectionTransformToolbar: View {
     private var selectionControls: some View {
         HStack(spacing: 0) {
             Button { model.selectTool(.selection) } label: { Label("Select", systemImage: "rectangle.dashed") }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Selection Tool", shortcut: "V", details: "Switch to rectangular or lasso marquee selection", isSelected: model.tool == .selection)
             Divider().frame(height: 22).padding(.horizontal, 8)
             Button { model.selectTool(.transform) } label: { Label("Transform", systemImage: "arrow.up.left.and.arrow.down.right") }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Transform Tool", shortcut: "T", details: "Engage bounding box handles to move, scale, and rotate", isSelected: model.tool == .transform)
             Divider().frame(height: 22).padding(.horizontal, 8)
             Button("Freeform") { model.snapping = false; model.uniformTransform = false }
+                .buttonStyle(.plain)
                 .foregroundColor(!model.uniformTransform ? StudioTheme.accent : StudioTheme.textSecondary)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Freeform Transform", details: "Scale width and height independently without locked proportions")
             Button("Uniform") { model.snapping = true; model.uniformTransform = true }
+                .buttonStyle(.plain)
                 .foregroundColor(model.uniformTransform ? StudioTheme.accent : StudioTheme.textSecondary)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Uniform Transform", details: "Lock aspect ratio while scaling to maintain sprite proportions")
             Button { model.rotateSelection() } label: { Label("Rotate 90°", systemImage: "rotate.right") }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Rotate 90°", details: "Rotate the current selection clockwise by 90 degrees")
             Divider().frame(height: 22).padding(.horizontal, 8)
             Toggle("Snapping", isOn: $model.snapping).toggleStyle(.button)
+                .help("Pixel Grid Snapping\nSnap transform corner coordinates to integer pixel boundaries")
             Button("Fit to Canvas") { model.fitSelectionToCanvas() }
-            Button { model.resetTransform() } label: { Image(systemName: "arrow.counterclockwise") }.help("Reset transform")
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Fit to Canvas", details: "Scale the selection to fit document canvas dimensions")
+            Button { model.resetTransform() } label: { Image(systemName: "arrow.counterclockwise") }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Reset Transform", details: "Discard all rotation and scaling applied to the selection")
             if let rect = model.transformRect {
                 Divider().frame(height: 22).padding(.horizontal, 8)
                 Text("\(Int(rect.width.rounded())) × \(Int(rect.height.rounded()))")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(StudioTheme.textSecondary)
-                    .help("Current transform bounds")
+                    .help("Current transform bounds width and height in pixels")
             }
         }
     }
@@ -47,22 +69,38 @@ struct SelectionTransformToolbar: View {
         let size = image.geometry.size
         return HStack(spacing: 0) {
             Label("Floating", systemImage: "square.dashed.inset.filled")
+                .padding(.horizontal, 4)
             Divider().frame(height: 22).padding(.horizontal, 8)
             Button("Freeform") { model.snapping = false; model.uniformTransform = false }
+                .buttonStyle(.plain)
                 .foregroundColor(!model.uniformTransform ? StudioTheme.accent : StudioTheme.textSecondary)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Freeform Scaling", details: "Scale imported image dimensions freely")
             Button("Uniform") { model.snapping = true; model.uniformTransform = true }
+                .buttonStyle(.plain)
                 .foregroundColor(model.uniformTransform ? StudioTheme.accent : StudioTheme.textSecondary)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Uniform Scaling", details: "Constrain aspect ratio of imported image")
             Button { rotateFloatingImport90() } label: { Label("Rotate 90°", systemImage: "rotate.right") }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 4)
+                .toolHoverEffect(name: "Rotate 90°", details: "Rotate imported image 90 degrees clockwise")
             Divider().frame(height: 22).padding(.horizontal, 8)
             Text("\(Int(size.width.rounded())) × \(Int(size.height.rounded()))")
                 .font(.system(size: 10, design: .monospaced))
                 .foregroundColor(StudioTheme.textSecondary)
-                .help("Pending import dimensions")
+                .help("Pending import dimensions in pixels")
             Divider().frame(height: 22).padding(.horizontal, 8)
             Button("Place") { model.commitFloatingImport() }
                 .keyboardShortcut(.return, modifiers: [])
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+                .toolHoverEffect(name: "Place Image (Return)", details: "Commit floating image permanently to active layer")
             Button("Cancel", role: .cancel) { model.cancelFloatingImport() }
                 .keyboardShortcut(.escape, modifiers: [])
+                .buttonStyle(.plain)
+                .padding(.horizontal, 6)
+                .toolHoverEffect(name: "Cancel Import (Esc)", details: "Discard pending imported image without placing")
         }
     }
 

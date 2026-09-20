@@ -235,6 +235,8 @@ mod tests {
         let names = bundled_skill_names();
         assert!(names.iter().any(|n| n == "skill-creator"), "skill-creator must be bundled");
         assert!(names.iter().any(|n| n == "pixel-spritesheet-gen"));
+        assert!(names.iter().any(|n| n == "tileset-asset-extender"));
+        assert!(names.iter().any(|n| n == "draw-map"), "draw-map must be bundled");
     }
 
     #[test]

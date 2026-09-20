@@ -20,8 +20,10 @@ final class CanvasViewport: ObservableObject {
     @Published var onionSkin = false
     /// Ghost opacity for the most recent previous frame (0...1).
     @Published var onionOpacity: Double = 0.32
-    /// How many previous frames to ghost (1 or 2; the older one fades more).
-    @Published var onionFrames: Int = 1
+    /// How many previous frames to ghost (up to 5; default 3; older ones fade more).
+    @Published var onionFrames: Int = 3
+    /// Whether each onion-skin layer is tinted in a distinct color.
+    @Published var onionColorize: Bool = true
     /// Width (points) reserved on the right by a docked side panel. The camera
     /// centres within the remaining area instead of the full view.
     var rightInset: CGFloat = 0
@@ -53,6 +55,38 @@ final class CanvasViewport: ObservableObject {
         zoomToFit(viewSize: lastViewSize, canvasWidth: w, height: h)
     }
 
+    /// Zoom an infinite scene to fit its projected content and centre the
+    /// content's actual world-pixel bounds. An empty scene has no bounds to
+    /// fit, so it starts at a readable 1:1 scale around the world origin.
+    func zoomToFitInfinite(
+        viewSize: CGSize,
+        contentBounds: (x: Int, y: Int, width: Int, height: Int)?
+    ) {
+        guard viewSize.width > 40, viewSize.height > 40 else { return }
+        let availW = viewSize.width - 260 - rightInset
+        let availH = viewSize.height - 220
+        guard availW > 40, availH > 40 else { return }
+
+        guard let contentBounds,
+              contentBounds.width > 0,
+              contentBounds.height > 0 else {
+            zoom = Self.clampZoom(1)
+            pan = .zero
+            didFit = true
+            return
+        }
+
+        zoom = Self.clampZoom(min(availW / CGFloat(contentBounds.width),
+                                  availH / CGFloat(contentBounds.height)))
+        let centerX = Double(contentBounds.x) + Double(contentBounds.width) / 2
+        let centerY = Double(contentBounds.y) + Double(contentBounds.height) / 2
+        // `unboundedOrigin` already centres within the usable view. Move the
+        // world-content centre onto that origin after changing the scale.
+        pan = CGPoint(x: -CGFloat(centerX) * zoom,
+                      y: CGFloat(centerY) * zoom)
+        didFit = true
+    }
+
     static func clampZoom(_ z: CGFloat) -> CGFloat {
         min(max(z, minZoom), maxZoom)
     }
@@ -78,6 +112,26 @@ final class CanvasViewport: ObservableObject {
         return (px, py)
     }
 
+    // MARK: - Unbounded (infinite map) coordinates
+
+    /// View point (y-up) of document pixel (0, 0) for an unbounded canvas.
+    func unboundedOrigin(viewSize: CGSize) -> CGPoint {
+        CGPoint(x: (viewSize.width - rightInset) / 2 + pan.x,
+                y: viewSize.height / 2 + pan.y)
+    }
+
+    /// Document pixel (may be negative/fractional) → view point (y-up).
+    func docToView(x: Double, y: Double, viewSize: CGSize) -> CGPoint {
+        let origin = unboundedOrigin(viewSize: viewSize)
+        return CGPoint(x: origin.x + CGFloat(x) * zoom, y: origin.y - CGFloat(y) * zoom)
+    }
+
+    /// View point (y-up) → document pixel (may be negative/fractional).
+    func viewToDocF(_ point: CGPoint, viewSize: CGSize) -> (x: Double, y: Double) {
+        let origin = unboundedOrigin(viewSize: viewSize)
+        return (Double((point.x - origin.x) / zoom), Double((origin.y - point.y) / zoom))
+    }
+
     // MARK: - Zoom
 
     func zoomToFit(viewSize: CGSize, canvasWidth w: Int, height h: Int) {
@@ -100,7 +154,8 @@ final class CanvasViewport: ObservableObject {
         let newZoom = Self.clampZoom(zoom * factor)
         guard newZoom != zoom else { return }
         if let anchor, viewSize.width > 0 {
-            let center = CGPoint(x: viewSize.width / 2, y: viewSize.height / 2)
+            let center = CGPoint(x: (viewSize.width - rightInset) / 2,
+                                 y: viewSize.height / 2)
             let rel = CGPoint(x: anchor.x - center.x, y: anchor.y - center.y)
             let ratio = newZoom / zoom
             pan = CGPoint(x: rel.x - (rel.x - pan.x) * ratio,

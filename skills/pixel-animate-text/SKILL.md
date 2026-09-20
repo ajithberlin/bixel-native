@@ -29,7 +29,7 @@ Keep canvas ≤ 160×160 — larger frames lose pixel-art crispness and consiste
    Other actions: jump = crouch → launch → airborne → land; wave = arm down → arm up → tilted; attack = windup → strike → follow-through → recover.
 3. **Generate frames 2..N**, each with the first frame as reference image. Prompt skeleton per frame:
 
-   > Same pixel art character as the reference image, identical outfit, palette, proportions and view, now in this pose: [explicit pose from step 2]. Transparent background, full body visible, same canvas size, crisp pixel art, no text.
+   > Same pixel art character as the reference image, identical outfit, palette, proportions and view, now in this pose: [explicit pose from step 2]. PNG with real alpha=0 transparent background, no checkerboard or shadow, full body visible, same canvas size, crisp pixel art, no text. If alpha is unavailable, use flat #00FF00 chroma green, then run pixel-remove-bg in key mode before packing.
 
 4. **Pack without jitter** — run `scripts/pack_frames.py` (crops each frame, bottom-anchors so feet stay planted):
 

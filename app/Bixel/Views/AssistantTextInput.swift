@@ -1,10 +1,13 @@
 import SwiftUI
-import AppKit
 
 extension Notification.Name {
     static let assistantFocus = Notification.Name("BixelAssistantFocus")
     static let assistantInsertCommand = Notification.Name("BixelAssistantInsertCommand")
+    static let assistantRefreshSkills = Notification.Name("BixelAssistantRefreshSkills")
 }
+
+#if os(macOS)
+import AppKit
 
 /// Tokens are real text attachments: they move with the text, delete atomically,
 /// and serialize to stable skill IDs instead of losing their meaning on submit.
@@ -164,3 +167,30 @@ final class ComposerTextView: NSTextView {
         }
     }
 }
+#elseif os(iOS)
+import UIKit
+
+struct AssistantTextInput: View {
+    @Binding var text: String
+    let commands: [AssistantCommand]
+    let onQuery: (String?) -> Void
+    let onSubmit: () -> Void
+    let onMove: (Int) -> Bool
+    let onEscape: () -> Void
+
+    var body: some View {
+        HStack {
+            TextField("Ask anything, or add a /skill…", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+                .foregroundColor(.white)
+                .onChange(of: text) { val in
+                    onQuery(val)
+                }
+                .onSubmit {
+                    onSubmit()
+                }
+        }
+    }
+}
+#endif

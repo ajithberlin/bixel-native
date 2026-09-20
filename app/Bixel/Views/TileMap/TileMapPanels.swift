@@ -6,7 +6,9 @@
 // minimap overlay, a properties editor, and workspace feedback capsule.
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import UniformTypeIdentifiers
 import Combine
 
@@ -14,7 +16,9 @@ import Combine
 
 struct MapLeftDock: View {
     @ObservedObject var model: TileMapModel
-    @State private var showProperties = false
+    #if os(iOS)
+    @State private var isPickingImage = false
+    #endif
 
     var body: some View {
         VStack(spacing: 12) {
@@ -27,7 +31,7 @@ struct MapLeftDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.map.canUndo)
-                .help("Undo (⌘Z)")
+                .toolHoverEffect(name: "Undo", shortcut: "⌘Z", details: "Revert the last map edit or tile stroke", cornerRadius: 6)
 
                 Button { model.redo() } label: {
                     Image(systemName: "arrow.uturn.forward")
@@ -37,7 +41,7 @@ struct MapLeftDock: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.map.canRedo)
-                .help("Redo (⇧⌘Z)")
+                .toolHoverEffect(name: "Redo", shortcut: "⇧⌘Z", details: "Re-apply the previously undone tile edit", cornerRadius: 6)
             }
 
             if !model.brush.pattern.isEmpty {
@@ -56,7 +60,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Flip horizontal (X)")
+                    .toolHoverEffect(name: "Flip Horizontal", shortcut: "X", details: "Mirror armed tile brush horizontally", cornerRadius: 4)
+
                     Button { model.flipBrushV() } label: {
                         Image(systemName: "arrow.up.and.down.righttriangle.up.righttriangle.down")
                             .font(.system(size: 11))
@@ -64,7 +69,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Flip vertical (Y)")
+                    .toolHoverEffect(name: "Flip Vertical", shortcut: "Y", details: "Mirror armed tile brush vertically", cornerRadius: 4)
+
                     Button { model.rotateBrushCW() } label: {
                         Image(systemName: "rotate.right")
                             .font(.system(size: 12))
@@ -72,7 +78,8 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Rotate clockwise (C)")
+                    .toolHoverEffect(name: "Rotate Clockwise", shortcut: "C", details: "Rotate tile brush 90° clockwise", cornerRadius: 4)
+
                     Button { model.clearBrush() } label: {
                         Image(systemName: "xmark.circle")
                             .font(.system(size: 11))
@@ -80,20 +87,11 @@ struct MapLeftDock: View {
                             .frame(width: 26, height: 22)
                     }
                     .buttonStyle(.plain)
-                    .help("Clear brush")
+                    .toolHoverEffect(name: "Clear Brush", details: "Disarm the current tile pattern brush", cornerRadius: 4)
                 }
             }
 
             Divider().frame(width: 26).overlay(StudioTheme.hairline)
-
-            Button { showProperties = true } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color.white.opacity(0.85))
-                    .frame(width: 34, height: 32)
-            }
-            .buttonStyle(.plain)
-            .help("Map properties")
 
             Button { pickImageLayer() } label: {
                 Image(systemName: "photo.badge.plus")
@@ -102,7 +100,7 @@ struct MapLeftDock: View {
                     .frame(width: 34, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Add an image as a layer (drag one from Assets, or pick a file)")
+            .toolHoverEffect(name: "Add Image Layer", details: "Import an image asset as a background or reference layer", cornerRadius: 6)
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 6)
@@ -114,13 +112,36 @@ struct MapLeftDock: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
         .shadow(color: .black.opacity(0.45), radius: 20, y: 6)
-        .sheet(isPresented: $showProperties) {
-            MapPropertiesEditor(model: model, target: .map)
-                .frame(width: 320, height: 380)
+        #if os(iOS)
+        .fileImporter(
+            isPresented: $isPickingImage,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let access = url.startAccessingSecurityScopedResource()
+                defer {
+                    if access { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url) else {
+                    model.operationError = "Could not read that image file."
+                    return
+                }
+                _ = model.addImageLayer(data: data,
+                                        name: url.deletingPathExtension().lastPathComponent)
+            case .failure(let error):
+                model.operationError = "Could not choose that image: \(error.localizedDescription)"
+            }
         }
+        #endif
     }
 
     private func pickImageLayer() {
+        #if os(iOS)
+        isPickingImage = true
+        #elseif os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -129,6 +150,7 @@ struct MapLeftDock: View {
                   let data = try? Data(contentsOf: url) else { return }
             _ = model.addImageLayer(data: data, name: url.deletingPathExtension().lastPathComponent)
         }
+        #endif
     }
 }
 
@@ -138,6 +160,9 @@ struct TilesetPanel: View {
     @ObservedObject var store: ProjectStore
     @ObservedObject var model: TileMapModel
     @State private var addSheet: TilesetAddSheet?
+    #if os(iOS)
+    @State private var isPickingImage = false
+    #endif
     @State private var autotileEditing = false
     @State private var autotileSlotToAssign: Int?
     @State private var activeTileset = 0
@@ -165,6 +190,13 @@ struct TilesetPanel: View {
         .onChange(of: tilesetList.count) { _ in
             if activeTileset >= tilesetList.count { activeTileset = max(0, tilesetList.count - 1) }
         }
+        .onChange(of: store.pendingTilesetSource?.id) { _ in
+            guard let pending = store.pendingTilesetSource else { return }
+            store.pendingTilesetSource = nil
+            if let source = prepareSource(name: pending.name, data: pending.data) {
+                addSheet = .configure(source)
+            }
+        }
         .sheet(item: $addSheet) { sheet in
             switch sheet {
             case .chooser:
@@ -188,14 +220,43 @@ struct TilesetPanel: View {
                     defaultTileWidth: model.map.cellWidth,
                     defaultTileHeight: model.map.cellHeight,
                     onCancel: { addSheet = nil },
-                    onConfirm: { tw, th, margin, spacing in
-                        commitTileset(source, tw: tw, th: th, margin: margin, spacing: spacing)
+                    onConfirm: { tw, th, margin, spacing, offsetX, offsetY in
+                        commitTileset(source, tw: tw, th: th, margin: margin, spacing: spacing,
+                                      offsetX: offsetX, offsetY: offsetY)
                         addSheet = nil
                     }
                 )
-                .frame(width: 440, height: 460)
+                .frame(width: 440, height: 540)
             }
         }
+        #if os(iOS)
+        .fileImporter(
+            isPresented: $isPickingImage,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let access = url.startAccessingSecurityScopedResource()
+                defer {
+                    if access { url.stopAccessingSecurityScopedResource() }
+                }
+                guard let data = try? Data(contentsOf: url) else {
+                    store.error = "Could not read that image file."
+                    return
+                }
+                if let source = prepareSource(
+                    name: url.deletingPathExtension().lastPathComponent,
+                    data: data
+                ) {
+                    addSheet = .configure(source)
+                }
+            case .failure(let error):
+                store.error = "Could not choose that image: \(error.localizedDescription)"
+            }
+        }
+        #endif
     }
 
     // MARK: Header
@@ -376,7 +437,7 @@ struct TilesetPanel: View {
             if brush.tilesetIndex == ts.index,
                let first = brush.pattern.tiles.first,
                let thumb = tileThumb(ts: ts, local: (first & 0x1fff_ffff) &- ts.firstGid) {
-                Image(nsImage: NSImage(cgImage: thumb, size: .zero))
+                Image(platformImage: makePlatformImage(cgImage: thumb))
                     .interpolation(.none)
                     .resizable()
             } else {
@@ -476,7 +537,7 @@ struct TilesetPanel: View {
                                     RoundedRectangle(cornerRadius: 4)
                                         .fill(autotileSlotToAssign == mask ? StudioTheme.accent.opacity(0.35) : Color.white.opacity(0.08))
                                     if let local, let thumb = tileThumb(ts: ts, local: UInt32(local)) {
-                                        Image(nsImage: NSImage(cgImage: thumb, size: .zero))
+                                        Image(platformImage: makePlatformImage(cgImage: thumb))
                                             .interpolation(.none)
                                             .resizable()
                                     }
@@ -524,6 +585,9 @@ struct TilesetPanel: View {
     // MARK: Add tileset flow
 
     private func pickImage() {
+        #if os(iOS)
+        isPickingImage = true
+        #elseif os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -537,6 +601,7 @@ struct TilesetPanel: View {
                 addSheet = .configure(source)
             }
         }
+        #endif
     }
 
     /// Decode an image into an `AddTilesetSource`, surfacing decode failures.
@@ -553,7 +618,8 @@ struct TilesetPanel: View {
                                 rgba: image.rgba, width: image.width, height: image.height)
     }
 
-    private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int) {
+    private func commitTileset(_ source: AddTilesetSource, tw: Int, th: Int, margin: Int, spacing: Int,
+                               offsetX: Int = 0, offsetY: Int = 0) {
         guard let rel = store.persistImageAsset(data: source.data, name: source.name) else {
             store.error = "Could not copy the tileset into the project."
             return
@@ -565,6 +631,9 @@ struct TilesetPanel: View {
                                                  rgba: source.rgba,
                                                  imageWidth: source.width, imageHeight: source.height,
                                                  tileWidth: tw, tileHeight: th, margin: margin, spacing: spacing)
+            if offsetX != 0 || offsetY != 0 {
+                model.map.setTilesetTileOffset(index, x: offsetX, y: offsetY)
+            }
             model.attachTilesetImage(index, cgImage: source.cgImage)
             model.commitChange()
             activeTileset = max(0, tilesetList.count - 1)
@@ -781,7 +850,7 @@ private struct TileSheetView: View {
     }
 
     private var sheetContent: some View {
-        Image(nsImage: NSImage(cgImage: cgImage, size: .zero))
+        Image(platformImage: makePlatformImage(cgImage: cgImage))
             .interpolation(.none)
             .resizable()
             .frame(width: contentSize.width, height: contentSize.height)
@@ -911,12 +980,14 @@ private struct AddTilesetSheet: View {
     let defaultTileWidth: Int
     let defaultTileHeight: Int
     let onCancel: () -> Void
-    let onConfirm: (Int, Int, Int, Int) -> Void
+    let onConfirm: (Int, Int, Int, Int, Int, Int) -> Void
 
     @State private var tileWidth = 16
     @State private var tileHeight = 16
     @State private var margin = 0
     @State private var spacing = 0
+    @State private var offsetX = 0
+    @State private var offsetY = 0
 
     private var slicing: (columns: Int, tiles: Int) {
         let tw = max(1, tileWidth), th = max(1, tileHeight)
@@ -932,7 +1003,7 @@ private struct AddTilesetSheet: View {
             Text("Add tileset")
                 .font(.title3.bold())
             HStack(spacing: 12) {
-                Image(nsImage: NSImage(cgImage: source.cgImage, size: .zero))
+                Image(platformImage: makePlatformImage(cgImage: source.cgImage))
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
@@ -960,12 +1031,26 @@ private struct AddTilesetSheet: View {
                 stepperRow("Spacing", value: $spacing, in: 0...64)
             }
 
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Draw offset (tileoffset)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                HStack(spacing: 10) {
+                    offsetField("X", value: $offsetX)
+                    offsetField("Y", value: $offsetY)
+                    Spacer()
+                }
+                Text("Shift every tile when compositing. Isometric art often uses Y = −tile height ÷ 2.")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+
             Spacer()
             HStack {
                 Spacer()
                 Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
                     .help("Cancel adding the tileset")
-                Button("Add tileset") { onConfirm(tileWidth, tileHeight, margin, spacing) }
+                Button("Add tileset") { onConfirm(tileWidth, tileHeight, margin, spacing, offsetX, offsetY) }
                     .buttonStyle(.borderedProminent)
                     .disabled(slicing.tiles == 0)
                     .keyboardShortcut(.defaultAction)
@@ -986,6 +1071,17 @@ private struct AddTilesetSheet: View {
             Stepper(value: value, in: range) { Text("\(value.wrappedValue)").frame(width: 36, alignment: .trailing) }
         }
     }
+
+    private func offsetField(_ title: String, value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+            Stepper(value: value, in: -512...512) {
+                Text("\(value.wrappedValue)").frame(width: 34, alignment: .trailing)
+            }
+        }
+    }
 }
 
 // MARK: - Map layers panel
@@ -998,7 +1094,7 @@ struct MapLayersPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Map Layers")
+                Text("Scene Layers")
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(Color.white.opacity(0.92))
                 Spacer()
@@ -1032,6 +1128,9 @@ struct MapLayersPanel: View {
 
             if model.isObjectActive, let row = model.layers.first(where: { $0.index == model.activeLayer }) {
                 objectInspector(layerIndex: row.index)
+            }
+            if model.activeIsImage {
+                imageInspector
             }
         }
         .frame(width: 280)
@@ -1151,6 +1250,25 @@ struct MapLayersPanel: View {
     }
 
     @State private var editingDraft = ""
+
+    private var imageInspector: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Divider().overlay(StudioTheme.hairline)
+            Text("Image transform")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            Toggle("Freeform resize", isOn: $model.imageFreeformResize)
+                .font(.system(size: 10))
+                .toggleStyle(.switch)
+            Text(model.imageFreeformResize
+                 ? "Corner handles change width and height independently."
+                 : "Corner handles preserve the image ratio.")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
 
     // MARK: Object inspector
 
@@ -1455,17 +1573,20 @@ struct MiniMapOverlay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Map")
+                Text("Scene")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundColor(.white.opacity(0.85))
                 Spacer()
-                Text("\(model.width)×\(model.height) cells")
+                Text(model.isInfinite ? "Infinite" : "\(model.width)×\(model.height) cells")
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundColor(.secondary)
             }
             GeometryReader { geo in
-                let mapW = CGFloat(model.map.pixelWidth)
-                let mapH = CGFloat(model.map.pixelHeight)
+                let content = model.isInfinite ? model.contentPixelBounds() : nil
+                let contentX = CGFloat(content?.x ?? 0)
+                let contentY = CGFloat(content?.y ?? 0)
+                let mapW = CGFloat(content?.width ?? model.map.pixelWidth)
+                let mapH = CGFloat(content?.height ?? model.map.pixelHeight)
                 let inner = geo.size
                 let scale = min(inner.width / max(1, mapW), inner.height / max(1, mapH))
                 let imgW = mapW * scale
@@ -1475,14 +1596,15 @@ struct MiniMapOverlay: View {
                 ZStack {
                     Color.clear
                         .background(CheckerboardView(cell: 4))
-                    if let cg = model.compositeCGImage() {
-                        Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                    if let cg = model.compositeCGImage(), imgW > 0, imgH > 0 {
+                        Image(platformImage: makePlatformImage(cgImage: cg))
                             .resizable()
                             .interpolation(.none)
                             .frame(width: imgW, height: imgH)
                             .position(x: ox + imgW / 2, y: oy + imgH / 2)
                     }
-                    viewportRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH, imgW: imgW, imgH: imgH)
+                    viewportRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH, imgW: imgW, imgH: imgH,
+                                 contentX: contentX, contentY: contentY)
                         .position(x: ox + imgW / 2, y: oy + imgH / 2)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -1491,7 +1613,7 @@ struct MiniMapOverlay: View {
                         let x = value.location.x - ox
                         let y = value.location.y - oy
                         guard x >= 0, y >= 0, x <= imgW, y <= imgH else { return }
-                        jump(toDocX: x / scale, y: y / scale)
+                        jump(toDocX: x / scale + contentX, y: y / scale + contentY)
                     }
                 )
             }
@@ -1505,20 +1627,10 @@ struct MiniMapOverlay: View {
     }
 
     @ViewBuilder
-    private func viewportRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat, imgW: CGFloat, imgH: CGFloat) -> some View {
-        let viewSize = viewport.lastViewSize
-        if viewSize.width <= 0 { EmptyView() } else {
-            // Visible viewport rectangle in document pixel space (y-up AppKit).
-            let vw = min(mapW, viewSize.width / viewport.zoom)
-            let vh = min(mapH, viewSize.height / viewport.zoom)
-            // Artboard origin in view points; top-left doc corner in view space.
-            let origin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
-            let leftDoc = max(0, -origin.x / viewport.zoom)
-            let topDoc = max(0, (viewSize.height - (origin.y + mapH * viewport.zoom)) / viewport.zoom)
-            let rightDoc = min(mapW, leftDoc + vw)
-            let bottomDoc = min(mapH, topDoc + vh)
-            let rect = CGRect(x: ox + leftDoc * scale, y: oy + topDoc * scale,
-                              width: (rightDoc - leftDoc) * scale, height: (bottomDoc - topDoc) * scale)
+    private func viewportRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat,
+                              imgW: CGFloat, imgH: CGFloat, contentX: CGFloat, contentY: CGFloat) -> some View {
+        if let rect = visibleMapRect(scale: scale, ox: ox, oy: oy, mapW: mapW, mapH: mapH,
+                                     contentX: contentX, contentY: contentY) {
             Rectangle()
                 .strokeBorder(StudioTheme.accent.opacity(0.9), lineWidth: 1)
                 .frame(width: rect.width, height: rect.height)
@@ -1526,8 +1638,43 @@ struct MiniMapOverlay: View {
         }
     }
 
+    /// Visible viewport rectangle in minimap coordinates, or nil when empty.
+    private func visibleMapRect(scale: CGFloat, ox: CGFloat, oy: CGFloat, mapW: CGFloat, mapH: CGFloat,
+                                contentX: CGFloat, contentY: CGFloat) -> CGRect? {
+        let viewSize = viewport.lastViewSize
+        guard viewSize.width > 0 else { return nil }
+        let leftDoc: CGFloat
+        let topDoc: CGFloat
+        let rightDoc: CGFloat
+        let bottomDoc: CGFloat
+        if model.isInfinite {
+            let tl = viewport.viewToDocF(CGPoint(x: 0, y: viewSize.height), viewSize: viewSize)
+            let br = viewport.viewToDocF(CGPoint(x: viewSize.width, y: 0), viewSize: viewSize)
+            leftDoc = max(contentX, CGFloat(tl.x))
+            topDoc = max(contentY, CGFloat(tl.y))
+            rightDoc = min(contentX + mapW, CGFloat(br.x))
+            bottomDoc = min(contentY + mapH, CGFloat(br.y))
+        } else {
+            let vw = min(mapW, viewSize.width / viewport.zoom)
+            let vh = min(mapH, viewSize.height / viewport.zoom)
+            let origin = viewport.artboardOrigin(viewSize: viewSize, canvasWidth: model.map.pixelWidth, height: model.map.pixelHeight)
+            leftDoc = max(0, -origin.x / viewport.zoom)
+            topDoc = max(0, (viewSize.height - (origin.y + mapH * viewport.zoom)) / viewport.zoom)
+            rightDoc = min(mapW, leftDoc + vw)
+            bottomDoc = min(mapH, topDoc + vh)
+        }
+        guard rightDoc > leftDoc, bottomDoc > topDoc else { return nil }
+        return CGRect(x: ox + (leftDoc - contentX) * scale, y: oy + (topDoc - contentY) * scale,
+                      width: (rightDoc - leftDoc) * scale, height: (bottomDoc - topDoc) * scale)
+    }
+
     private func jump(toDocX px: CGFloat, y py: CGFloat) {
         let zoom = viewport.zoom
+        if model.isInfinite {
+            // Centre the tapped world point in the view.
+            viewport.pan = CGPoint(x: -px * zoom, y: py * zoom)
+            return
+        }
         let mapW = CGFloat(model.map.pixelWidth)
         let mapH = CGFloat(model.map.pixelHeight)
         viewport.pan = CGPoint(x: zoom * (mapW / 2 - px), y: zoom * (py - mapH / 2))

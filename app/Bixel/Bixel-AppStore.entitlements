@@ -10,16 +10,12 @@
 	<key>com.apple.security.network.client</key>
 	<true/>
 
-	<!-- Goose Codex OAuth receives the browser callback on localhost:1455. -->
+	<!-- Optional Mac host for paired-iPad connections and the Codex OAuth callback. -->
 	<key>com.apple.security.network.server</key>
 	<true/>
 
 	<!-- Projects, sources and exports chosen through NSOpenPanel/NSSavePanel. -->
 	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-
-	<!-- Read/write the user's Downloads folder for exports. -->
-	<key>com.apple.security.files.downloads.read-write</key>
 	<true/>
 </dict>
 </plist>

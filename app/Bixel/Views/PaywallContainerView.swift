@@ -22,12 +22,26 @@ struct PaywallContainerView: View {
         if subscriptionManager.isConfigured {
             PaywallView()
                 .onPurchaseCompleted { info in
-                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
-                        dismiss()
+                    let isUnlocked = info.entitlements[SubscriptionManager.entitlementID]?.isActive == true
+                        || info.allPurchasedProductIdentifiers.contains(SubscriptionManager.lifetimeProductID)
+                        || info.nonSubscriptions.contains(where: { $0.productIdentifier == SubscriptionManager.lifetimeProductID })
+                        || !info.entitlements.active.isEmpty
+                    subscriptionManager.applyAdFreeEntitlement(isActive: isUnlocked)
+                    Task {
+                        await subscriptionManager.checkStoreKitEntitlements()
                     }
+                    dismiss()
                 }
                 .onRestoreCompleted { info in
-                    if info.entitlements[SubscriptionManager.entitlementID]?.isActive == true {
+                    let isUnlocked = info.entitlements[SubscriptionManager.entitlementID]?.isActive == true
+                        || info.allPurchasedProductIdentifiers.contains(SubscriptionManager.lifetimeProductID)
+                        || info.nonSubscriptions.contains(where: { $0.productIdentifier == SubscriptionManager.lifetimeProductID })
+                        || !info.entitlements.active.isEmpty
+                    subscriptionManager.applyAdFreeEntitlement(isActive: isUnlocked)
+                    Task {
+                        await subscriptionManager.checkStoreKitEntitlements()
+                    }
+                    if isUnlocked || subscriptionManager.isAdFree {
                         dismiss()
                     }
                 }

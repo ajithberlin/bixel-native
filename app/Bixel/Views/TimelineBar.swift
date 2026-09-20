@@ -5,6 +5,7 @@ import SwiftUI
 
 struct TimelineBar: View {
     @ObservedObject var model: EditorModel
+    var viewport: CanvasViewport? = nil
     var onPredictNextFrame: (String) -> Void
 
     @State private var hoveredIndex: Int? = nil
@@ -14,6 +15,18 @@ struct TimelineBar: View {
     @State private var isPredictHovered = false
     @State private var showPredict = false
     @State private var predictText = ""
+    #if os(iOS)
+    /// On iPad the predict-next-frame tile appears once a Mac is connected.
+    @ObservedObject private var remote = RemoteClient.shared
+    #endif
+
+    private var assistantAvailable: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return remote.state.isConnected
+        #endif
+    }
 
     private let cellWidth: CGFloat = 40
     private let spacing: CGFloat = 5
@@ -60,6 +73,41 @@ struct TimelineBar: View {
                     Text("Reverse").tag(LoopMode.reverse)
                     Text("Ping-pong").tag(LoopMode.pingPong)
                 }
+
+                if let viewport {
+                    Divider()
+                    Toggle("Onion Skin", isOn: Binding(
+                        get: { viewport.onionSkin },
+                        set: { viewport.onionSkin = $0 }
+                    ))
+                    if viewport.onionSkin {
+                        Menu("Onion Layers: \(viewport.onionFrames)") {
+                            ForEach(1...5, id: \.self) { count in
+                                Button("\(count) \(count == 1 ? "Layer" : "Layers")") {
+                                    viewport.onionFrames = count
+                                }
+                            }
+                        }
+                        Toggle("Colorize Layers", isOn: Binding(
+                            get: { viewport.onionColorize },
+                            set: { viewport.onionColorize = $0 }
+                        ))
+                    }
+                }
+
+                Divider()
+
+                Menu("Export Animation") {
+                    Button("Animated GIF…") {
+                        model.exportGIF()
+                    }
+                    Button("MP4 Video…") {
+                        model.exportVideo()
+                    }
+                    Button("Sprite Sheet…") {
+                        model.exportSpriteSheet()
+                    }
+                }
             } label: {
                 Text("Settings")
             }
@@ -89,7 +137,11 @@ struct TimelineBar: View {
                         ForEach(Array(model.frameIDs.enumerated()), id: \.element) { index, id in
                             frameItem(at: index, id: id, scrollProxy: proxy)
                         }
-                        aiFrameCell
+                        // Predict-next-frame reports through the assistant; shown
+                        // on iPad once a Mac is connected.
+                        if assistantAvailable {
+                            aiFrameCell
+                        }
                     }
                     .padding(.horizontal, pad)
                     .padding(.vertical, 4)
@@ -447,44 +499,8 @@ private struct FrameCell: View {
 }
 
 /// High-performance Core Animation backed pixel-art thumbnail view.
-final class FastPixelImageView: NSView {
-    var cgImage: CGImage? {
-        didSet {
-            if cgImage !== oldValue {
-                updateLayerContents()
-            }
-        }
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        updateLayerContents()
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        wantsLayer = true
-        updateLayerContents()
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        updateLayerContents()
-    }
-
-    private func updateLayerContents() {
-        wantsLayer = true
-        guard let l = layer else { return }
-        l.magnificationFilter = .nearest
-        l.minificationFilter = .nearest
-        l.contentsGravity = .resizeAspect
-        l.contents = cgImage
-    }
-}
-
 /// Renders a CGImage or RGBA buffer as a crisp pixel-art thumbnail.
-struct PixelImageView: NSViewRepresentable {
+struct PixelImageView: View {
     var cgImage: CGImage?
     var image: [UInt8]?
     var width: Int
@@ -504,23 +520,21 @@ struct PixelImageView: NSViewRepresentable {
         self.height = height
     }
 
-    func makeNSView(context: Context) -> FastPixelImageView {
-        let view = FastPixelImageView()
-        updateImage(on: view)
-        return view
+    private var resolvedCGImage: CGImage? {
+        if let cgImage { return cgImage }
+        if let image, width > 0, height > 0 {
+            return makeCGImage(pixels: image, width: width, height: height)
+        }
+        return nil
     }
 
-    func updateNSView(_ nsView: FastPixelImageView, context: Context) {
-        updateImage(on: nsView)
-    }
-
-    private func updateImage(on nsView: FastPixelImageView) {
-        if let cgImage = cgImage {
-            nsView.cgImage = cgImage
-        } else if let image = image, width > 0, height > 0 {
-            nsView.cgImage = makeCGImage(pixels: image, width: width, height: height)
+    var body: some View {
+        if let resolved = resolvedCGImage {
+            Image(decorative: resolved, scale: 1.0)
+                .resizable()
+                .interpolation(.none)
         } else {
-            nsView.cgImage = nil
+            Color.clear
         }
     }
 }

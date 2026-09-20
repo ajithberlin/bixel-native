@@ -662,12 +662,14 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "bixel-core"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "libc",
  "regex",
  "serde",

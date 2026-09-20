@@ -209,6 +209,53 @@ pub unsafe extern "C" fn bixel_doc_layer_count(ptr: *const BixelDoc) -> u32 {
     unsafe { doc_ref(ptr) }.lock().unwrap().layers.len() as u32
 }
 
+/// Add a layer owned by `frame` (per-frame layer stacks). Returns the new
+/// global layer index, or -1 for an invalid frame.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_add_layer_for_frame(
+    ptr: *mut BixelDoc,
+    name: *const c_char,
+    frame: u32,
+) -> i32 {
+    let name = arg_str(name);
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .add_layer_for_frame(frame as usize, Some(&name))
+        .map_or(-1, |index| index as i32)
+}
+
+/// Owning frame of a global layer index, or `u32::MAX` when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_layer_frame(ptr: *const BixelDoc, layer: u32) -> u32 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .layer_frame(layer as usize)
+        .map_or(u32::MAX, |frame| frame as u32)
+}
+
+/// Stable identity of a layer (survives reorders/undo), or 0 when out of range.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_layer_uid(ptr: *const BixelDoc, layer: u32) -> u64 {
+    unsafe { doc_ref(ptr) }
+        .lock()
+        .unwrap()
+        .layers
+        .get(layer as usize)
+        .map(|l| l.uid)
+        .unwrap_or(0)
+}
+
+/// Global layer indices owned by `frame`, bottom-first, as a JSON array.
+/// Free with [`bixel_string_free`].
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_frame_layers_json(ptr: *const BixelDoc, frame: u32) -> *mut c_char {
+    let doc = unsafe { doc_ref(ptr) }.lock().unwrap();
+    let layers = doc.frame_layers(frame as usize);
+    out_cstr(serde_json::to_string(&layers).unwrap_or_else(|_| "[]".into()))
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn bixel_doc_set_pixel(
     ptr: *mut BixelDoc,
@@ -660,6 +707,37 @@ pub unsafe extern "C" fn bixel_doc_flood_fill(
         .unwrap()
         .flood_fill(layer as usize, frame as usize, x as usize, y as usize, color.into())
         as u32
+}
+
+/// 4-way flood fill constrained to the half-open pixel rectangle
+/// `[min_x, max_x) × [min_y, max_y)`; returns the number of pixels changed.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_doc_flood_fill_within(
+    ptr: *mut BixelDoc,
+    layer: u32,
+    frame: u32,
+    x: u32,
+    y: u32,
+    color: BixelColor,
+    min_x: u32,
+    min_y: u32,
+    max_x: u32,
+    max_y: u32,
+) -> u32 {
+    unsafe { doc(ptr) }
+        .lock()
+        .unwrap()
+        .flood_fill_within(
+            layer as usize,
+            frame as usize,
+            x as usize,
+            y as usize,
+            color.into(),
+            min_x as usize,
+            min_y as usize,
+            max_x as usize,
+            max_y as usize,
+        ) as u32
 }
 
 // ------------------------------------------------------------------ layers
@@ -1130,6 +1208,15 @@ pub extern "C" fn bixel_ai_cancel_codex_oauth() {
     bixel_ai::connection::cancel_codex_oauth();
 }
 
+/// Register a host callback for opening external URLs (such as OAuth browser flows).
+#[no_mangle]
+pub extern "C" fn bixel_ai_set_open_url_callback(
+    callback: Option<extern "C" fn(*const c_char, *mut std::ffi::c_void)>,
+    context: *mut std::ffi::c_void,
+) {
+    bixel_ai::connection::set_open_url_callback(callback, context);
+}
+
 /// JSON object of selectable provider-scoped model options for `openrouter` or
 /// `chatgpt_codex`: `{"models": ["id", ...], "default": "id",
 /// "model_options": [{"id", "label", "capabilities"}]}`. OpenRouter
@@ -1281,7 +1368,7 @@ pub extern "C" fn bixel_ai_app_paths() -> *mut c_char {
 }
 
 const AI_SYSTEM_PROMPT: &str =
-    "You are Bixel, an AI assistant for a 2D pixel-art game studio. Be concise and helpful.";
+    "You are Bixel, an AI assistant for a 2D design studio. Be concise and helpful.";
 
 /// Blocking text chat with the configured text model.
 ///
@@ -1451,10 +1538,23 @@ pub unsafe extern "C" fn bixel_ai_generate_art(
 ) -> *mut u8 {
     let prompt = arg_str(prompt);
     let Some(gen) = image_gen() else { return std::ptr::null_mut() };
-    match gen.generate_image(&prompt, None) {
-        Ok(img) => match bixel_ai::image::encode_png(&img) {
-            Ok(png) => unsafe { return_bytes(png, out_len) },
-            Err(_) => std::ptr::null_mut(),
+    let input = bixel_ai::skills::SkillInput {
+        prompt,
+        image: None,
+        images: vec![],
+        params: serde_json::json!({}),
+    };
+    match bixel_ai::skills::Skills::run(
+        Some(gen.as_ref()),
+        bixel_ai::skills::SkillKind::GenerateArt,
+        input,
+    ) {
+        Ok(output) => match output.image.or(output.source_image) {
+            Some(img) => match bixel_ai::image::encode_png(&img) {
+                Ok(png) => unsafe { return_bytes(png, out_len) },
+                Err(_) => std::ptr::null_mut(),
+            },
+            None => std::ptr::null_mut(),
         },
         Err(_) => std::ptr::null_mut(),
     }
@@ -1479,7 +1579,7 @@ pub unsafe extern "C" fn bixel_ai_next_frame(
     // and alpha policy stay identical to the `next_frame` tool path.
     let action = arg_str(prompt);
     let input = bixel_ai::skills::SkillInput {
-        prompt: String::new(),
+        prompt: action.clone(),
         image: Some(current),
         images: vec![],
         params: serde_json::json!({ "action": action }),
@@ -1668,13 +1768,160 @@ pub unsafe extern "C" fn bixel_storage_read_bytes(
     }
 }
 
+// ------------------------------------------------------------------- sync
+//
+// Mac ↔ iPad project replication core: content-addressed manifests and the
+// three-way reconciliation plan. Pure JSON over the ABI; the network transport
+// and UI live in Swift. Regenerable caches are excluded from manifests and
+// conflicting files are never auto-merged (the caller preserves both copies).
+
+/// Scan a project directory into a content-addressed manifest. Returns
+/// `{value:<manifest>}` or `{error:...}`; free with `bixel_string_free`.
+#[no_mangle]
+pub extern "C" fn bixel_sync_manifest(
+    project_root: *const c_char,
+    project_id: *const c_char,
+) -> *mut c_char {
+    let root = std::path::PathBuf::from(arg_str(project_root));
+    let result = bixel_core::sync::scan_manifest(&root, &arg_str(project_id));
+    out_cstr(
+        match result {
+            Ok(manifest) => serde_json::json!({ "value": manifest }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Compute the reconciliation plan from `base` (null/empty for a first sync),
+/// `local`, and `remote` manifests. Returns `{value:<plan>}` or `{error:...}`.
+#[no_mangle]
+pub extern "C" fn bixel_sync_plan(
+    base_json: *const c_char,
+    local_json: *const c_char,
+    remote_json: *const c_char,
+) -> *mut c_char {
+    use bixel_core::sync::{plan, Manifest};
+    let parse = |text: String| -> Result<Manifest, String> {
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    };
+    let result = (|| {
+        let local = parse(arg_str(local_json))?;
+        let remote = parse(arg_str(remote_json))?;
+        let base_text = arg_str(base_json);
+        let base = if base_text.trim().is_empty() || base_text.trim() == "null" {
+            None
+        } else {
+            Some(parse(base_text)?)
+        };
+        Ok::<_, String>(plan(base.as_ref(), &local, &remote))
+    })();
+    out_cstr(
+        match result {
+            Ok(plan) => serde_json::json!({ "value": plan }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Atomically persist a manifest under the project root. Returns null on
+/// success or an owned error string.
+#[no_mangle]
+pub extern "C" fn bixel_sync_write_manifest(
+    project_root: *const c_char,
+    manifest_json: *const c_char,
+) -> *mut c_char {
+    let result =
+        serde_json::from_str::<bixel_core::sync::Manifest>(&arg_str(manifest_json))
+            .map_err(|e| e.to_string())
+            .and_then(|manifest| {
+                bixel_core::sync::write_manifest(
+                    std::path::Path::new(&arg_str(project_root)),
+                    &manifest,
+                )
+            });
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(e) => out_cstr(e),
+    }
+}
+
+/// Conflict filename for a path (`documents/a.json` →
+/// `documents/a.conflict-ipad-42.json`). Returns an owned string.
+#[no_mangle]
+pub extern "C" fn bixel_sync_conflict_name(
+    path: *const c_char,
+    device: *const c_char,
+    timestamp: u64,
+) -> *mut c_char {
+    out_cstr(bixel_core::sync::conflict_name(
+        &arg_str(path),
+        &arg_str(device),
+        timestamp,
+    ))
+}
+
+/// Store bytes in the shared content-addressed blob store (idempotent).
+/// Returns `{value:"blake3:<hex>"}` or `{error:...}`.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_sync_store_blob(
+    projects_root: *const c_char,
+    bytes: *const u8,
+    len: u64,
+) -> *mut c_char {
+    if bytes.is_null() || len > isize::MAX as u64 {
+        return out_cstr(r#"{"error":"Invalid blob buffer"}"#.into());
+    }
+    let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    let result = bixel_core::sync::store_blob(
+        std::path::Path::new(&arg_str(projects_root)),
+        data,
+    );
+    out_cstr(
+        match result {
+            Ok(hash) => serde_json::json!({ "value": hash }),
+            Err(error) => serde_json::json!({ "error": error }),
+        }
+        .to_string(),
+    )
+}
+
+/// Two-call blob read. Returns bytes written, the required length when `out` is
+/// null/too small, `-2` when the blob is missing, or `-1` on error.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_sync_read_blob(
+    projects_root: *const c_char,
+    hash: *const c_char,
+    out: *mut u8,
+    out_len: u64,
+) -> i64 {
+    if out_len > isize::MAX as u64 {
+        return -1;
+    }
+    match bixel_core::sync::read_blob(
+        std::path::Path::new(&arg_str(projects_root)),
+        &arg_str(hash),
+    ) {
+        Ok(Some(bytes)) => {
+            if out.is_null() || (out_len as usize) < bytes.len() {
+                return bytes.len() as i64;
+            }
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len()) };
+            bytes.len() as i64
+        }
+        Ok(None) => -2,
+        Err(_) => -1,
+    }
+}
+
 // ----------------------------------------------------------------- tile map
 //
 // The TileMap designer (`.map` documents are Tiled 1.10 JSON). Same contract
 // as `BixelDoc`: opaque `Arc<Mutex<TileMap>>`, bulk data via caller buffers,
 // strings freed with `bixel_string_free`.
 
-use bixel_core::map::{MapLayer, Property, TileMap};
+use bixel_core::map::{MapLayer, Orientation, Property, RenderOrder, StaggerAxis, StaggerIndex, TileMap};
 
 // ------------------------------------------------------------- lifecycle
 
@@ -1687,6 +1934,66 @@ pub extern "C" fn bixel_map_new(width: u32, height: u32, tile_width: u32, tile_h
         tile_height.max(1) as usize,
     )));
     Box::into_raw(Box::new(real)) as *mut BixelMap
+}
+
+/// Create a Tiled infinite map: unbounded canvas, chunked serialization. The
+/// dense storage grows as content is painted.
+#[no_mangle]
+pub extern "C" fn bixel_map_new_infinite(tile_width: u32, tile_height: u32, orientation: u8) -> *mut BixelMap {
+    let orientation = match orientation {
+        1 => Orientation::Isometric,
+        2 => Orientation::Staggered,
+        _ => Orientation::Orthogonal,
+    };
+    let real = Arc::new(Mutex::new(TileMap::new_infinite(
+        tile_width.max(1) as usize,
+        tile_height.max(1) as usize,
+        orientation,
+    )));
+    Box::into_raw(Box::new(real)) as *mut BixelMap
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_is_infinite(ptr: *const BixelMap) -> bool {
+    unsafe { map_ref(ptr) }.lock().unwrap().infinite
+}
+
+/// World cell of dense storage `(0, 0)` (0 for finite maps).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_origin_x(ptr: *const BixelMap) -> i32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().origin_x
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_origin_y(ptr: *const BixelMap) -> i32 {
+    unsafe { map_ref(ptr) }.lock().unwrap().origin_y
+}
+
+/// Inclusive world-cell bounds of non-empty content. Returns false when empty.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_content_bounds(
+    ptr: *const BixelMap,
+    out_min_x: *mut i32,
+    out_min_y: *mut i32,
+    out_max_x: *mut i32,
+    out_max_y: *mut i32,
+) -> bool {
+    if out_min_x.is_null() || out_min_y.is_null() || out_max_x.is_null() || out_max_y.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    match map.content_cell_bounds() {
+        Some((a, b, c, d)) => {
+            unsafe {
+                *out_min_x = a;
+                *out_min_y = b;
+                *out_max_x = c;
+                *out_max_y = d;
+            }
+            true
+        }
+        None => false,
+    }
 }
 
 #[no_mangle]
@@ -1767,6 +2074,181 @@ pub unsafe extern "C" fn bixel_map_pixel_height(ptr: *const BixelMap) -> u32 {
     unsafe { map_ref(ptr) }.lock().unwrap().pixel_height() as u32
 }
 
+// ------------------------------------------------------------ orientation
+
+/// Orientation code: 0 = orthogonal, 1 = isometric, 2 = staggered, 3 = hexagonal.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_orientation(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().orientation {
+        Orientation::Orthogonal => 0,
+        Orientation::Isometric => 1,
+        Orientation::Staggered => 2,
+        Orientation::Hexagonal => 3,
+    }
+}
+
+/// Only orthogonal (0), isometric (1) and staggered (2) are renderable; returns
+/// false for hexagonal (3) or an unknown code.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_orientation(ptr: *mut BixelMap, code: u8) -> bool {
+    let orientation = match code {
+        0 => Orientation::Orthogonal,
+        1 => Orientation::Isometric,
+        2 => Orientation::Staggered,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().orientation = orientation;
+    true
+}
+
+/// Render order code: 0 = right-down, 1 = right-up, 2 = left-down, 3 = left-up.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_render_order(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().render_order {
+        RenderOrder::RightDown => 0,
+        RenderOrder::RightUp => 1,
+        RenderOrder::LeftDown => 2,
+        RenderOrder::LeftUp => 3,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_render_order(ptr: *mut BixelMap, code: u8) -> bool {
+    let order = match code {
+        0 => RenderOrder::RightDown,
+        1 => RenderOrder::RightUp,
+        2 => RenderOrder::LeftDown,
+        3 => RenderOrder::LeftUp,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().render_order = order;
+    true
+}
+
+/// Stagger axis code: 0 = x, 1 = y.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_stagger_axis(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().stagger_axis {
+        StaggerAxis::X => 0,
+        StaggerAxis::Y => 1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_stagger_axis(ptr: *mut BixelMap, code: u8) -> bool {
+    let axis = match code {
+        0 => StaggerAxis::X,
+        1 => StaggerAxis::Y,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().stagger_axis = axis;
+    true
+}
+
+/// Stagger index code: 0 = odd, 1 = even.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_stagger_index(ptr: *const BixelMap) -> u8 {
+    match unsafe { map_ref(ptr) }.lock().unwrap().stagger_index {
+        StaggerIndex::Odd => 0,
+        StaggerIndex::Even => 1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_stagger_index(ptr: *mut BixelMap, code: u8) -> bool {
+    let index = match code {
+        0 => StaggerIndex::Odd,
+        1 => StaggerIndex::Even,
+        _ => return false,
+    };
+    unsafe { map(ptr) }.lock().unwrap().stagger_index = index;
+    true
+}
+
+/// Bulk geometry description for the host (orientation, render order, stagger
+/// settings and projected pixel bounds).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_geometry_json(ptr: *const BixelMap) -> *mut c_char {
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let value = serde_json::json!({
+        "orientation": map.orientation.as_tiled(),
+        "renderOrder": map.render_order.as_tiled(),
+        "staggerAxis": map.stagger_axis.as_tiled(),
+        "staggerIndex": map.stagger_index.as_tiled(),
+        "infinite": map.infinite,
+        "originX": map.origin_x,
+        "originY": map.origin_y,
+        "columns": map.width,
+        "rows": map.height,
+        "cellWidth": map.tile_width,
+        "cellHeight": map.tile_height,
+        "pixelWidth": map.pixel_width(),
+        "pixelHeight": map.pixel_height(),
+    });
+    out_cstr(value.to_string())
+}
+
+/// Top-left screen pixel of a cell's tile image (orientation-aware).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_cell_origin(ptr: *const BixelMap, cx: i32, cy: i32, out_x: *mut i64, out_y: *mut i64) {
+    if out_x.is_null() || out_y.is_null() {
+        return;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let (x, y) = map.geometry().tile_origin(cx as i64, cy as i64);
+    unsafe {
+        *out_x = x;
+        *out_y = y;
+    }
+}
+
+/// Whole-map screen pixel -> integer cell. Returns false when the point is
+/// outside the map bounds (the raw cell is still written for clamping).
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_pixel_to_cell(
+    ptr: *const BixelMap,
+    px: f64,
+    py: f64,
+    out_cx: *mut i32,
+    out_cy: *mut i32,
+) -> bool {
+    if out_cx.is_null() || out_cy.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let (cx, cy) = map.geometry().pixel_to_cell(px, py);
+    let inside = cx >= 0 && cy >= 0 && (cx as usize) < map.width && (cy as usize) < map.height;
+    unsafe {
+        *out_cx = cx as i32;
+        *out_cy = cy as i32;
+    }
+    inside
+}
+
+/// Set a tileset's draw offset (Tiled `tileoffset`) in pixels.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_tileset_tile_offset(ptr: *mut BixelMap, index: u32, x: i32, y: i32) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().set_tileset_tile_offset(index as usize, x, y)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_tileset_tile_offset(ptr: *const BixelMap, index: u32, out_x: *mut i32, out_y: *mut i32) -> bool {
+    if out_x.is_null() || out_y.is_null() {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    match map.tileset_tile_offset(index as usize) {
+        Some((x, y)) => {
+            unsafe {
+                *out_x = x;
+                *out_y = y;
+            }
+            true
+        }
+        None => false,
+    }
+}
+
 // ------------------------------------------------------------ tilesets
 
 #[no_mangle]
@@ -1829,6 +2311,8 @@ pub unsafe extern "C" fn bixel_map_tilesets_json(ptr: *const BixelMap) -> *mut c
                 "spacing": ts.spacing,
                 "columns": ts.columns,
                 "tileCount": ts.tile_count,
+                "tileOffsetX": ts.tile_offset.0,
+                "tileOffsetY": ts.tile_offset.1,
             })
         })
         .collect();
@@ -1881,11 +2365,11 @@ pub unsafe extern "C" fn bixel_map_autotile_slots(ptr: *const BixelMap, tileset:
 
 /// Re-resolve a painted region's borders; returns changed cell count.
 #[no_mangle]
-pub unsafe extern "C" fn bixel_map_autotile(ptr: *mut BixelMap, layer: u32, tileset: u32, x: u32, y: u32, w: u32, h: u32) -> u32 {
+pub unsafe extern "C" fn bixel_map_autotile(ptr: *mut BixelMap, layer: u32, tileset: u32, x: i32, y: i32, w: u32, h: u32) -> u32 {
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .autotile(layer as usize, tileset as usize, x as usize, y as usize, w as usize, h as usize) as u32
+        .autotile(layer as usize, tileset as usize, x as isize, y as isize, w as usize, h as usize) as u32
 }
 
 // ------------------------------------------------------------- layers
@@ -1948,6 +2432,26 @@ pub unsafe extern "C" fn bixel_map_set_image_layer_pixels(
     }
     let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
     unsafe { map(ptr) }.lock().unwrap().set_image_layer_pixels(index as usize, pixels)
+}
+
+/// Move and/or resize an image layer in map pixels. The source pixels remain
+/// unchanged and the core uses nearest-neighbour sampling while compositing.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_set_image_layer_transform(
+    ptr: *mut BixelMap,
+    index: u32,
+    x: f64,
+    y: f64,
+    display_width: u32,
+    display_height: u32,
+) -> bool {
+    unsafe { map(ptr) }.lock().unwrap().set_image_layer_transform(
+        index as usize,
+        x,
+        y,
+        display_width,
+        display_height,
+    )
 }
 
 #[no_mangle]
@@ -2034,6 +2538,10 @@ pub unsafe extern "C" fn bixel_map_layers_json(ptr: *const BixelMap) -> *mut c_c
                     base["image"] = serde_json::json!(data.image);
                     base["imageWidth"] = serde_json::json!(data.image_width);
                     base["imageHeight"] = serde_json::json!(data.image_height);
+                    base["displayWidth"] = serde_json::json!(data.display_width);
+                    base["displayHeight"] = serde_json::json!(data.display_height);
+                    base["x"] = serde_json::json!(data.x);
+                    base["y"] = serde_json::json!(data.y);
                 }
             }
             base
@@ -2083,7 +2591,7 @@ pub unsafe extern "C" fn bixel_map_stamp(
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .stamp(layer as usize, x.max(0) as usize, y.max(0) as usize, &pattern, skip_empty) as u32
+        .stamp(layer as usize, x as isize, y as isize, &pattern, skip_empty) as u32
 }
 
 #[no_mangle]
@@ -2119,8 +2627,8 @@ pub unsafe extern "C" fn bixel_map_paint_line(
 pub unsafe extern "C" fn bixel_map_read_region(
     ptr: *const BixelMap,
     layer: u32,
-    x: u32,
-    y: u32,
+    x: i32,
+    y: i32,
     w: u32,
     h: u32,
     out: *mut u32,
@@ -2131,7 +2639,7 @@ pub unsafe extern "C" fn bixel_map_read_region(
     let pattern = unsafe { map_ref(ptr) }
         .lock()
         .unwrap()
-        .read_region(layer as usize, x as usize, y as usize, w as usize, h as usize);
+        .read_region(layer as usize, x as isize, y as isize, w as usize, h as usize);
     let count = pattern.w * pattern.h;
     if count > 0 {
         unsafe { std::ptr::copy_nonoverlapping(pattern.tiles.as_ptr(), out, count) };
@@ -2141,12 +2649,12 @@ pub unsafe extern "C" fn bixel_map_read_region(
 
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_replace(
-    ptr: *mut BixelMap, layer: u32, x: u32, y: u32, w: u32, h: u32, from: u32, to: u32,
+    ptr: *mut BixelMap, layer: u32, x: i32, y: i32, w: u32, h: u32, from: u32, to: u32,
 ) -> u32 {
     unsafe { map(ptr) }
         .lock()
         .unwrap()
-        .replace(layer as usize, x as usize, y as usize, w as usize, h as usize, from, to) as u32
+        .replace(layer as usize, x as isize, y as isize, w as usize, h as usize, from, to) as u32
 }
 
 /// Magic-wand same-tile mask into a caller-owned `width*height` byte buffer.
@@ -2357,7 +2865,34 @@ pub unsafe extern "C" fn bixel_map_composite(ptr: *const BixelMap, out: *mut u8,
     true
 }
 
-/// A tile layer's GIDs as a CSV string (free with `bixel_string_free`).
+/// Composite only the world-pixel region `(x, y, w, h)` into a caller-owned
+/// RGBA buffer of `w * h * 4` bytes. Infinite maps use this to render just the
+/// visible viewport. Coordinates may be negative.
+#[no_mangle]
+pub unsafe extern "C" fn bixel_map_composite_region(
+    ptr: *const BixelMap,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> bool {
+    if out.is_null() || w == 0 || h == 0 {
+        return false;
+    }
+    let expected = w as usize * h as usize * 4;
+    if out_len < expected {
+        return false;
+    }
+    let map = unsafe { map_ref(ptr) }.lock().unwrap();
+    let buf = map.composite_region(x as i64, y as i64, w as usize, h as usize);
+    if buf.len() != expected {
+        return false;
+    }
+    unsafe { std::ptr::copy_nonoverlapping(buf.as_ptr(), out, buf.len()) };
+    true
+}
 #[no_mangle]
 pub unsafe extern "C" fn bixel_map_layer_csv(ptr: *const BixelMap, layer: u32) -> *mut c_char {
     let csv = unsafe { map_ref(ptr) }.lock().unwrap().layer_to_csv(layer as usize);

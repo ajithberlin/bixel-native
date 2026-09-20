@@ -8,7 +8,9 @@
 // see the same state.
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 enum AppSettingsRoute: Equatable {
     case swiftUI
@@ -35,8 +37,21 @@ enum AppSettings {
         guard case .legacySelector(let name) = route(for: ProcessInfo.processInfo.operatingSystemVersion) else {
             return false
         }
+        #if os(macOS)
         return NSApp.sendAction(Selector(name), to: nil, from: nil)
+        #else
+        return false
+        #endif
     }
+}
+
+/// Public pages linked from the app and from App Store Connect metadata.
+/// Keeping these URLs in one place prevents the About pane and the listing
+/// from drifting apart when the support site changes.
+enum AppLinks {
+    static let support = URL(string: "https://ajithberlin.github.io/bixel-native/support.html")!
+    static let privacy = URL(string: "https://ajithberlin.github.io/bixel-native/privacy.html")!
+    static let terms = URL(string: "https://ajithberlin.github.io/bixel-native/terms.html")!
 }
 
 /// Uses SwiftUI's supported Settings presentation on macOS 14+, with the
@@ -50,11 +65,15 @@ struct AppSettingsButton<Label: View>: View {
 
     @ViewBuilder
     var body: some View {
+        #if os(macOS)
         if #available(macOS 14.0, *) {
             SettingsLink { label }
         } else {
             Button(action: { _ = AppSettings.openLegacy() }) { label }
         }
+        #else
+        Button(action: { AppSettings.requestOpen() }) { label }
+        #endif
     }
 }
 
@@ -64,6 +83,7 @@ struct AppSettingsOpener: View {
     var openOnAppear = false
 
     var body: some View {
+        #if os(macOS)
         Group {
             if #available(macOS 14.0, *) {
                 ModernAppSettingsOpener(openOnAppear: openOnAppear)
@@ -72,9 +92,17 @@ struct AppSettingsOpener: View {
             }
         }
         .frame(width: 0, height: 0)
+        #else
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                if openOnAppear { AppSettings.requestOpen() }
+            }
+        #endif
     }
 }
 
+#if os(macOS)
 @available(macOS 14.0, *)
 private struct ModernAppSettingsOpener: View {
     @Environment(\.openSettings) private var openSettings
@@ -104,9 +132,11 @@ private struct LegacyAppSettingsOpener: View {
             }
     }
 }
+#endif
 
 enum SettingsPane: String, CaseIterable, Identifiable {
     case provider
+    case remote
     case skills
     case mcp
     case general
@@ -117,6 +147,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .provider: return "Provider"
+        case .remote: return "Devices"
         case .skills: return "Skills"
         case .mcp: return "MCP Servers"
         case .general: return "General"
@@ -127,6 +158,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .provider: return "sparkles"
+        case .remote: return "ipad.and.iphone"
         case .skills: return "square.stack.3d.up"
         case .mcp: return "server.rack"
         case .general: return "gearshape"
@@ -137,30 +169,56 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .provider: return StudioTheme.accent
+        case .remote: return StudioTheme.procreateBlue
         case .skills: return StudioTheme.bixelGreen
         case .mcp: return .orange
         case .general: return .gray
         case .about: return .teal
         }
     }
+
+    /// Panes that are functional on the current platform. Skills (Python/shell)
+    /// and MCP servers (stdio subprocesses) require a desktop agent, so they are
+    /// macOS-only; iPad keeps Provider, Devices, General, and About.
+    static var visible: [SettingsPane] {
+        #if os(macOS)
+        return allCases
+        #else
+        return [.provider, .remote, .general, .about]
+        #endif
+    }
 }
 
 struct SettingsView: View {
     @State private var pane: SettingsPane? = .provider
+    #if os(iOS)
+    @Environment(\.dismiss) private var dismiss
+    #endif
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsPane.allCases, selection: $pane) { item in
+            List(SettingsPane.visible, selection: $pane) { item in
                 Label(item.title, systemImage: item.icon)
                     .font(.system(size: 12, weight: .medium))
                     .tag(item)
             }
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 250)
+            .navigationTitle("Settings")
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            #endif
         } detail: {
             Group {
                 switch pane ?? .provider {
                 case .provider: ProviderSettingsPane().padding(20)
+                case .remote: RemoteSettingsPane()
                 case .skills: SkillsSettingsPane()
                 case .mcp: MCPSettingsPane()
                 case .general: GeneralSettingsPane()
@@ -170,8 +228,19 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(StudioTheme.background)
             .navigationTitle((pane ?? .provider).title)
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+            }
+            #endif
         }
+        #if os(macOS)
         .frame(minWidth: 780, minHeight: 560)
+        #endif
         .foregroundColor(StudioTheme.textPrimary)
         .background(StudioTheme.background)
         .preferredColorScheme(.dark)
@@ -272,11 +341,19 @@ struct SettingsBadge: View {
 
 struct SkillsSettingsPane: View {
     @State private var skills: [AIService.InstalledSkillInfo] = []
+    @State private var search = ""
     @State private var loading = true
     @State private var busy = false
     @State private var error: String?
 
     private var enabledCount: Int { skills.filter(\.enabled).count }
+    private var filteredSkills: [AIService.InstalledSkillInfo] {
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return skills }
+        return skills.filter {
+            $0.name.lowercased().contains(q) || $0.description.lowercased().contains(q)
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -290,6 +367,27 @@ struct SkillsSettingsPane: View {
                     banner(error, color: .orange, icon: "exclamationmark.triangle")
                 }
 
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    TextField("Search skills…", text: $search)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundColor(StudioTheme.textPrimary)
+                    if !search.isEmpty {
+                        Button { search = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(StudioTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .studioSurface()
+
                 SettingsSection(title: "Installed Skills", systemImage: "square.stack.3d.up",
                                 footer: "\(enabledCount) of \(skills.count) enabled. Bundled skills are re-synced on launch.") {
                     if loading {
@@ -300,9 +398,14 @@ struct SkillsSettingsPane: View {
                             .font(.system(size: 11))
                             .foregroundColor(StudioTheme.textDisabled)
                             .padding(.vertical, 10)
+                    } else if filteredSkills.isEmpty {
+                        Text("No skills match your search.")
+                            .font(.system(size: 11))
+                            .foregroundColor(StudioTheme.textDisabled)
+                            .padding(.vertical, 10)
                     } else {
-                        ForEach(Array(skills.enumerated()), id: \.element.id) { index, skill in
-                            skillRow(skill, showsDivider: index < skills.count - 1)
+                        ForEach(Array(filteredSkills.enumerated()), id: \.element.id) { index, skill in
+                            skillRow(skill, showsDivider: index < filteredSkills.count - 1)
                         }
                     }
                 }
@@ -364,7 +467,12 @@ struct SkillsSettingsPane: View {
             let result = AIService.setSkillEnabled(name: skill.name, enabled: enabled)
             DispatchQueue.main.async {
                 busy = false
-                if let result { error = result } else { load() }
+                if let result {
+                    error = result
+                } else {
+                    load()
+                    NotificationCenter.default.post(name: .assistantRefreshSkills, object: nil)
+                }
             }
         }
     }
@@ -381,8 +489,10 @@ struct SkillsSettingsPane: View {
     }
 
     private func revealSkillsFolder() {
+        #if os(macOS)
         guard let path = AIService.appPaths()?.skills_dir, !path.isEmpty else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        #endif
     }
 }
 
@@ -716,13 +826,15 @@ struct GeneralSettingsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                paneHeader("General", subtitle: "Studio-wide defaults, saved for this Mac and applied the next time the app launches.")
+                paneHeader("General", subtitle: "Studio-wide defaults, saved for this device and applied the next time the app launches.")
 
+                #if os(macOS)
                 SettingsSection(title: "Assistant", systemImage: "sparkles") {
                     SettingsRow(title: "Open assistant on launch", subtitle: "Show the AI panel when a project opens.", systemImage: "sidebar.right", showsDivider: false) {
                         Toggle("", isOn: $openAssistantOnLaunch).labelsHidden().toggleStyle(.switch).controlSize(.mini)
                     }
                 }
+                #endif
 
                 SettingsSection(title: "Editor Defaults", systemImage: "paintbrush") {
                     SettingsRow(title: "Snapping", subtitle: "Snap transforms and selections to whole pixels.", systemImage: "dot.squareshape.split.2x2") {
@@ -738,6 +850,7 @@ struct GeneralSettingsPane: View {
                     }
                 }
 
+                #if os(macOS)
                 SettingsSection(title: "AI Editor Control", systemImage: "lock.shield") {
                     SettingsRow(title: "Destructive changes", subtitle: "How the assistant approves removing or resizing content.", systemImage: "exclamationmark.shield", showsDivider: false) {
                         Picker("", selection: $editorApprovalMode) {
@@ -749,6 +862,7 @@ struct GeneralSettingsPane: View {
                         .controlSize(.small)
                     }
                 }
+                #endif
             }
             .padding(20)
         }
@@ -807,6 +921,16 @@ struct AboutSettingsPane: View {
                     aboutRow("Secrets", paths?.secrets ?? "goose secret store", showsDivider: false)
                 }
 
+                SettingsSection(title: "Legal & Support", systemImage: "questionmark.circle",
+                                footer: "Bixel Studio stores projects locally. Optional AI requests go directly to the provider you choose.") {
+                    legalRow("Support", "Troubleshooting, bug reports, and contact information", AppLinks.support,
+                             systemImage: "lifepreserver", color: StudioTheme.accent)
+                    legalRow("Privacy Policy", "How local projects, AI requests, and purchases are handled", AppLinks.privacy,
+                             systemImage: "hand.raised", color: .teal)
+                    legalRow("Terms of Service", "Software licence and use of AI features", AppLinks.terms,
+                             systemImage: "doc.text", color: .orange, showsDivider: false)
+                }
+
                 HStack {
                     Spacer()
                     Text("© \(Calendar.current.component(.year, from: Date())) Bixel Studio")
@@ -828,29 +952,54 @@ struct AboutSettingsPane: View {
 
     private var appIcon: some View {
         Group {
+            #if os(macOS)
             if let icon = NSApplication.shared.applicationIconImage {
                 Image(nsImage: icon)
                     .resizable()
                     .frame(width: 64, height: 64)
             } else {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(StudioTheme.accentSoft)
-                    .frame(width: 64, height: 64)
-                    .overlay(Image(systemName: "paintbrush.pointed.fill").font(.system(size: 26)).foregroundColor(StudioTheme.accent))
+                fallbackIcon
             }
+            #else
+            fallbackIcon
+            #endif
         }
+    }
+
+    private var fallbackIcon: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(StudioTheme.accentSoft)
+            .frame(width: 64, height: 64)
+            .overlay(Image(systemName: "paintbrush.pointed.fill").font(.system(size: 26)).foregroundColor(StudioTheme.accent))
     }
 
     private func aboutRow(_ title: String, _ value: String, showsDivider: Bool = true) -> some View {
         SettingsRow(title: title, subtitle: value, showsDivider: showsDivider) { EmptyView() }
     }
 
+    private func legalRow(_ title: String, _ subtitle: String, _ url: URL,
+                          systemImage: String, color: Color,
+                          showsDivider: Bool = true) -> some View {
+        SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage,
+                    tint: color, showsDivider: showsDivider) {
+            Link(destination: url) {
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Open link")
+        }
+    }
+
     private func pathRow(_ title: String, _ value: String?) -> some View {
         SettingsRow(title: title, subtitle: value?.isEmpty == false ? value : "—", systemImage: "folder") {
             Button {
+                #if os(macOS)
                 if let value, !value.isEmpty {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: value)])
                 }
+                #endif
             } label: {
                 Image(systemName: "arrow.up.forward.app").font(.system(size: 11))
             }

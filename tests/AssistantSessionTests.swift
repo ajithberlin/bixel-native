@@ -40,6 +40,27 @@ struct AssistantSessionTests {
         withExtendedLifetime(observation) {}
         let session = AssistantSession()
         precondition(session.commands.count > 4, "Use the complete engine skill registry")
+
+        // Skill search matching & ranking tests
+        let taskMatches = session.commands.compactMap { cmd -> (AssistantCommand, Int)? in
+            guard let score = cmd.matchScore(for: "task") else { return nil }
+            return (cmd, score)
+        }.sorted { $0.1 > $1.1 }
+        precondition(!taskMatches.isEmpty, "Searching for 'task' must find matching skills")
+        precondition(taskMatches.first?.0.id == "take-control", "The top match for 'task' must be take-control")
+
+        let paletteMatches = session.commands.compactMap { cmd -> (AssistantCommand, Int)? in
+            guard let score = cmd.matchScore(for: "palette") else { return nil }
+            return (cmd, score)
+        }.sorted { $0.1 > $1.1 }
+        precondition(paletteMatches.first?.0.id == "pixel-reduce-colors", "The top match for 'palette' must be pixel-reduce-colors")
+
+        let cropMatches = session.commands.compactMap { cmd -> (AssistantCommand, Int)? in
+            guard let score = cmd.matchScore(for: "crop") else { return nil }
+            return (cmd, score)
+        }.sorted { $0.1 > $1.1 }
+        precondition(cropMatches.first?.0.id == "pixel-file-compressor", "The top match for 'crop' must be pixel-file-compressor")
+
         let localResult = try! JSONDecoder().decode(SkillRunResult.self, from: Data(#"{"source_image":"source","image":"prepared","frames":[],"text":"ok"}"#.utf8))
         precondition(localResult.source_image == "source", "Local image results must retain the unprepared source artifact")
         let first = session.commands[0], second = session.commands[1]

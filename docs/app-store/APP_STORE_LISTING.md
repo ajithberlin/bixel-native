@@ -28,7 +28,7 @@ is provided; replace anything marked **(your choice)** with your own.
 | Field | Suggested value |
 |---|---|
 | Price | **Free** (monetize via the in-app lifetime unlock) |
-| Availability | All countries/regions, or select as needed |
+| Availability | Specific countries/regions; exclude **China mainland** unless the China-compliant build and metadata are ready |
 | Distribution | Public |
 
 ---
@@ -45,11 +45,12 @@ Answer **Data Collection** based on what the app actually does:
 | Usage / Diagnostics | No | No analytics or crash SDK is bundled. |
 | User Content | No | Projects, images and prompts stay on device; prompts are sent to the configured AI provider only when the user invokes an AI action. |
 
-Privacy Policy URL: `https://bixel.studio/privacy` **(replace with your real URL)**.
+Privacy Policy URL: `https://ajithberlin.github.io/bixel-native/privacy.html`.
 Tracking: **No** — the app does not track users across apps/websites.
-If you later ship the Google Mobile Ads SDK (the `GADApplicationIdentifier` key is
-present in `Info.plist` but no ad SDK is linked), you must re-declare advertising
-identifiers and add ATT.
+The app does not bundle a Google Mobile Ads SDK or use behavioural advertising.
+It fetches clearly labelled house-ad creatives from a published HTTPS feed; no
+advertising identifier or cross-app tracking is used. Selecting a sponsor link
+opens that sponsor's website only when the user chooses to open it.
 
 ---
 
@@ -120,9 +121,9 @@ Draw, animate and build tilemaps in one native Mac studio. Includes an AI assist
 
 | Field | Value |
 |---|---|
-| Support URL | `https://bixel.studio/support` **(replace)** |
-| Marketing URL | `https://bixel.studio` **(replace)** |
-| Privacy Policy URL | `https://bixel.studio/privacy` **(replace)** |
+| Support URL | `https://ajithberlin.github.io/bixel-native/support.html` |
+| Marketing URL | `https://ajithberlin.github.io/bixel-native/` |
+| Privacy Policy URL | `https://ajithberlin.github.io/bixel-native/privacy.html` |
 
 ### Build
 
@@ -135,7 +136,7 @@ First public release of Bixel Studio for Mac.
 ### Copyright
 
 ```
-2026 <Your Name / Company> **(your choice)**
+2026 Ajith Berlin A
 ```
 
 ---
@@ -184,6 +185,16 @@ the rest of the app is unaffected.
 
 All projects are stored locally under the app container. The app does not collect
 analytics.
+
+The Devices pane provides an optional Mac host for the paired Bixel iPad app.
+To test it, open Settings → Devices, enable “Remote Access,” and choose “Show
+pairing code.” When enabled, Bixel creates a Network.framework `NWListener` and
+advertises the Bonjour service `_bixel-remote._tcp` so a paired iPad can initiate
+encrypted local-network connections for project sync and the Mac-hosted AI
+assistant. The listener is off by default and is only started after the user
+enables Remote Access. The ChatGPT (Codex) sign-in flow also uses a localhost
+callback on port 1455; OpenRouter, Codex, and the ad feed use outgoing HTTPS
+connections.
 ```
 
 ---
@@ -225,6 +236,23 @@ app version under **In-App Purchases**.
 ---
 
 ## 10. Submission checklist
+
+### China mainland storefront
+
+The app includes an optional Codex provider integration and the associated
+metadata must not be used for a China mainland submission without confirming
+the required local compliance. For the current build, use the storefront
+exclusion path:
+
+1. In App Store Connect, open **Pricing and Availability** → **App
+   Availability** → **Manage Availability**.
+2. Choose **Specific Countries or Regions** and deselect **China mainland**.
+3. Confirm the change before submitting the version for review.
+
+If China mainland distribution is required later, prepare a separate
+China-compliant release plan with professional legal advice, disable the
+restricted provider in that build, and use localized metadata and screenshots
+that contain no restricted provider references.
 
 - [ ] App record created with bundle ID `com.bixel.studio`.
 - [ ] App Sandbox + In-App Purchase capabilities enabled on the App ID.

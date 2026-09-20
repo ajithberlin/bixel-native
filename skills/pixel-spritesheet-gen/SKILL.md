@@ -12,7 +12,8 @@ description: >
   into an atlas". AI sheets are never grid-clean: prompts MINIMIZE extraction
   pain, a script scores each attempt 0-100 (count, identity, motion) with
   corrective reprompt hints so retries keep the best candidate, and two pack
-  scripts: chroma_key_pack.py for grid sheets (keys out chroma green,
+  scripts: chroma_key_pack.py for grid sheets (preserves real alpha or keys
+  out chroma fallback,
   normalizes frames into identical cells with aligned pivots, emits one
   atlas PNG + one JSON) and freeform_pack.py for IRREGULAR scattered-layout
   sheets (poses at arbitrary positions, mixed sizes, multi-part sprites
@@ -58,12 +59,15 @@ Every sheet this skill produces — and every atlas it packs — obeys:
    SAME action name — `chroma_key_pack.py` concatenates same-named rows,
    in order, into one action.
 
-**Background is ALWAYS chroma green for sheets YOU generate.** Every prompt
-requests a flat solid chroma-green background (`#00FF00`); never dark,
-never white, never a gradient. Removal is done in code — never by hand.
-For sheets the user ALREADY HAS, any near-flat background is acceptable:
-`freeform_pack.py` samples it from the border automatically (white,
-green, etc.) — do not demand a regeneration just to change backdrop color.
+**Request true alpha for sheets YOU generate.** Every generation prompt must
+request a PNG with a fully transparent background (alpha=0 outside each
+frame), never a painted checkerboard, shadow, gradient, or vignette. If the
+provider cannot return alpha, fall back to one flat exact chroma color — green
+`#00FF00` (preferred) or magenta `#FF00FF` — and run the Python key cleanup
+before packing. Sheets the user ALREADY HAS may use any near-flat background;
+`freeform_pack.py` can sample it from the border.
+Do not demand a regeneration just to change the backdrop color on a sheet the
+user already has.
 
 ## Bundled resources
 
@@ -76,9 +80,9 @@ green, etc.) — do not demand a regeneration just to change backdrop color.
   histogram + dHash, motion presence) and emit a `retry hint:` line to paste
   verbatim into the next prompt. Give it several attempts and it names the
   best candidate. Run BEFORE packing; prefer it over eyeballing. Tested.
-- `scripts/chroma_key_pack.py` — GRID sheets only: remove the chroma-green
-  background (corner-sampled key + tolerance + edge despill that protects
-  green clothing), detect each row's frames, normalize them into uniform
+- `scripts/chroma_key_pack.py` — GRID sheets only: preserve real alpha, or
+  remove the chroma-green/magenta fallback (corner-sampled key + tolerance +
+  edge despill that protects green clothing), detect each row's frames, normalize them into uniform
   cells with a bottom-center pivot, and pack ALL frames from one or more
   sheets into ONE transparent PNG atlas + ONE JSON (cell size, padding,
   pivot, per-action frame rects). Tested.
@@ -133,8 +137,10 @@ on them:
 
 ### 2. Generate with an extraction-friendly prompt
 Use `references/prompt-playbook.md`. Non-negotiable clauses:
-- "flat solid chroma green background (#00FF00)" (one color, no gradient,
-  no shadow) — ALWAYS chroma green
+- "fully transparent background, real alpha=0 outside every frame, no
+  checkerboard, no shadow" — preferred
+- If alpha is unavailable: "flat solid chroma green background (#00FF00),
+  one color, no gradient, no shadow" — then key it in Python before packing.
 - "evenly spaced in a strict grid, generous gaps between frames"
 - "no text, no labels, no watermark, no border, no frame lines"
 - "consistent character size across all frames, feet at bottom of each cell"
@@ -225,8 +231,9 @@ python3 scripts/freeform_pack.py poses.png --actions "fly,fly,land" \
 python3 scripts/freeform_pack.py fly_a.png fly_b.png \
     --actions "auto;auto" --out-image atlas.png --out-json atlas.json
 ```
-- **Background is auto-detected from the border** — white, chroma green,
-  or any near-flat color works; `--key R,G,B` overrides, `--tol` widens it.
+- **Background uses alpha when present; otherwise it is auto-detected from the
+  border** — white, chroma green, or any near-flat color works; `--key R,G,B`
+  overrides, `--tol` widens it.
 - **Grid/cell divider lines are stripped automatically** (`--strip-lines`,
   auto on). Without this they key out as foreground and fuse the whole
   sheet into one cluster. Only long thin axis-aligned runs are removed —

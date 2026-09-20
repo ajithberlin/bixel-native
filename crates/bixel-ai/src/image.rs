@@ -16,19 +16,32 @@ pub struct RgbaImage {
 
 impl RgbaImage {
     pub fn new(width: usize, height: usize) -> Self {
-        RgbaImage { width, height, data: vec![0; width * height * 4] }
+        RgbaImage {
+            width,
+            height,
+            data: vec![0; width * height * 4],
+        }
     }
 
     pub fn from_rgba(width: usize, height: usize, data: Vec<u8>) -> Self {
         let mut data = data;
         data.resize(width * height * 4, 0);
-        RgbaImage { width, height, data }
+        RgbaImage {
+            width,
+            height,
+            data,
+        }
     }
 
     #[inline]
     pub fn pixel(&self, x: usize, y: usize) -> [u8; 4] {
         let i = (y * self.width + x) * 4;
-        [self.data[i], self.data[i + 1], self.data[i + 2], self.data[i + 3]]
+        [
+            self.data[i],
+            self.data[i + 1],
+            self.data[i + 2],
+            self.data[i + 3],
+        ]
     }
 
     #[inline]
@@ -61,7 +74,11 @@ pub fn decode_any(bytes: &[u8]) -> Result<RgbaImage, AiError> {
     let img = image::load_from_memory(bytes).map_err(|e| AiError::Image(e.to_string()))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
-    Ok(RgbaImage::from_rgba(w as usize, h as usize, rgba.into_raw()))
+    Ok(RgbaImage::from_rgba(
+        w as usize,
+        h as usize,
+        rgba.into_raw(),
+    ))
 }
 
 /// Decode a PNG byte buffer into an RGBA image.
@@ -72,7 +89,11 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, AiError> {
     let info = reader.next_frame(&mut buf)?;
     let data = &buf[..info.buffer_size()];
     match info.color_type {
-        png::ColorType::Rgba => Ok(RgbaImage::from_rgba(info.width as usize, info.height as usize, data.to_vec())),
+        png::ColorType::Rgba => Ok(RgbaImage::from_rgba(
+            info.width as usize,
+            info.height as usize,
+            data.to_vec(),
+        )),
         png::ColorType::Rgb => {
             // Expand RGB -> RGBA.
             let w = info.width as usize;
@@ -115,7 +136,9 @@ pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, AiError> {
             }
             Ok(RgbaImage::from_rgba(w, h, rgba))
         }
-        other => Err(AiError::Image(format!("unsupported PNG color type: {other:?}"))),
+        other => Err(AiError::Image(format!(
+            "unsupported PNG color type: {other:?}"
+        ))),
     }
 }
 
@@ -340,6 +363,24 @@ pub fn remove_background(img: &RgbaImage, tolerance: f32) -> RgbaImage {
     out
 }
 
+/// Remove every pixel within `tolerance` of a known chroma-key RGB color.
+/// Unlike [`remove_background`], this intentionally keys interior pixels too,
+/// which is needed for a generated green-screen or magenta-screen fallback.
+pub fn remove_background_key(img: &RgbaImage, key: [u8; 3], tolerance: f32) -> RgbaImage {
+    let tolerance = tolerance.max(0.0);
+    let limit = tolerance * tolerance;
+    let mut out = img.clone();
+    for pixel in out.data.chunks_exact_mut(4) {
+        let dr = pixel[0] as f32 - key[0] as f32;
+        let dg = pixel[1] as f32 - key[1] as f32;
+        let db = pixel[2] as f32 - key[2] as f32;
+        if dr * dr + dg * dg + db * db <= limit {
+            pixel.copy_from_slice(&[0, 0, 0, 0]);
+        }
+    }
+    out
+}
+
 fn push_border(out: &mut Vec<[u8; 3]>, img: &RgbaImage, x: usize, y: usize) {
     let p = img.pixel(x, y);
     if p[3] != 0 {
@@ -376,8 +417,16 @@ pub fn slice_grid(img: &RgbaImage, cols: usize, rows: usize) -> Vec<RgbaImage> {
 /// mean "derive from the image size".
 pub fn slice_tiles(img: &RgbaImage, tile: usize, cols: usize, rows: usize) -> Vec<RgbaImage> {
     let tile = tile.max(1);
-    let cols = if cols > 0 { cols } else { (img.width / tile).max(1) };
-    let rows = if rows > 0 { rows } else { (img.height / tile).max(1) };
+    let cols = if cols > 0 {
+        cols
+    } else {
+        (img.width / tile).max(1)
+    };
+    let rows = if rows > 0 {
+        rows
+    } else {
+        (img.height / tile).max(1)
+    };
     slice_grid(img, cols, rows)
 }
 
@@ -572,7 +621,12 @@ pub fn find_components(img: &RgbaImage, min_area: usize, dilate: usize) -> Vec<B
             let y0 = min_y.saturating_sub(dilate);
             let x1 = (max_x + dilate + 1).min(w);
             let y1 = (max_y + dilate + 1).min(h);
-            out.push(Bounds { x: x0, y: y0, width: x1 - x0, height: y1 - y0 });
+            out.push(Bounds {
+                x: x0,
+                y: y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            });
         }
     }
     out.sort_by(|a, b| (a.y, a.x).cmp(&(b.y, b.x)));
@@ -618,8 +672,7 @@ pub fn chroma_to_shadow(img: &RgbaImage, min_alpha: u8, max_alpha: u8) -> RgbaIm
             let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
             if g > r + 24 && g > b + 24 {
                 let intensity = p[1] as f32 / 255.0;
-                let alpha = (min_alpha as f32
-                    + (max_alpha as f32 - min_alpha as f32) * intensity)
+                let alpha = (min_alpha as f32 + (max_alpha as f32 - min_alpha as f32) * intensity)
                     .round()
                     .clamp(0.0, 255.0) as u8;
                 out.set_pixel(x, y, [0, 0, 0, alpha]);
@@ -667,8 +720,8 @@ pub fn split_bands(img: &RgbaImage, bg: [u8; 3], tol: u32, bridge: usize) -> Vec
             }
             // skip a short background bridge, otherwise end the band
             if (end + 1..h).take(bridge).any(|i| content_rows[i]) && end + 1 < h {
-                let next_content = (end + 1..=end + bridge.min(h - end - 1))
-                    .find(|&i| content_rows[i]);
+                let next_content =
+                    (end + 1..=end + bridge.min(h - end - 1)).find(|&i| content_rows[i]);
                 if let Some(i) = next_content {
                     end = i + 1;
                     continue;
@@ -676,7 +729,12 @@ pub fn split_bands(img: &RgbaImage, bg: [u8; 3], tol: u32, bridge: usize) -> Vec
             }
             break;
         }
-        bands.push(Bounds { x: 0, y: start, width: w, height: end - start });
+        bands.push(Bounds {
+            x: 0,
+            y: start,
+            width: w,
+            height: end - start,
+        });
         y = end;
     }
     bands

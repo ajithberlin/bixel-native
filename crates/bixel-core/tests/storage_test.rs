@@ -27,15 +27,18 @@ fn project_storage_is_durable_and_confined() {
 fn document_roundtrip_preserves_editable_layers_and_frames() {
     let mut doc = AsepriteDoc::new(4, 3, &[]);
     doc.add_frame(250);
-    doc.add_layer(Some("Shadow"));
-    doc.layers[1].visible = false;
-    doc.set_pixel(1, 1, 2, 1, bixel_core::Rgba {r: 10, g: 20, b: 30, a: 255});
+    let shadow = doc.add_layer(Some("Shadow"));
+    doc.layers[shadow].visible = false;
+    doc.set_pixel(shadow, 0, 2, 1, bixel_core::Rgba {r: 10, g: 20, b: 30, a: 255});
     let saved = doc.to_json().unwrap();
     let mut restored = AsepriteDoc::from_json(&saved).unwrap();
-    assert_eq!(restored.layers[1].name, "Shadow");
-    assert!(!restored.layers[1].visible);
+    assert_eq!(restored.layers[shadow].name, "Shadow");
+    assert!(!restored.layers[shadow].visible);
     assert_eq!(restored.frames[1].duration_ms, 250);
-    assert_eq!(restored.get_pixel(1, 1, 2, 1).g, 20);
+    assert_eq!(restored.frame_layers(0).len(), 2);
+    assert_eq!(restored.frame_layers(1).len(), 1);
+    assert_eq!(restored.get_pixel(shadow, 0, 2, 1).g, 20);
+    assert_eq!(restored.composite_frame(0), doc.composite_frame(0));
     assert_eq!(restored.composite_frame(1), doc.composite_frame(1));
     let invalid = saved.replace("\"width\":4", "\"width\":0");
     assert!(AsepriteDoc::from_json(&invalid).is_err());

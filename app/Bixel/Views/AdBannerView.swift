@@ -1,12 +1,12 @@
 // AdBannerView.swift
 //
 // Responsive commercial ad banner component for Bixel Studio.
-// Displays rotating commercial advertisements (Google Ads, Unity Store, itch.io, Wacom, Lospec)
-// for free-tier users with interactive carousel controls, rich typography, sponsor icons, and paywall trigger.
+// Displays rotating commercial advertisements from the remote house-ad feed
+// for free-tier users with interactive carousel controls, rich typography,
+// sponsor artwork, and a paywall trigger.
 // Automatically hidden when the user acquires the 'ad_free' lifetime entitlement.
 
 import SwiftUI
-import AppKit
 
 struct AdBannerView: View {
     @ObservedObject private var subscriptionManager = SubscriptionManager.shared
@@ -24,8 +24,8 @@ struct AdBannerView: View {
     }
 
     var body: some View {
-        if adManager.shouldShowAds {
-            bannerContainer
+        if !subscriptionManager.isAdFree && adManager.shouldShowAds, let ad = adManager.currentAd {
+            bannerContainer(for: ad)
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .bottom)),
                     removal: .opacity.combined(with: .scale(scale: 0.96))
@@ -34,10 +34,8 @@ struct AdBannerView: View {
         }
     }
 
-    private var bannerContainer: some View {
-        let ad = adManager.currentAd
-
-        return HStack(spacing: 14) {
+    private func bannerContainer(for ad: AdItem) -> some View {
+        HStack(spacing: 14) {
             // MARK: - Sponsor Icon / Brand Avatar Container
             Button {
                 adManager.clickCurrentAd()
@@ -59,14 +57,50 @@ struct AdBannerView: View {
                                 .strokeBorder(ad.accentColor.opacity(isHovered ? 0.55 : 0.35), lineWidth: 1)
                         )
 
-                    Image(systemName: ad.iconSystemName)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(ad.accentColor)
+                    if let iconURL = ad.iconURL {
+                        AsyncImage(url: iconURL) { phase in
+                            if case .success(let image) = phase {
+                                image
+                                    .resizable()
+                                    .scaledToFit()
+                            } else {
+                                Image(systemName: ad.iconSystemName)
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(ad.accentColor)
+                            }
+                        }
+                        .frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    } else {
+                        Image(systemName: ad.iconSystemName)
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(ad.accentColor)
+                    }
                 }
                 .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
             .help("Visit \(ad.advertiser)")
+
+            if let imageURL = ad.imageURL {
+                Button {
+                    adManager.clickCurrentAd()
+                } label: {
+                    AsyncImage(url: imageURL) { phase in
+                        if case .success(let image) = phase {
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: 76, height: 42)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Preview ad from \(ad.advertiser)")
+            }
 
             // MARK: - Ad Content (Headline, Badges & Description)
             Button {
@@ -86,7 +120,7 @@ struct AdBannerView: View {
                                     .fill(Color.white.opacity(0.12))
                             )
 
-                        // Network badge (e.g. "Google Ad", "Sponsored")
+                        // Sponsor badge
                         Text(ad.badgeText)
                             .font(.system(size: 8.5, weight: .bold, design: .rounded))
                             .foregroundColor(ad.accentColor)
@@ -145,22 +179,11 @@ struct AdBannerView: View {
                 .buttonStyle(.plain)
                 .help("Previous sponsor")
 
-                // Dot pagination indicators
-                HStack(spacing: 4) {
-                    ForEach(0..<AdManager.sampleAds.count, id: \.self) { idx in
-                        let isCurrent = idx == adManager.currentAdIndex
-                        Button {
-                            adManager.selectAd(at: idx)
-                        } label: {
-                            Capsule()
-                                .fill(isCurrent ? ad.accentColor : Color.white.opacity(0.22))
-                                .frame(width: isCurrent ? 12 : 4, height: 4)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Show ad \(idx + 1)")
-                    }
-                }
-                .padding(.horizontal, 2)
+                Text("\(adManager.currentAdIndex + 1) / \(adManager.ads.count)")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Color.white.opacity(0.5))
+                    .frame(minWidth: 34)
+                    .help("Ad \(adManager.currentAdIndex + 1) of \(adManager.ads.count)")
 
                 // Next button
                 Button {
@@ -208,6 +231,18 @@ struct AdBannerView: View {
             .buttonStyle(.plain)
             .onHover { isCtaHovered = $0 }
             .help("Open \(ad.advertiser) website")
+
+            // Apple requires an obvious way to report inappropriate ads.
+            Button {
+                adManager.reportCurrentAd()
+            } label: {
+                Image(systemName: "exclamationmark.bubble")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(StudioTheme.textSecondary)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .help("Report this ad")
 
             // MARK: - "Remove Ads" Paywall Trigger
             Button {

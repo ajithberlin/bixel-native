@@ -31,8 +31,10 @@ Usage:
         --actions "walk_down,walk_left;walk_down,walk_left" \
         --out-image atlas.png --out-json atlas.json
 
-Key color: sampled from the sheet corners by default (robust when the
-generator's green is not exactly #00FF00). Override with --key R,G,B.
+For an input with real alpha, alpha is preserved and used for detection. For
+an opaque fallback, the key color is sampled from the sheet corners by default
+(robust when the generator's green is not exactly #00FF00). Override with
+--key R,G,B.
 
 JSON shape:
 {
@@ -147,10 +149,19 @@ def main() -> int:
     # 1) keyout + frame detection per sheet
     all_rows, all_names, keyed = [], [], []
     for path, names in zip(args.sheets, sheet_actions):
-        a = np.asarray(Image.open(path).convert('RGB'))
-        key = (np.array([int(x) for x in args.key.split(',')])
-               if args.key else sample_key(a))
-        rgba = keyout(a, key, args.tol)
+        source = np.asarray(Image.open(path).convert('RGBA'))
+        a = source[..., :3]
+        has_alpha = np.any(source[..., 3] < 255)
+        if has_alpha and not args.key:
+            # Preserve provider-produced alpha. Re-keying an alpha image from
+            # its RGB corners would turn transparent black padding into a
+            # black chroma key and could erase real black artwork.
+            key = None
+            rgba = source.copy()
+        else:
+            key = (np.array([int(x) for x in args.key.split(',')])
+                   if args.key else sample_key(a))
+            rgba = keyout(a, key, args.tol)
         rows = detect_rows(rgba[..., 3] > 0)
         if len(rows) != len(names):
             print(f'ERROR: {path}: detected {len(rows)} row(s) but '
@@ -163,7 +174,8 @@ def main() -> int:
         keyed.append(rgba)
         all_rows.extend(rows)
         all_names.extend(names)
-        print(f'{path}: key={key.astype(int).tolist()} tol={args.tol} '
+        background = 'alpha' if key is None else key.astype(int).tolist()
+        print(f'{path}: key={background} tol={args.tol} '
               f'rows={len(rows)} frames/row={counts}')
 
     # 2) uniform cell size across EVERYTHING (Core Basics #1)

@@ -6,8 +6,8 @@ Usage:
     python3 sheet_report.py sheet.png [--tol 45] [--expected-bg R,G,B]
 
 Checks:
-  1. Background color sampled from the 4 corners (must be near-uniform;
-     the skill standard is a flat chroma-green background).
+  1. Existing alpha is used when present; otherwise the background color is
+     sampled from the 4 corners and must be near-uniform.
   2. Row bands and column groups detected from foreground projections.
   3. Per-cell frame count and frame bounding-box stats (size variance).
   4. Frames touching each other or the sheet edge (extraction killers).
@@ -61,25 +61,30 @@ def main() -> int:
     ap.add_argument('--min-sprite-h', type=int, default=10)
     args = ap.parse_args()
 
-    im = Image.open(args.sheet).convert('RGB')
-    a = np.asarray(im)
+    source = np.asarray(Image.open(args.sheet).convert('RGBA'))
+    a = source[..., :3]
+    has_alpha = np.any(source[..., 3] < 255)
+    alpha = source[..., 3]
     h, w = a.shape[:2]
     print(f'sheet: {args.sheet}  {w}x{h}')
 
-    bg, spread = sample_background(a)
-    print(f'background: rgb={bg.astype(int).tolist()} corner-spread={spread}')
-    if spread > 30:
-        print('WARN: corner colors differ a lot — background may not be uniform; '
-              'keyout will leak. Regenerate with a flat solid background.')
-    if args.expected_bg:
-        exp = np.array([int(x) for x in args.expected_bg.split(',')])
-        dist = int(np.abs(bg - exp).sum())
-        print(f'expected-bg distance: {dist}')
-        if dist > 45:
-            print('WARN: actual bg far from requested color — use the ACTUAL '
-                  'sampled color for keying, not the prompted one.')
-
-    fg = np.abs(a.astype(int) - bg.astype(int)).sum(axis=2) > args.tol
+    if has_alpha:
+        print('background: transparent alpha (using alpha>0 for foreground)')
+        fg = alpha > 0
+    else:
+        bg, spread = sample_background(a)
+        print(f'background: rgb={bg.astype(int).tolist()} corner-spread={spread}')
+        if spread > 30:
+            print('WARN: corner colors differ a lot — background may not be uniform; '
+                  'keyout will leak. Regenerate with a flat solid background.')
+        if args.expected_bg:
+            exp = np.array([int(x) for x in args.expected_bg.split(',')])
+            dist = int(np.abs(bg - exp).sum())
+            print(f'expected-bg distance: {dist}')
+            if dist > 45:
+                print('WARN: actual bg far from requested color — use the ACTUAL '
+                      'sampled color for keying, not the prompted one.')
+        fg = np.abs(a.astype(int) - bg.astype(int)).sum(axis=2) > args.tol
     frac = fg.mean()
     print(f'foreground coverage: {frac:.1%}')
     if frac > 0.9:

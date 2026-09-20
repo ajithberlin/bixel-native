@@ -1,9 +1,9 @@
 # Prompt Playbook — Extraction-Friendly Spritesheets
 
-Every template below encodes the non-negotiables: flat chroma-green bg
-(ALWAYS chroma green — never dark, never white), strict grid with gaps, no
-text/borders, uniform character size, feet pinned to cell bottoms. Replace
-only the [CHARACTER] and layout slots.
+Every template below encodes the non-negotiables: real alpha=0 background
+(or a flat chroma-green fallback when the provider cannot return alpha), strict
+grid with gaps, no text/borders, uniform character size, feet pinned to cell
+bottoms. Replace only the [CHARACTER] and layout slots.
 
 ## Contents
 - Universal clauses
@@ -18,8 +18,9 @@ only the [CHARACTER] and layout slots.
 ## Universal clauses (append to every prompt)
 
 ```
-flat solid chroma green background (#00FF00), single uniform background
-color, no gradient, no drop shadow, strict uniform grid layout, evenly
+PNG output with a fully transparent background (real alpha=0 outside every
+frame), no checkerboard, no gradient, no drop shadow, strict uniform grid
+layout, evenly
 spaced frames with generous gaps, identical character size in every frame,
 full body visible, feet at the bottom of each cell, true pixel art, limited
 color palette (16-32 colors), crisp 1-pixel outline, hard pixel edges, no
@@ -27,10 +28,11 @@ anti-aliasing, no shading gradients, no text, no labels, no captions, no
 watermark, no signature, no border, no frame lines, no grid lines drawn
 ```
 
-Note: a green character (green cloak, slime, etc.) still works — the pack
-script keys on the corner-sampled background with edge-only despill, which
-protects green clothing; just keep the character's green clearly darker or
-lighter than pure #00FF00.
+Fallback clause when the provider cannot return alpha: "flat solid chroma
+green background (#00FF00), single uniform background color". If green is in
+the character palette, use magenta `#FF00FF` instead. Run the Python key
+cleanup before packing. With true alpha, the packer preserves transparent
+pixels and does not sample transparent RGB padding as a key.
 
 ## 4-direction walk sheet (top-down RPG)
 
@@ -102,9 +104,8 @@ on-model across frames.
   background` and `--style raw`. Aspect: `--ar 4:3` for 4x3 grids, `--ar 1:1`
   for square grids. Avoid `--stylize` above 250 (drifts off-grid).
 - **DALL-E 3**: it loves adding captions — repeat "no text anywhere in the
-  image" at the END of the prompt. It may also soften the green; the pack
-  script corner-samples the actual green, so a near-chroma green is fine as
-  long as sheet_report.py shows corner-spread < 30. Ask for exactly
+  image" at the END of the prompt. Request real alpha; if unavailable, use
+  the exact green fallback and let the pack script key the actual color. Ask for exactly
   1024x1024 or 1792x1024.
 - **Stable Diffusion**: put the universal clauses in the prompt AND
   "text, watermark, logo, border, jpeg artifacts, gradient background,
@@ -119,17 +120,18 @@ on-model across frames.
 - "dynamic lighting" / "dramatic shadow" — gradient bg, cast shadows that
   merge with frames
 - "various poses" — non-uniform frame sizes
-- "white background" or "dark background" — the standard is ALWAYS flat
-  chroma green (#00FF00); white keys out near-white character parts, dark
-  keys out dark outlines, and both break the pack script's expectations
+- "white background" or "dark background" for a generated sheet — request
+  real alpha; if unavailable, use the standard flat chroma green fallback
+  (#00FF00). White can key out near-white character parts and dark can key out
+  dark outlines.
 - any language text request ("with hiragana labels") — obviously
 - "detailed shading" / "smooth gradients" / "painterly" — soft edges and
   thousands of colors; keys badly and isn't pixel art
 
 ## Repair prompts (first try failed)
 
-- bg not uniform → "regenerate with a perfectly flat solid chroma green
-  #00FF00 background, no lighting effects"
+- bg not uniform → request real alpha; if unavailable, "regenerate with a
+  perfectly flat solid chroma green #00FF00 background, no lighting effects"
 - frames touching → "increase the spacing between frames, each frame fully
   separated by empty background"
 - size drift → "every frame exactly the same character height, aligned to a

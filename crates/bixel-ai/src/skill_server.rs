@@ -91,7 +91,7 @@ pub struct ImageSkillParams {
     /// Input image: a base64 data URL or a filename in the workspace.
     #[serde(default)]
     pub image: Option<String>,
-    /// Generation params: width and height (1..4096) explicitly requested output pixels; omit both to keep source dimensions. Spritesheet uses frame_width/frame_height plus cols/rows instead. transparent defaults true for sprites; set false for opaque backgrounds or terrain. palette is color/style guidance. next_frame takes `action`. Never infer target dimensions from the active canvas.
+    /// Generation params: width and height (1..4096) explicitly requested output pixels; omit both to keep source dimensions. Spritesheet uses frame_width/frame_height plus cols/rows instead. Set transparent=true for no-background sprites/assets; the provider is asked for real PNG alpha and an opaque green/magenta fallback is cleaned before delivery. Set false for opaque backgrounds or terrain. palette is color/style guidance. next_frame takes `action`. Never infer target dimensions from the active canvas.
     #[serde(default)]
     pub params: serde_json::Value,
 }
@@ -135,7 +135,7 @@ impl SkillServer {
 
     #[tool(
         name = "image_gen",
-        description = "Generate a new image or edit a reference image through the configured provider image backend. Use this only to create or transform artwork, never to run a deterministic preparation step (color reduction, background removal, slicing, packing) — those are installed skills loaded with load_skill. Put the complete visual brief in `prompt`; pass a reference with `image`."
+        description = "Generate a new image or edit a reference image through the configured provider image backend. For a no-background asset set params.transparent=true to request real PNG alpha; opaque green/magenta fallbacks are cleaned before delivery. Use this only to create or transform artwork, never to run a deterministic preparation step (color reduction, background removal, slicing, packing) — those are installed skills loaded with load_skill. Put the complete visual brief in `prompt`; pass a reference with `image`."
     )]
     pub async fn image_gen(
         &self,
@@ -147,7 +147,7 @@ impl SkillServer {
 
     #[tool(
         name = "generate_art",
-        description = "Generate a piece of pixel art from a text prompt through the provider image backend."
+        description = "Generate a piece of pixel art from a text prompt through the provider image backend. Set params.transparent=true for a real alpha=0 background; use false for opaque scenes or terrain."
     )]
     pub async fn generate_art(
         &self,
@@ -159,7 +159,7 @@ impl SkillServer {
 
     #[tool(
         name = "pixel_image_gen",
-        description = "Generate a single clean, game-ready pixel-art asset from a prompt or reference image. One asset per image."
+        description = "Generate a single clean, game-ready pixel-art asset from a prompt or reference image. Set params.transparent=true for a real alpha=0 background; use false for opaque scenes or terrain. One asset per image."
     )]
     pub async fn pixel_image_gen(
         &self,
@@ -171,7 +171,7 @@ impl SkillServer {
 
     #[tool(
         name = "spritesheet",
-        description = "Generate a spritesheet grid and slice it into frames. Provide frame_width + frame_height and cols + rows in params."
+        description = "Generate a spritesheet grid and slice it into frames. Request real alpha=0 outside frames with params.transparent=true; if alpha is unavailable use a flat green/magenta key and clean it before packing. Provide frame_width + frame_height and cols + rows in params."
     )]
     pub async fn spritesheet(
         &self,
@@ -183,7 +183,7 @@ impl SkillServer {
 
     #[tool(
         name = "next_frame",
-        description = "Advance an animation by exactly one frame. Pass the current frame as `image` and put the motion (a small increment) in `params.action`. Returns the next frame at the source frame's size."
+        description = "Advance an animation by exactly one frame. Pass the current frame as `image` and put the motion (a small increment) in `params.action`. Returns the next frame at the source frame's size. It matches source alpha by default; set params.transparent=true or say no background to request real PNG alpha."
     )]
     pub async fn next_frame(
         &self,
@@ -215,7 +215,10 @@ impl SkillServer {
         if response.get("ok").and_then(|v| v.as_bool()) != Some(true) {
             return Err(bridge_error(&response));
         }
-        let mut data = response.get("data").cloned().unwrap_or(serde_json::Value::Null);
+        let mut data = response
+            .get("data")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let preview = data
             .get_mut("preview_png_base64")
             .and_then(|value| value.take().as_str().map(str::to_string));
@@ -286,13 +289,19 @@ impl SkillServer {
 
         let mut text = output.text.clone();
         let mut saved = Vec::new();
-        let push = |img: &RgbaImage, tag: &str, source: bool,
-                    frame_meta: Vec<crate::skills::FrameMeta>, atlas: Option<String>| -> Result<String, String> {
+        let push = |img: &RgbaImage,
+                    tag: &str,
+                    source: bool,
+                    frame_meta: Vec<crate::skills::FrameMeta>,
+                    atlas: Option<String>|
+         -> Result<String, String> {
             let png = image::encode_png(img).map_err(|e| e.to_string())?;
             let name = loop {
                 let name = format!("{}_{}.png", tag, counter());
                 if let Some(ws) = &workspace {
-                    if !bixel_core::storage::write_new(ws, &name, &png)? { continue; }
+                    if !bixel_core::storage::write_new(ws, &name, &png)? {
+                        continue;
+                    }
                 }
                 break name;
             };
@@ -320,7 +329,10 @@ impl SkillServer {
             }
         }
         if let Some(img) = &output.image {
-            let duplicate = output.source_image.as_ref().is_some_and(|source| source == img);
+            let duplicate = output
+                .source_image
+                .as_ref()
+                .is_some_and(|source| source == img);
             if !duplicate {
                 match push(img, &kind.to_string(), false, sheet_meta, sheet_atlas) {
                     Ok(name) => saved.push(name),
@@ -349,7 +361,10 @@ impl SkillServer {
 impl ServerHandler for SkillServer {
     fn get_info(&self) -> ServerInfo {
         InitializeResult::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("bixel-skills", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "bixel-skills",
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(
                 "Bixel provider-backed image tools: image_gen, generate_art, pixel_image_gen, \
                  spritesheet, next_frame. Pass input images by their workspace filename. \
@@ -395,7 +410,10 @@ fn counter() -> u32 {
 
 /// Decode an input image reference: a base64 data URL/string or a workspace
 /// filename.
-fn decode_input_image(value: Option<&str>, workspace: Option<&std::path::Path>) -> Result<Option<RgbaImage>, AiError> {
+fn decode_input_image(
+    value: Option<&str>,
+    workspace: Option<&std::path::Path>,
+) -> Result<Option<RgbaImage>, AiError> {
     let Some(value) = value else { return Ok(None) };
     let value = value.trim();
     if value.is_empty() {
@@ -411,7 +429,8 @@ fn decode_input_image(value: Option<&str>, workspace: Option<&std::path::Path>) 
     }
 
     if let Some(ws) = workspace {
-        let path = bixel_core::paths::safe_resolve(value, ws).map_err(|e| AiError::Image(e.to_string()))?;
+        let path = bixel_core::paths::safe_resolve(value, ws)
+            .map_err(|e| AiError::Image(e.to_string()))?;
         if path.is_file() {
             let bytes = std::fs::read(&path).map_err(|e| AiError::Image(e.to_string()))?;
             return Ok(Some(crate::image::decode_any(&bytes)?));

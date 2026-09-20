@@ -8,7 +8,7 @@
 // - Templates & Inspirations: "Pixel Village", "Character Base", "RPG Icons" + Quote box
 
 import SwiftUI
-import AppKit
+import UniformTypeIdentifiers
 
 struct HomePageView: View {
     @ObservedObject var store: ProjectStore
@@ -23,6 +23,7 @@ struct HomePageView: View {
 
     @State private var searchText = ""
     @State private var showNewProjectSheet = false
+    @State private var showImportFilePicker = false
     @State private var aiPrompt = ""
     @State private var selectedWidth: Int = 32
     @State private var selectedHeight: Int = 32
@@ -132,7 +133,9 @@ struct HomePageView: View {
                 .padding(.bottom, 48)
             }
         }
+        #if os(macOS)
         .frame(minWidth: 1060, minHeight: 720)
+        #endif
         .background(StudioTheme.homeDark)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showNewProjectSheet) {
@@ -149,6 +152,18 @@ struct HomePageView: View {
         }
         .sheet(item: $selectedGalleryItem) { item in
             AIGalleryImagePreview(item: item)
+        }
+        .fileImporter(
+            isPresented: $showImportFilePicker,
+            allowedContentTypes: [.image, .json, UTType(filenameExtension: "tmj") ?? .json],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                importFiles(from: urls)
+            case .failure(let error):
+                store.error = "Could not choose that file: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -270,6 +285,21 @@ struct HomePageView: View {
                     .buttonStyle(.plain)
                     .help("One-time lifetime purchase: Remove all ads forever")
                 }
+
+                Button {
+                    AppSettings.requestOpen()
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(StudioTheme.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.white.opacity(0.06))
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("AI Provider and App Settings")
             }
             .padding(.trailing, 24)
         }
@@ -349,8 +379,8 @@ struct HomePageView: View {
                         }
                     }
 
-                    heroQuickButton(title: "New Map", subtitle: "Stamp and design", icon: "map") {
-                        if let project = store.createProject(name: "New Map", mode: .map, width: 40, height: 25) {
+                    heroQuickButton(title: "New Scene", subtitle: "Stamp and design", icon: "map") {
+                        if let project = store.createProject(name: "New Scene", mode: .map, width: 0, height: 0, infinite: true, orientation: .isometric) {
                             onOpenProject(project)
                         }
                     }
@@ -1010,6 +1040,7 @@ struct HomePageView: View {
                         RecentProjectCard(
                             project: project,
                             metadata: store.metadata(for: project),
+                            thumbnail: store.thumbnail(for: project),
                             onOpen: { onOpenProject(project) },
                             onRename: {
                                 renameText = project.name
@@ -1103,35 +1134,75 @@ struct HomePageView: View {
     // MARK: - Helpers
 
     private func importFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            let name = url.deletingPathExtension().lastPathComponent
+        showImportFilePicker = true
+    }
 
-            var imageURL = url
-            var manifest: String?
-            if url.pathExtension.lowercased() == "json" {
-                guard let sibling = SheetImport.siblingImage(for: url) else {
-                    store.error = "Choose a PNG spritesheet, or a JSON manifest next to its image."
+    private func importFiles(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
+
+        let imageExtensions = Set(SheetImport.imageExtensions)
+        var accessURLs = urls
+        for url in urls {
+            let extensionName = url.pathExtension.lowercased()
+            if extensionName == "json" {
+                accessURLs.append(contentsOf: SheetImport.imageExtensions.map {
+                    url.deletingPathExtension().appendingPathExtension($0)
+                })
+            } else if imageExtensions.contains(extensionName) {
+                accessURLs.append(url.deletingPathExtension().appendingPathExtension("json"))
+            }
+        }
+        var uniqueAccessURLs: [URL] = []
+        for url in accessURLs where !uniqueAccessURLs.contains(url) {
+            uniqueAccessURLs.append(url)
+        }
+        let scopedURLs = uniqueAccessURLs.filter { $0.startAccessingSecurityScopedResource() }
+        defer {
+            scopedURLs.forEach { $0.stopAccessingSecurityScopedResource() }
+        }
+
+        if let tiledMapURL = urls.first(where: { $0.pathExtension.lowercased() == "tmj" }) {
+            if let project = store.importTiledMap(from: tiledMapURL, createProject: true) {
+                onOpenProject(project)
+            }
+            return
+        }
+
+        let manifestURL = urls.first { $0.pathExtension.lowercased() == "json" }
+        let selectedImageURL = urls.first { imageExtensions.contains($0.pathExtension.lowercased()) }
+        let name = (manifestURL ?? selectedImageURL ?? urls[0])
+            .deletingPathExtension().lastPathComponent
+
+        var imageURL = selectedImageURL
+        var manifest: String?
+        if let manifestURL {
+            if imageURL == nil {
+                guard let sibling = SheetImport.siblingImage(for: manifestURL) else {
+                    store.error = "Select both the PNG spritesheet and its JSON manifest."
                     return
                 }
                 imageURL = sibling
-                manifest = (try? Data(contentsOf: url)).flatMap(SheetImport.manifest(fromJSON:))
-            } else {
-                manifest = SheetImport.sidecarManifest(for: url)
             }
-
-            guard let data = try? Data(contentsOf: imageURL) else {
-                store.error = "Could not read that file."
-                return
-            }
-            let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
-                ?? store.importImageProject(png: data, name: name)
-            if let project { onOpenProject(project) }
+            manifest = (try? Data(contentsOf: manifestURL)).flatMap(SheetImport.manifest(fromJSON:))
+        } else if let selectedImageURL {
+            manifest = SheetImport.sidecarManifest(for: selectedImageURL)
+        } else {
+            store.error = "Choose an image or a JSON manifest next to its image."
+            return
         }
+
+        guard let imageURL, let data = try? Data(contentsOf: imageURL) else {
+            if manifestURL != nil {
+                store.error = "Could not read the spritesheet. Select both the image and JSON manifest together."
+            } else {
+                store.error = "Could not read that file."
+            }
+            return
+        }
+
+        let project = manifest.map { store.importSheetProject(png: data, manifest: $0, name: name) }
+            ?? store.importImageProject(png: data, name: name)
+        if let project { onOpenProject(project) }
     }
 }
 
@@ -1140,6 +1211,7 @@ struct HomePageView: View {
 struct RecentProjectCard: View {
     let project: StudioProject
     let metadata: (mode: WorkspaceMode, sizeText: String, timeText: String)
+    let thumbnail: CGImage?
     let onOpen: () -> Void
     let onRename: () -> Void
     let onDuplicate: () -> Void
@@ -1151,7 +1223,7 @@ struct RecentProjectCard: View {
         Button(action: onOpen) {
             HStack(spacing: 12) {
                 // Pixel Art Preview Thumbnail
-                PixelPreviewThumb(name: project.name, size: 76)
+                ProjectThumbnailThumb(thumbnail: thumbnail, fallbackName: project.name, size: 76)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1226,7 +1298,7 @@ struct RecentProjectCard: View {
         case .normal:
             return (StudioTheme.tagSpriteBg, StudioTheme.tagSpriteText, "Normal")
         case .map:
-            return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Map")
+            return (StudioTheme.tagMapBg, StudioTheme.tagMapText, "Scene")
         }
     }
 }
@@ -1286,6 +1358,40 @@ struct TemplateInspirationCard: View {
                 )
         )
         .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Project Artwork Thumbnail
+
+struct ProjectThumbnailThumb: View {
+    let thumbnail: CGImage?
+    let fallbackName: String
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            CheckerboardView(cell: 6)
+                .opacity(0.35)
+
+            if let thumbnail {
+                Image(decorative: thumbnail, scale: 1.0)
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: size, maxHeight: size)
+            } else if let sample = SamplePixelArt.makePreviewImage(for: fallbackName) {
+                Image(decorative: sample, scale: 1.0)
+                    .resizable()
+                    .interpolation(.none)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: size, maxHeight: size)
+            } else {
+                Rectangle()
+                    .fill(StudioTheme.homeCard)
+            }
+        }
+        .frame(width: size, height: size)
+        .background(Color.black.opacity(0.3))
     }
 }
 
@@ -1476,6 +1582,7 @@ struct NewProjectQuickDialog: View {
     @State private var width = 32
     @State private var height = 32
     @State private var cellSize = 16
+    @State private var sceneOrientation: MapOrientation = .orthogonal
 
     private static let squarePresets: [Int] = [16, 32, 48, 64, 128, 256]
     private static let screenPresets: [(w: Int, h: Int, label: String)] = [
@@ -1566,8 +1673,8 @@ struct NewProjectQuickDialog: View {
                         targetMode: .normal
                     )
                     modeSelectionCard(
-                        title: "Tilemap Designer",
-                        subtitle: "Grid cells & stamping",
+                        title: "Scene Designer",
+                        subtitle: "Infinite grid & stamping",
                         icon: "square.grid.3x3.fill",
                         targetMode: .map
                     )
@@ -1615,17 +1722,14 @@ struct NewProjectQuickDialog: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.defaultAction)
-                .disabled(width < 1 || height < 1)
+                .disabled(mode == .normal && (width < 1 || height < 1))
             }
         }
         .padding(22)
         .frame(width: 480)
         .background(StudioTheme.homeDark)
         .onChange(of: mode) { value in
-            if value == .map {
-                width = 40
-                height = 25
-            } else if width == 40 && height == 25 {
+            if value == .normal {
                 width = 32
                 height = 32
             }
@@ -1695,14 +1799,18 @@ struct NewProjectQuickDialog: View {
 
     private var mapDimensionsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                dimensionField(label: "Columns", value: $width, unit: "tiles")
-                Text("×")
-                    .font(.system(size: 16, weight: .bold))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Scene Type")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(StudioTheme.textSecondary)
-                    .padding(.top, 18)
-                dimensionField(label: "Rows", value: $height, unit: "tiles")
-                Spacer()
+                Picker("", selection: $sceneOrientation) {
+                    ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+            }
+
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Tile Size")
                         .font(.system(size: 10, weight: .medium))
@@ -1715,20 +1823,16 @@ struct NewProjectQuickDialog: View {
                         }
                     }
                 }
+                Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Map Size Presets")
-                    .font(.system(size: 11, weight: .medium))
+            HStack(spacing: 6) {
+                Image(systemName: "infinity")
+                    .font(.system(size: 11))
+                    .foregroundColor(StudioTheme.bixelGreen)
+                Text("Infinite scene — no size to pick. Pan and paint anywhere; saved as Tiled infinite JSON with chunks.")
+                    .font(.system(size: 10))
                     .foregroundColor(StudioTheme.textSecondary)
-                HStack(spacing: 6) {
-                    ForEach(Self.mapPresets, id: \.label) { p in
-                        presetPill(label: p.label, isSelected: width == p.cols && height == p.rows) {
-                            width = p.cols
-                            height = p.rows
-                        }
-                    }
-                }
             }
         }
     }
@@ -1842,11 +1946,11 @@ struct NewProjectQuickDialog: View {
                 .foregroundColor(StudioTheme.bixelGreen)
 
             if mode == .map {
-                Text("\(width) × \(height) tiles • \(cellSize)px grid")
+                Text("Infinite scene • \(cellSize)px tiles")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundColor(StudioTheme.textSecondary)
                 Spacer()
-                Text("\(width * cellSize) × \(height * cellSize) px total")
+                Text(sceneOrientation.label)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(StudioTheme.textDisabled)
             } else {
@@ -1892,8 +1996,9 @@ struct NewProjectQuickDialog: View {
         let projName = trimmed.isEmpty ? "Untitled Project" : trimmed
         if mode == .map {
             if let project = store.createProject(name: projName, mode: .map,
-                                                 width: max(1, width), height: max(1, height),
-                                                 cellWidth: max(1, cellSize), cellHeight: max(1, cellSize)) {
+                                                 width: 0, height: 0,
+                                                 cellWidth: max(1, cellSize), cellHeight: max(1, cellSize),
+                                                 infinite: true, orientation: sceneOrientation) {
                 onCreated(project)
             }
         } else if let project = store.createProject(name: projName, mode: .normal, width: max(1, width), height: max(1, height)) {

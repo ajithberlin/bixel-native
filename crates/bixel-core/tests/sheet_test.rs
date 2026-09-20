@@ -37,14 +37,17 @@ fn from_sheet_builds_frames_and_tags() {
     assert_eq!(doc.frames.len(), 3);
     assert_eq!(doc.frames[0].duration_ms, 100);
     assert_eq!(doc.frames[1].duration_ms, 80);
-    assert_eq!(doc.layers.len(), 1);
+    // Per-frame layers: each frame owns its own "Hero" layer.
+    assert_eq!(doc.layers.len(), 3);
     assert_eq!(doc.layers[0].name, "Hero");
+    assert_eq!(doc.frame_layers(1).len(), 1);
     assert_eq!(doc.tags.len(), 2);
     assert_eq!((doc.tags[0].name.as_str(), doc.tags[0].from, doc.tags[0].to), ("idle", 0, 0));
     assert_eq!((doc.tags[1].name.as_str(), doc.tags[1].from, doc.tags[1].to), ("walk", 1, 2));
 
     // Frame 1 crops the cell at x=2 (r=120) rather than x=0.
-    let px = doc.get_pixel(0, 1, 0, 0);
+    let frame1_layer = doc.frame_layers(1)[0];
+    let px = doc.get_pixel(frame1_layer, 1, 0, 0);
     assert_eq!(px.r, 120);
 }
 
@@ -85,7 +88,10 @@ fn append_sheet_frames_preserves_canvas_and_offsets_tags() {
     assert_eq!(report.first_frame, 1);
     assert_eq!(report.frames_added, 2);
     assert_eq!(doc.frames.len(), 3);
-    assert_eq!(doc.layers.len(), 2);
+    // Original layer plus one imported layer per appended frame.
+    assert_eq!(doc.layers.len(), 3);
+    assert_eq!(doc.frame_layers(1).len(), 1);
+    assert_eq!(doc.frame_layers(2).len(), 1);
     // Original content survives on layer 0.
     assert_eq!(doc.get_pixel(0, 0, 0, 0).r, 9);
 }

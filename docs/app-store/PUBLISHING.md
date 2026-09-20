@@ -191,8 +191,12 @@ certificates and provisioning profiles for you.
 2. Set **Team** to your Developer team.
 3. Tick **Automatically manage signing**. Xcode creates the *Mac App Store*
    provisioning profile and the *Apple Distribution* certificate if missing.
-4. Confirm the **App Sandbox** capability is listed, with both **Outgoing
+4. Confirm the **App Sandbox** capability is listed, with **Outgoing
    Connections (Client)** and **Incoming Connections (Server)** enabled. The
+   server capability is used by the optional Mac host in Settings → Devices:
+   when the user enables Remote Access, Bixel starts an `NWListener` and
+   advertises `_bixel-remote._tcp` for encrypted paired-iPad connections. The
+   Codex OAuth flow also receives its browser callback on localhost:1455. The
    repo ships the entitlements at `app/Bixel/Bixel-AppStore.entitlements`, and
    `project.yml` wires them into the **Release** configuration via
    `CODE_SIGN_ENTITLEMENTS` (Debug/dev builds stay unsandboxed). Add **In-App
@@ -304,12 +308,14 @@ build:
 - **Arbitrary filesystem access** — everything outside the container must go
   through `NSOpenPanel`/`NSSavePanel` (already the case for projects, sources and
   exports; `paths::safe_resolve` keeps writes inside the chosen base).
-- **Network** — both `com.apple.security.network.client` and
-  `com.apple.security.network.server` are included. The server entitlement is
-  required because Codex OAuth receives its browser callback on
-  `localhost:1455`. Regenerate the Mac App Store provisioning profile after
-  enabling Incoming Connections (Server), and document the OpenRouter/Codex
-  usage in **App Privacy**.
+- **Network** — `com.apple.security.network.client` permits outgoing HTTPS
+  requests to OpenRouter, ChatGPT/Codex, and the ad feed. The optional Mac host
+  uses `com.apple.security.network.server` only when the user enables Remote
+  Access in Settings → Devices; it starts an `NWListener` and advertises the
+  `_bixel-remote._tcp` Bonjour service so paired iPads can initiate encrypted
+  project-sync and AI connections. Codex OAuth also uses the entitlement for
+  its localhost:1455 browser callback. Keep both capabilities in the Mac App
+  Store profile and include the same activation steps in App Review Information.
 - **In-App Purchases** — the RevenueCat lifetime unlock must be configured in App
   Store Connect and offered for the Store build (external payment links are not
   allowed).

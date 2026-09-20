@@ -23,7 +23,11 @@ Generate single UI elements (or one element in several states) from text.
    - Health bar: `empty, half, full` + frame in a row (fill segments separately so the fill can animate in-engine)
    - D-pad/arrow keys: 4 directions + pressed variants
    - Static elements (icons, slots): single state is fine
-3. **Generate** with the image tool: transparent background, 1:1, 1K. Prompt skeleton:
+3. **Generate** with the image tool: request PNG output with a real
+   transparent background (alpha=0), 1:1, 1K. If the provider returns an
+   opaque image, use `pixel-remove-bg` immediately: key `00FF00` or `FF00FF`
+   when it used a chroma fallback, otherwise use `auto`, then verify alpha=0
+   before slicing. Prompt skeleton:
 
    > Pixel art game UI element: [spec]. [If states: "N variants in one horizontal row, evenly spaced, identical style: state1, state2, ..."]. [palette] palette, crisp 1px outline, flat shading, no text, no letters, no watermark, clearly separated variants, game asset.
 

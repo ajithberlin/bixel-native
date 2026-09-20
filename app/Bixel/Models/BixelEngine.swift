@@ -77,8 +77,43 @@ final class Document: @unchecked Sendable {
         Int(bixel_doc_flood_fill(handle, UInt32(layer), UInt32(frame), UInt32(x), UInt32(y), c))
     }
 
+    @discardableResult
+    func floodFillWithin(layer: Int, frame: Int, x: Int, y: Int, _ c: BixelColor,
+                         minX: Int, minY: Int, maxX: Int, maxY: Int) -> Int {
+        Int(bixel_doc_flood_fill_within(
+            handle,
+            UInt32(layer), UInt32(frame), UInt32(x), UInt32(y), c,
+            UInt32(minX), UInt32(minY), UInt32(maxX), UInt32(maxY)
+        ))
+    }
+
     func addLayer(_ name: String? = nil) -> Int {
         Int(bixel_doc_add_layer(handle, name))
+    }
+
+    /// Add a layer owned by `frame` (per-frame layer stacks). Returns the new
+    /// global layer index, or -1 for an invalid frame.
+    func addLayerForFrame(_ name: String?, frame: Int) -> Int {
+        Int(bixel_doc_add_layer_for_frame(handle, name, UInt32(frame)))
+    }
+
+    /// Owning frame of a global layer index, or -1 when out of range.
+    func layerFrame(_ index: Int) -> Int {
+        let frame = bixel_doc_layer_frame(handle, UInt32(index))
+        return frame == UInt32.max ? -1 : Int(frame)
+    }
+
+    /// Stable layer identity that survives reorders and undo.
+    func layerUID(_ index: Int) -> UInt64 {
+        bixel_doc_layer_uid(handle, UInt32(index))
+    }
+
+    /// Global layer indices owned by `frame`, bottom-first.
+    func frameLayers(_ frame: Int) -> [Int] {
+        let ptr = bixel_doc_frame_layers_json(handle, UInt32(frame))
+        defer { bixel_string_free(ptr) }
+        guard let ptr, let data = String(cString: ptr).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([Int].self, from: data)) ?? []
     }
 
     func removeLayer(_ index: Int) {
@@ -665,7 +700,81 @@ struct MapTilesetInfo: Codable {
     var spacing: Int
     var columns: Int
     var tileCount: Int
+    var tileOffsetX: Int = 0
+    var tileOffsetY: Int = 0
 }
+
+/// Map projection modes supported by the editor (mirrors `tilemap::Orientation`).
+enum MapOrientation: Int, CaseIterable, Identifiable {
+    case orthogonal = 0
+    case isometric = 1
+    case staggered = 2
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .orthogonal: return "Orthogonal"
+        case .isometric: return "Isometric"
+        case .staggered: return "Isometric (Staggered)"
+        }
+    }
+
+    var isIsometric: Bool { self != .orthogonal }
+
+    /// Tiled `orientation` string.
+    var tiled: String {
+        switch self {
+        case .orthogonal: return "orthogonal"
+        case .isometric: return "isometric"
+        case .staggered: return "staggered"
+        }
+    }
+
+    init(tiled: String) {
+        switch tiled.lowercased() {
+        case "isometric": self = .isometric
+        case "staggered", "isometric_staggered", "isometric-staggered": self = .staggered
+        default: self = .orthogonal
+        }
+    }
+}
+
+/// Painter's order for overlapping isometric tiles.
+enum MapRenderOrder: Int, CaseIterable, Identifiable {
+    case rightDown = 0
+    case rightUp = 1
+    case leftDown = 2
+    case leftUp = 3
+
+    var id: Int { rawValue }
+
+    var label: String {
+        switch self {
+        case .rightDown: return "Right Down"
+        case .rightUp: return "Right Up"
+        case .leftDown: return "Left Down"
+        case .leftUp: return "Left Up"
+        }
+    }
+}
+
+/// Axis along which staggered rows/columns are offset.
+enum MapStaggerAxis: Int, CaseIterable, Identifiable {
+    case x = 0
+    case y = 1
+    var id: Int { rawValue }
+    var label: String { self == .x ? "X" : "Y" }
+}
+
+/// Which rows/columns receive the half-tile offset.
+enum MapStaggerIndex: Int, CaseIterable, Identifiable {
+    case odd = 0
+    case even = 1
+    var id: Int { rawValue }
+    var label: String { self == .odd ? "Odd" : "Even" }
+}
+
 
 /// One row for the map layers panel (tile, object or image layer).
 struct MapLayerRow: Codable, Identifiable {
@@ -681,6 +790,10 @@ struct MapLayerRow: Codable, Identifiable {
     var image: String?
     var imageWidth: Int?
     var imageHeight: Int?
+    var displayWidth: Int?
+    var displayHeight: Int?
+    var x: Double?
+    var y: Double?
 }
 
 /// One map object on an object layer (rect or point, in tile-pixels).
@@ -709,6 +822,12 @@ final class TileMap: @unchecked Sendable {
     init(width: Int, height: Int, tileWidth: Int, tileHeight: Int) {
         handle = bixel_map_new(UInt32(max(1, width)), UInt32(max(1, height)),
                                UInt32(max(1, tileWidth)), UInt32(max(1, tileHeight)))
+    }
+
+    /// Create an unbounded Tiled infinite scene (chunked on save).
+    init(infiniteTileWidth tileWidth: Int, tileHeight: Int, orientation: MapOrientation) {
+        handle = bixel_map_new_infinite(UInt32(max(1, tileWidth)), UInt32(max(1, tileHeight)),
+                                        UInt8(orientation.rawValue))
     }
 
     init(json: String) throws {
@@ -745,6 +864,105 @@ final class TileMap: @unchecked Sendable {
     var rows: Int { Int(bixel_map_cell_count_y(handle)) }
     var pixelWidth: Int { Int(bixel_map_pixel_width(handle)) }
     var pixelHeight: Int { Int(bixel_map_pixel_height(handle)) }
+
+    // MARK: Infinite maps
+
+    var isInfinite: Bool { bixel_map_is_infinite(handle) }
+    var originX: Int { Int(bixel_map_origin_x(handle)) }
+    var originY: Int { Int(bixel_map_origin_y(handle)) }
+
+    /// Inclusive world-cell bounds of non-empty content (`nil` when empty).
+    var contentBounds: (minX: Int, minY: Int, maxX: Int, maxY: Int)? {
+        var a: Int32 = 0
+        var b: Int32 = 0
+        var c: Int32 = 0
+        var d: Int32 = 0
+        guard bixel_map_content_bounds(handle, &a, &b, &c, &d) else { return nil }
+        return (Int(a), Int(b), Int(c), Int(d))
+    }
+
+    /// Composite a world-pixel region into RGBA (`w * h * 4` bytes).
+    func compositeRegionRGBA(x: Int, y: Int, w: Int, h: Int) -> [UInt8] {
+        guard w > 0, h > 0 else { return [] }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buf.withUnsafeMutableBytes { raw in
+            bixel_map_composite_region(handle, Int32(x), Int32(y), UInt32(w), UInt32(h),
+                                       raw.baseAddress, UInt(raw.count))
+        }
+        return ok ? buf : []
+    }
+
+    // MARK: Orientation / projection
+
+    var orientation: MapOrientation {
+        MapOrientation(rawValue: Int(bixel_map_orientation(handle))) ?? .orthogonal
+    }
+
+    @discardableResult
+    func setOrientation(_ orientation: MapOrientation) -> Bool {
+        bixel_map_set_orientation(handle, UInt8(orientation.rawValue))
+    }
+
+    var renderOrder: MapRenderOrder {
+        MapRenderOrder(rawValue: Int(bixel_map_render_order(handle))) ?? .rightDown
+    }
+
+    @discardableResult
+    func setRenderOrder(_ order: MapRenderOrder) -> Bool {
+        bixel_map_set_render_order(handle, UInt8(order.rawValue))
+    }
+
+    var staggerAxis: MapStaggerAxis {
+        MapStaggerAxis(rawValue: Int(bixel_map_stagger_axis(handle))) ?? .y
+    }
+
+    @discardableResult
+    func setStaggerAxis(_ axis: MapStaggerAxis) -> Bool {
+        bixel_map_set_stagger_axis(handle, UInt8(axis.rawValue))
+    }
+
+    var staggerIndex: MapStaggerIndex {
+        MapStaggerIndex(rawValue: Int(bixel_map_stagger_index(handle))) ?? .odd
+    }
+
+    @discardableResult
+    func setStaggerIndex(_ index: MapStaggerIndex) -> Bool {
+        bixel_map_set_stagger_index(handle, UInt8(index.rawValue))
+    }
+
+    /// Top-left screen pixel of a cell's tile image (orientation-aware).
+    func cellOrigin(x: Int, y: Int) -> (x: Int, y: Int) {
+        var ox: Int64 = 0
+        var oy: Int64 = 0
+        bixel_map_cell_origin(handle, Int32(x), Int32(y), &ox, &oy)
+        return (Int(ox), Int(oy))
+    }
+
+    /// Centre of a cell's tile image (used to anchor object creation).
+    func cellCenter(x: Int, y: Int) -> (x: Int, y: Int) {
+        let origin = cellOrigin(x: x, y: y)
+        return (origin.x + cellWidth / 2, origin.y + cellHeight / 2)
+    }
+
+    /// Whole-map screen pixel -> integer cell. `inside` is false off the map.
+    func pixelToCell(x: Double, y: Double) -> (x: Int, y: Int, inside: Bool) {
+        var cx: Int32 = 0
+        var cy: Int32 = 0
+        let inside = bixel_map_pixel_to_cell(handle, x, y, &cx, &cy)
+        return (Int(cx), Int(cy), inside)
+    }
+
+    @discardableResult
+    func setTilesetTileOffset(_ index: Int, x: Int, y: Int) -> Bool {
+        bixel_map_set_tileset_tile_offset(handle, UInt32(index), Int32(x), Int32(y))
+    }
+
+    func tilesetTileOffset(_ index: Int) -> (x: Int, y: Int)? {
+        var x: Int32 = 0
+        var y: Int32 = 0
+        guard bixel_map_tileset_tile_offset(handle, UInt32(index), &x, &y) else { return nil }
+        return (Int(x), Int(y))
+    }
 
     // MARK: Tilesets
 
@@ -822,7 +1040,7 @@ final class TileMap: @unchecked Sendable {
     @discardableResult
     func autotile(layer: Int, tileset: Int, x: Int, y: Int, w: Int, h: Int) -> Int {
         Int(bixel_map_autotile(handle, UInt32(layer), UInt32(tileset),
-                               UInt32(x), UInt32(y), UInt32(w), UInt32(h)))
+                               Int32(x), Int32(y), UInt32(w), UInt32(h)))
     }
 
     // MARK: Layers
@@ -857,6 +1075,16 @@ final class TileMap: @unchecked Sendable {
         rgba.withUnsafeBufferPointer { raw in
             bixel_map_set_image_layer_pixels(handle, UInt32(index), raw.baseAddress, UInt(raw.count))
         }
+    }
+
+    /// Move and/or resize an image layer in map pixels. Source pixels remain
+    /// unchanged; the core composites the layer with nearest-neighbour scaling.
+    @discardableResult
+    func setImageLayerTransform(_ index: Int, x: Double, y: Double,
+                                displayWidth: Int, displayHeight: Int) -> Bool {
+        bixel_map_set_image_layer_transform(handle, UInt32(index), x, y,
+                                            UInt32(max(1, displayWidth)),
+                                            UInt32(max(1, displayHeight)))
     }
 
     /// Read an image layer's RGBA pixels back out of the engine.
@@ -937,7 +1165,7 @@ final class TileMap: @unchecked Sendable {
         guard w > 0, h > 0 else { return MapTilePattern() }
         var tiles = [UInt32](repeating: 0, count: w * h)
         let written = tiles.withUnsafeMutableBufferPointer {
-            bixel_map_read_region(handle, UInt32(layer), UInt32(x), UInt32(y),
+            bixel_map_read_region(handle, UInt32(layer), Int32(x), Int32(y),
                                   UInt32(w), UInt32(h), $0.baseAddress)
         }
         if Int(written) < tiles.count { tiles.removeSubrange(Int(written)...tiles.count - 1) }
@@ -946,7 +1174,7 @@ final class TileMap: @unchecked Sendable {
 
     @discardableResult
     func replace(layer: Int, x: Int, y: Int, w: Int, h: Int, from: UInt32, to: UInt32) -> Int {
-        Int(bixel_map_replace(handle, UInt32(layer), UInt32(x), UInt32(y), UInt32(w), UInt32(h), from, to))
+        Int(bixel_map_replace(handle, UInt32(layer), Int32(x), Int32(y), UInt32(w), UInt32(h), from, to))
     }
 
     /// Same-tile region mask (magic wand). Returns a row-major `[Bool]`.
@@ -1088,5 +1316,135 @@ enum ProjectStorage {
             defer { bixel_string_free(error) }
             throw StorageError.message(String(cString: error))
         }
+    }
+}
+
+// MARK: - Project sync gateway
+
+/// Swift face of the Rust `sync` core: content-addressed manifests, three-way
+/// reconciliation plans, and the shared blob store. All reconciliation logic
+/// lives in `bixel_core::sync`; this only marshals JSON and the two-call blob
+/// read. Transports (Bonjour/WebSocket) layer on top.
+enum ProjectSync {
+    struct FileEntry: Codable, Hashable {
+        let hash: String
+        let bytes: UInt64
+        var updatedUnix: UInt64 = 0
+    }
+
+    struct Manifest: Codable, Hashable {
+        var schema: UInt32 = 1
+        var projectID: String
+        var revision: UInt64 = 0
+        var device: String = ""
+        var updatedUnix: UInt64 = 0
+        var files: [String: FileEntry] = [:]
+    }
+
+    struct Conflict: Codable, Hashable {
+        let path: String
+        let localHash: String?
+        let remoteHash: String?
+        let baseHash: String?
+    }
+
+    struct Plan: Codable, Hashable {
+        let pull: [String]
+        let push: [String]
+        let deleteLocal: [String]
+        let deleteRemote: [String]
+        let conflicts: [Conflict]
+
+        var isEmpty: Bool {
+            pull.isEmpty && push.isEmpty && deleteLocal.isEmpty && deleteRemote.isEmpty && conflicts.isEmpty
+        }
+    }
+
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        return encoder
+    }()
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+
+    /// Decode the `{value:...}` / `{error:...}` envelope every `bixel_sync_*`
+    /// function returns.
+    private static func value(from ptr: UnsafeMutablePointer<CChar>?) throws -> Any? {
+        guard let ptr else { throw StorageError.message("Sync request failed.") }
+        defer { bixel_string_free(ptr) }
+        let result = try JSONSerialization.jsonObject(with: Data(String(cString: ptr).utf8)) as? [String: Any]
+        if let error = result?["error"] as? String { throw StorageError.message(error) }
+        return result?["value"]
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, _ value: Any?) throws -> T {
+        let data = try JSONSerialization.data(withJSONObject: value ?? [:])
+        return try decoder.decode(T.self, from: data)
+    }
+
+    /// Scan a project into a content-addressed manifest.
+    static func manifest(projectRoot: URL, projectID: String) throws -> Manifest {
+        let raw = try value(from: bixel_sync_manifest(projectRoot.path, projectID))
+        return try decode(Manifest.self, raw)
+    }
+
+    /// Three-way reconcile. `base` is the last common manifest (`nil` on a
+    /// first-ever sync).
+    static func plan(base: Manifest?, local: Manifest, remote: Manifest) throws -> Plan {
+        let baseJSON: String
+        if let base {
+            baseJSON = try String(data: encoder.encode(base), encoding: .utf8) ?? ""
+        } else {
+            baseJSON = ""
+        }
+        let localJSON = String(data: try encoder.encode(local), encoding: .utf8) ?? "{}"
+        let remoteJSON = String(data: try encoder.encode(remote), encoding: .utf8) ?? "{}"
+        let raw = try value(from: bixel_sync_plan(baseJSON, localJSON, remoteJSON))
+        return try decode(Plan.self, raw)
+    }
+
+    /// Persist a project's manifest atomically.
+    static func writeManifest(projectRoot: URL, manifest: Manifest) throws {
+        let json = String(data: try encoder.encode(manifest), encoding: .utf8) ?? "{}"
+        let ptr = bixel_sync_write_manifest(projectRoot.path, json)
+        if let ptr {
+            defer { bixel_string_free(ptr) }
+            throw StorageError.message(String(cString: ptr))
+        }
+    }
+
+    /// Preserved-peer filename for a conflict (never auto-merges documents).
+    static func conflictName(path: String, device: String, timestamp: UInt64 = UInt64(Date().timeIntervalSince1970)) -> String {
+        guard let ptr = bixel_sync_conflict_name(path, device, timestamp) else { return path }
+        defer { bixel_string_free(ptr) }
+        return String(cString: ptr)
+    }
+
+    /// Store bytes in the shared content-addressed store; returns `blake3:<hex>`.
+    static func storeBlob(projectsRoot: URL, data: Data) throws -> String {
+        let raw = try data.withUnsafeBytes { buffer in
+            try value(from: bixel_sync_store_blob(projectsRoot.path, buffer.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt64(data.count)))
+        }
+        guard let hash = raw as? String else { throw StorageError.message("Could not store blob.") }
+        return hash
+    }
+
+    /// Read a blob by hash; nil when absent locally.
+    static func readBlob(projectsRoot: URL, hash: String) throws -> Data? {
+        let length = bixel_sync_read_blob(projectsRoot.path, hash, nil, 0)
+        if length == -2 { return nil }
+        guard length >= 0 else { throw StorageError.message("Could not read blob \(hash).") }
+        if length == 0 { return Data() }
+        var buffer = [UInt8](repeating: 0, count: Int(length))
+        let written = buffer.withUnsafeMutableBufferPointer { ptr in
+            bixel_sync_read_blob(projectsRoot.path, hash, ptr.baseAddress, UInt64(ptr.count))
+        }
+        guard written == length else { throw StorageError.message("Could not read blob \(hash).") }
+        return Data(buffer)
     }
 }

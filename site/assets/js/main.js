@@ -23,29 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 2. Automatic PNG screenshot slot resolution
-  // If the .png screenshot exists, displays it; otherwise shows the styled placeholder card.
-  document.querySelectorAll('.screenshot-slot').forEach((slot) => {
-    const slotName = slot.getAttribute('data-slot');
-    const img = slot.querySelector('img');
-    const placeholder = slot.querySelector('.slot-placeholder');
-    if (!slotName || !img) return;
-
-    const pngSrc = `assets/screenshots/${slotName}.png`;
-    const testImg = new Image();
-    testImg.onload = () => {
-      img.src = pngSrc;
-      img.style.display = 'block';
-      if (placeholder) placeholder.style.display = 'none';
-    };
-    testImg.onerror = () => {
-      img.style.display = 'none';
-      if (placeholder) placeholder.style.display = 'flex';
-    };
-    testImg.src = pngSrc;
-  });
-
-  // 3. Realtime GitHub Stars Loader
+  // 2. Realtime GitHub Stars Loader
   const repo = 'ajithberlin/bixel-native';
   const cacheKey = `gh_stars_${repo}`;
   const starCountEls = document.querySelectorAll('.github-stars-count');
@@ -83,4 +61,3 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 });
-

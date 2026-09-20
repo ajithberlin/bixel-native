@@ -201,8 +201,8 @@ private struct AssetTile: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(StudioTheme.background)
-                    if let previewData, let image = NSImage(data: previewData) {
-                        Image(nsImage: image)
+                    if let previewData, let image = makePlatformImage(data: previewData) {
+                        Image(platformImage: image)
                             .resizable()
                             .interpolation(.none)
                             .scaledToFit()
@@ -251,8 +251,8 @@ private struct AssetPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                if let bitmap = NSBitmapImageRep(data: data), let cg = bitmap.cgImage {
-                    Image(nsImage: NSImage(cgImage: cg, size: .zero))
+                if let image = makePlatformImage(data: data), let cg = image.cgImageRef {
+                    Image(platformImage: image)
                         .resizable().interpolation(.none).scaledToFit()
                         .frame(width: 52, height: 52)
                         .background(StudioTheme.background)
@@ -271,18 +271,30 @@ private struct AssetPreview: View {
             }
 
             if isMap {
-                Button {
-                    store.placeImageOnMap(asset)
-                } label: {
-                    Label("Add as layer", systemImage: "photo.badge.plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(maxWidth: .infinity)
+                HStack(spacing: 6) {
+                    Button {
+                        store.placeImageOnMap(asset)
+                    } label: {
+                        Label("Add as layer", systemImage: "photo.badge.plus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .help("Add this image to the map as a layer")
+
+                    Button {
+                        store.addTilesetFromAsset(asset)
+                    } label: {
+                        Label("Add as tileset", systemImage: "square.grid.3x3")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Slice this image into a tileset you can paint with")
                 }
-                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .disabled(store.assistant.busy)
-                .help("Add this image to the map as a layer")
-                Text("Added as an image layer — editable in the layers panel.")
+                Text("Add as an image layer, or slice it into a paintable tileset.")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
             } else {
@@ -304,13 +316,9 @@ private struct AssetPreview: View {
 
 func imageProvider(_ data: Data) -> NSItemProvider {
     let provider = NSItemProvider()
-    let pngData: Data = {
-        guard let bitmap = NSBitmapImageRep(data: data),
-              let converted = bitmap.representation(using: .png, properties: [:]) else { return data }
-        return converted
-    }()
     provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in
-        completion(pngData, nil); return nil
+        completion(data, nil)
+        return nil
     }
     return provider
 }
@@ -324,7 +332,15 @@ struct NewWorkspaceDocument: View {
     @State private var height = 32
     @State private var cellWidth = 16
     @State private var cellHeight = 16
-    private var item: WorkspaceDocument { WorkspaceDocument(name: name, mode: mode, width: width, height: height, cellWidth: cellWidth, cellHeight: cellHeight) }
+    @State private var orientation: MapOrientation = .orthogonal
+    private var item: WorkspaceDocument {
+        if mode == .map {
+            return WorkspaceDocument(name: name, mode: .map, width: 0, height: 0,
+                                     cellWidth: cellWidth, cellHeight: cellHeight,
+                                     infinite: true, orientation: orientation.tiled)
+        }
+        return WorkspaceDocument(name: name, mode: .normal, width: width, height: height)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("New document").font(.title2.bold())
@@ -333,16 +349,27 @@ struct NewWorkspaceDocument: View {
             Picker("Project type", selection: $mode) {
                 ForEach(WorkspaceMode.allCases) { Text($0.title).tag($0) }
             }
-            .help("Normal canvas or tile map document")
-            HStack {
-                dimension(mode.usesCells ? "Columns" : "Width (px)", value: $width)
-                dimension(mode.usesCells ? "Rows" : "Height (px)", value: $height)
-            }
+            .help("Normal canvas or scene document")
             if mode.usesCells {
-                HStack { dimension("Cell width (px)", value: $cellWidth); dimension("Cell height (px)", value: $cellHeight) }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene type").font(.caption)
+                    Picker("", selection: $orientation) {
+                        ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                }
+                HStack { dimension("Tile width (px)", value: $cellWidth); dimension("Tile height (px)", value: $cellHeight) }
+                Text("Infinite scene — pan and paint anywhere. Saved as Tiled infinite JSON with chunks.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                HStack {
+                    dimension("Width (px)", value: $width)
+                    dimension("Height (px)", value: $height)
+                }
+                Text("\(item.pixelWidth) × \(item.pixelHeight) pixels total").font(.caption).foregroundColor(.secondary)
             }
-            Text("\(item.pixelWidth) × \(item.pixelHeight) pixels total").font(.caption).foregroundColor(.secondary)
-            if mode == .map { Text("Paint tiles on layers with cell-aware stamping and snapping.").font(.caption) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -356,8 +383,10 @@ struct NewWorkspaceDocument: View {
             }
         }.padding(26).frame(width: 480)
         .onChange(of: mode) { value in
-            width = value == .map ? 40 : 32
-            height = value == .map ? 25 : 32
+            if value == .normal {
+                width = 32
+                height = 32
+            }
         }
     }
     private func dimension(_ title: String, value: Binding<Int>) -> some View {

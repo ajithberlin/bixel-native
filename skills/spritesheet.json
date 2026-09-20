@@ -10,7 +10,12 @@
       "cols": { "type": "integer", "description": "Number of columns" },
       "rows": { "type": "integer", "description": "Number of rows" },
       "frame_width": { "type": "integer" },
-      "frame_height": { "type": "integer" }
+      "frame_height": { "type": "integer" },
+      "transparent": {
+        "type": "boolean",
+        "default": true,
+        "description": "Request real alpha=0 outside each frame; use false for opaque terrain sheets."
+      }
     }
   }
 }

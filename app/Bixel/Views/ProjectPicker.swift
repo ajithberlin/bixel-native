@@ -48,9 +48,10 @@ struct ProjectPicker: View {
     @State private var customWidth = 48
     @State private var customHeight = 48
     @State private var mode: WorkspaceMode = .normal
+    @State private var mapOrientation: MapOrientation = .orthogonal
 
     private var canvasSize: (width: Int, height: Int) {
-        if mode == .map { return (40, 25) }
+        if mode == .map { return (0, 0) }
         return template.isCustom ? (customWidth, customHeight) : (template.width, template.height)
     }
 
@@ -94,9 +95,22 @@ struct ProjectPicker: View {
                 .font(.caption).foregroundColor(StudioTheme.textSecondary)
             Picker("Project type", selection: $mode) {
                 Text("Normal").tag(WorkspaceMode.normal)
-                Text("Map").tag(WorkspaceMode.map)
+                Text("Scene").tag(WorkspaceMode.map)
             }
             .pickerStyle(.segmented)
+            if mode == .map {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scene type").font(.caption).foregroundColor(StudioTheme.textSecondary)
+                    Picker("", selection: $mapOrientation) {
+                        ForEach(MapOrientation.allCases) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    Text("Infinite scene — pan and paint anywhere.")
+                        .font(.caption2)
+                        .foregroundColor(StudioTheme.textSecondary)
+                }
+            }
             HStack {
                 TextField("Project name", text: $name).textFieldStyle(.roundedBorder).onSubmit(create)
                 Button("Create project", action: create).buttonStyle(.borderedProminent).disabled(!canCreate)
@@ -119,7 +133,7 @@ struct ProjectPicker: View {
                 ScrollView {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 12) {
                         ForEach(store.projects) { project in
-                            ProjectCard(project: project, isCurrent: project.id == store.current?.id) {
+                            ProjectCard(project: project, isCurrent: project.id == store.current?.id, thumbnail: store.thumbnail(for: project)) {
                                 if let onSelectProject = onSelectProject {
                                     dismiss()
                                     onSelectProject(project)
@@ -140,30 +154,40 @@ struct ProjectPicker: View {
 
     private var footer: some View {
         HStack {
+            #if os(macOS)
+            Text("Saved in Application Support / Bixel / Projects")
+                .font(.caption)
+                .foregroundColor(StudioTheme.textDisabled)
+            #else
             Text("Saved in Documents / Bixel / Projects")
                 .font(.caption)
                 .foregroundColor(StudioTheme.textDisabled)
+            #endif
             Spacer()
+            #if os(macOS)
             if let current = store.current {
                 Button("AI Files") {
                     NSWorkspace.shared.open(store.root.appendingPathComponent("\(current.id)/.studio/cache/ai"))
                 }
                 .font(.caption)
             }
+            #endif
         }
     }
 
     private var canCreate: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !assistant.busy
-            && canvasSize.width >= 1 && canvasSize.height >= 1
-            && canvasSize.width <= 4096 && canvasSize.height <= 4096
+            && (mode == .map || (canvasSize.width >= 1 && canvasSize.height >= 1
+            && canvasSize.width <= 4096 && canvasSize.height <= 4096))
     }
 
     private func create() {
         guard canCreate else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let created = store.createProject(name: trimmedName, mode: mode, width: canvasSize.width, height: canvasSize.height) {
+        if let created = store.createProject(name: trimmedName, mode: mode,
+                                             width: canvasSize.width, height: canvasSize.height,
+                                             infinite: mode == .map, orientation: mapOrientation) {
             dismiss()
             onSelectProject?(created)
         } else {
@@ -228,6 +252,7 @@ private struct TemplateCard: View {
 private struct ProjectCard: View {
     let project: StudioProject
     let isCurrent: Bool
+    let thumbnail: CGImage?
     let action: () -> Void
 
     var body: some View {
@@ -235,9 +260,18 @@ private struct ProjectCard: View {
             VStack(alignment: .leading, spacing: 8) {
                 ZStack {
                     StudioTheme.panelElevated
-                    Image(systemName: "square.grid.3x3.fill")
-                        .font(.system(size: 22))
-                        .foregroundColor(StudioTheme.accent.opacity(0.7))
+                    if let thumbnail {
+                        CheckerboardView(cell: 6)
+                            .opacity(0.3)
+                        Image(decorative: thumbnail, scale: 1.0)
+                            .resizable()
+                            .interpolation(.none)
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        Image(systemName: "square.grid.3x3.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(StudioTheme.accent.opacity(0.7))
+                    }
                     if isCurrent {
                         VStack {
                             HStack {

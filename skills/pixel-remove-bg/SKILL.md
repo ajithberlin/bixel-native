@@ -5,7 +5,9 @@ description: Remove the background from pixel-art and game-asset images to get t
 
 # Remove Background
 
-Deterministic background removal via `scripts/remove_bg.py`. Prefer this over re-generating with transparency — it is exact and instant.
+Deterministic background removal via `scripts/remove_bg.py`. Image-generation
+skills must request real alpha first; use this skill when the provider returns
+an opaque fallback or when an existing image needs a cutout.
 
 ## Quick start
 
@@ -18,6 +20,9 @@ python3 scripts/remove_bg.py in.png out.png --mode key --color FF00FF
 
 # white studio background
 python3 scripts/remove_bg.py in.png out.png --mode white
+
+# generated chroma fallback (keys every matching pixel, including enclosed ones)
+python3 scripts/remove_bg.py in.png out.png --mode key --color 00FF00 --despill
 ```
 
 ## Mode selection
@@ -36,6 +41,11 @@ python3 scripts/remove_bg.py in.png out.png --mode white
 - `--tolerance 32` default. Raise (40–60) when the AI bg has subtle noise/vignette; lower (16–24) when the subject edge color is close to the bg.
 - Leftover colored halo around the subject → add `--despill`, or `--feather 1` to bite 1px into the edge.
 - Subject accidentally touches the border → that region leaks into the subject; switch to `key` mode with the sampled bg color instead.
+
+For AI-generated no-background assets, use `key --color 00FF00` for the
+requested green fallback or `key --color FF00FF` for the magenta fallback.
+Do not deliver the opaque keyed source as the final sprite; verify that the
+clean output has background pixels with alpha=0.
 
 ## Batch
 

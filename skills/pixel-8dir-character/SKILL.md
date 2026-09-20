@@ -25,7 +25,7 @@ Also: **view** (`low top-down` default, `top-down`, `side`) and canvas ≤ 160×
    - Asymmetric (sword in right hand, shoulder pad on one side): generate all 8; mirroring would flip the handedness.
 3. **Generate the missing directions**, each with the master frame as reference image:
 
-   > Same pixel art character as the reference image, identical outfit, palette, proportions and [view] view, rotated to face [direction: north / away from camera | north-east / ... ]. Feet planted at the same baseline, same height, transparent background, crisp pixel art, no text.
+   > Same pixel art character as the reference image, identical outfit, palette, proportions and [view] view, rotated to face [direction: north / away from camera | north-east / ... ]. Feet planted at the same baseline, same height, PNG with real alpha=0 transparent background, no checkerboard or shadow. If alpha is unavailable, use flat #00FF00 chroma green, crisp pixel art, no text, then run pixel-remove-bg in key mode before packing.
 
    Use compass words AND a plain-language cue ("away from camera", "three-quarter back-left") — models confuse "north" alone.
 4. **Name files by direction** (`hero_S.png`, `hero_SW.png`, ...) — the packer reads direction from the filename.

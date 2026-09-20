@@ -31,9 +31,10 @@ fn sheet_import_preserves_existing_pixels_and_aligns_row_major_cells() {
     let mut doc = AsepriteDoc::new(2,1, &[]);
     doc.set_pixel(0,0,0,0,Rgba{r:99,g:0,b:0,a:255});
     let pixels: Vec<u8> = (1..=8).flat_map(|r| [r,0,0,255]).collect();
-    let layer = doc.import_sheet_data(&pixels,4,2,2,1,"Sheet").unwrap();
+    let _first = doc.import_sheet_data(&pixels,4,2,2,1,"Sheet").unwrap();
     assert_eq!((doc.width,doc.height,doc.frames.len()),(2,1,4));
     for frame in 0..4 {
+        let layer = *doc.frame_layers(frame).last().unwrap();
         assert_eq!(doc.get_pixel(layer,frame,0,0).r, (frame*2+1) as u8);
         assert_eq!(doc.get_pixel(layer,frame,1,0).r, (frame*2+2) as u8);
     }
@@ -74,7 +75,10 @@ fn packed_frames_use_row_major_order_with_transparent_padding_and_no_mutation() 
     let mut doc = AsepriteDoc::new(2,1,&[]);
     doc.add_frame(100);
     doc.add_frame(100);
-    for frame in 0..3 { doc.set_pixel(0,frame,0,0,Rgba{r:frame as u8+1,g:0,b:0,a:255}); }
+    for frame in 0..3 {
+        let top = *doc.frame_layers(frame).last().unwrap();
+        doc.set_pixel(top,frame,0,0,Rgba{r:frame as u8+1,g:0,b:0,a:255});
+    }
     let empty_layer = doc.add_layer(Some("Empty"));
     doc.layers[empty_layer].cels[0] = None;
     let (pixels,w,h) = doc.pack_frames(2).unwrap();

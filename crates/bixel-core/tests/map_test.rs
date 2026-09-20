@@ -5,9 +5,10 @@
 //! produced by the real Tiled editor must round-trip losslessly.
 
 use bixel_core::map::{
-    GID_D_FLIP, GID_H_FLIP, GID_V_FLIP, TileMap, MAX_MAP_DIM,
+    GID_D_FLIP, GID_H_FLIP, GID_V_FLIP, Orientation, RenderOrder, StaggerAxis, StaggerIndex,
+    TileMap, MAX_MAP_DIM,
 };
-use bixel_core::tilemap::Pattern;
+use bixel_core::tilemap::{MapGeometry, Pattern};
 use serde_json::Value;
 
 /// 32×32 two-tile RGBA sheet: tile 0 solid red, tile 1 solid green.
@@ -508,4 +509,212 @@ fn image_layer_round_trips_through_tiled_json() {
     assert!((layer.opacity - 0.5).abs() < 1e-6);
     // Pixels are not serialized; the host uploads them after load.
     assert!(layer.pixels.is_empty());
+}
+
+#[test]
+fn image_layer_transform_moves_scales_and_round_trips() {
+    let mut map = TileMap::new(8, 8, 1, 1);
+    let pixels = vec![
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 0, 255,
+    ];
+    let idx = map.add_image_layer(Some("Reference"), "assets/reference.png", 2, 2, 0.0, 0.0);
+    assert!(map.set_image_layer_pixels(idx, &pixels));
+
+    assert!(map.set_image_layer_transform(idx, 1.0, 2.0, 4, 4));
+    let layer = map.image_layer(idx).unwrap();
+    assert_eq!((layer.x, layer.y), (1.0, 2.0));
+    assert_eq!((layer.display_width, layer.display_height), (4, 4));
+
+    // Scaling is nearest-neighbour: each source pixel occupies a 2×2 block.
+    let out = map.composite();
+    let p = |x: usize, y: usize| (y * 8 + x) * 4;
+    assert_eq!(&out[p(1, 2)..p(1, 2) + 4], &[255, 0, 0, 255]);
+    assert_eq!(&out[p(4, 2)..p(4, 2) + 4], &[0, 255, 0, 255]);
+    assert_eq!(&out[p(1, 5)..p(1, 5) + 4], &[0, 0, 255, 255]);
+    assert_eq!(&out[p(4, 5)..p(4, 5) + 4], &[255, 255, 0, 255]);
+
+    map.snapshot();
+    assert!(map.set_image_layer_transform(idx, 0.0, 0.0, 1, 1));
+    assert!(map.undo());
+    let restored = map.image_layer(idx).unwrap();
+    assert_eq!((restored.x, restored.y), (1.0, 2.0));
+    assert_eq!((restored.display_width, restored.display_height), (4, 4));
+    assert!(map.redo());
+    let redone = map.image_layer(idx).unwrap();
+    assert_eq!((redone.x, redone.y), (0.0, 0.0));
+    assert_eq!((redone.display_width, redone.display_height), (1, 1));
+
+    let json = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&json).unwrap();
+    let layer = value["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["type"] == "imagelayer")
+        .unwrap();
+    assert_eq!(layer["bixel_display_width"], 1);
+    assert_eq!(layer["bixel_display_height"], 1);
+    let restored = TileMap::from_tiled_json(&json).unwrap();
+    let image_index = restored.layers.iter().position(|l| l.is_image()).unwrap();
+    let restored = restored.image_layer(image_index).unwrap();
+    assert_eq!((restored.display_width, restored.display_height), (1, 1));
+}
+
+#[test]
+fn image_layer_transform_rejects_zero_dimensions() {
+    let mut map = TileMap::new(4, 4, 1, 1);
+    let idx = map.add_image_layer(Some("Reference"), "assets/reference.png", 2, 2, 3.0, 4.0);
+    assert!(!map.set_image_layer_transform(idx, 9.0, 10.0, 0, 2));
+    let layer = map.image_layer(idx).unwrap();
+    assert_eq!((layer.x, layer.y), (3.0, 4.0));
+    assert_eq!((layer.display_width, layer.display_height), (2, 2));
+}
+
+#[test]
+fn isometric_and_staggered_projection_round_trip() {
+    let iso = MapGeometry::new(
+        Orientation::Isometric, 4, 4, 32, 16, StaggerAxis::Y, StaggerIndex::Odd,
+    );
+    for cy in 0..4i64 {
+        for cx in 0..4i64 {
+            let (ox, oy) = iso.tile_origin(cx, cy);
+            let (rx, ry) = iso.pixel_to_cell((ox + 16) as f64, (oy + 8) as f64);
+            assert_eq!((rx, ry), (cx, cy), "isometric cell {cx},{cy}");
+        }
+    }
+
+    for index in [StaggerIndex::Odd, StaggerIndex::Even] {
+        let st = MapGeometry::new(
+            Orientation::Staggered, 4, 4, 32, 16, StaggerAxis::Y, index,
+        );
+        for cy in 0..4i64 {
+            for cx in 0..4i64 {
+                let (ox, oy) = st.tile_origin(cx, cy);
+                let (rx, ry) = st.pixel_to_cell((ox + 16) as f64, (oy + 8) as f64);
+                assert_eq!((rx, ry), (cx, cy), "staggered {index:?} cell {cx},{cy}");
+            }
+        }
+    }
+}
+
+#[test]
+fn isometric_pixel_size_and_composite_placement() {
+    let mut map = TileMap::new(2, 2, 32, 16);
+    map.orientation = Orientation::Isometric;
+    assert_eq!((map.pixel_width(), map.pixel_height()), (80, 32));
+
+    let img = solid_image(32, 16, 255, 0, 0);
+    let ts = map
+        .add_tileset("t", "assets/t.png", 32, 16, 32, 16, 0, 0)
+        .unwrap();
+    map.set_tileset_pixels(ts, &img);
+    map.set_tile(0, 0, 0, 1); // top cell → image origin (32, 0)
+    map.set_tile(0, 1, 1, 1); // bottom cell → image origin (32, 16)
+
+    let out = map.composite();
+    let w = map.pixel_width();
+    let px = |x: usize, y: usize| (y * w + x) * 4;
+    assert_eq!(out[px(32, 0)], 255);
+    assert_eq!(out[px(32, 0) + 3], 255);
+    // Left of the projected tile is untouched.
+    assert_eq!(out[px(31, 0) + 3], 0);
+    assert_eq!(out[px(32, 16) + 3], 255);
+}
+
+#[test]
+fn orientation_and_tileoffset_round_trip() {
+    let mut map = TileMap::new(3, 3, 32, 16);
+    map.orientation = Orientation::Isometric;
+    map.render_order = RenderOrder::LeftUp;
+    map.add_tileset("t", "assets/t.png", 64, 32, 32, 16, 0, 0).unwrap();
+    map.set_tileset_tile_offset(0, 0, -8);
+    assert_eq!(map.tileset_tile_offset(0), Some((0, -8)));
+
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["orientation"], "isometric");
+    assert_eq!(value["renderorder"], "left-up");
+    assert_eq!(value["tilesets"][0]["tileoffset"]["y"], -8);
+
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert_eq!(back.orientation, Orientation::Isometric);
+    assert_eq!(back.render_order, RenderOrder::LeftUp);
+    assert_eq!(back.tilesets[0].tile_offset, (0, -8));
+}
+
+#[test]
+fn staggered_round_trip_and_hexagonal_rejected() {
+    let mut map = TileMap::new(4, 3, 32, 16);
+    map.orientation = Orientation::Staggered;
+    map.stagger_axis = StaggerAxis::Y;
+    map.stagger_index = StaggerIndex::Even;
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["orientation"], "staggered");
+    assert_eq!(value["staggeraxis"], "y");
+    assert_eq!(value["staggerindex"], "even");
+
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert_eq!(back.orientation, Orientation::Staggered);
+    assert_eq!(back.stagger_index, StaggerIndex::Even);
+
+    // `isometric_staggered` is accepted as an alias for Tiled's staggered layout.
+    let alias = r#"{"type":"map","orientation":"isometric_staggered","width":2,"height":2,
+        "tilewidth":32,"tileheight":16,"tilesets":[],"layers":[]}"#;
+    assert_eq!(TileMap::from_tiled_json(alias).unwrap().orientation, Orientation::Staggered);
+
+    let hex = r#"{"type":"map","orientation":"hexagonal","width":2,"height":2,
+        "tilewidth":16,"tileheight":16,"tilesets":[],"layers":[]}"#;
+    assert!(TileMap::from_tiled_json(hex).is_err());
+}
+
+#[test]
+fn infinite_isometric_origin_is_absolute() {
+    let mut geo = MapGeometry::new(
+        Orientation::Isometric, 10, 10, 32, 16, StaggerAxis::Y, StaggerIndex::Odd,
+    );
+    geo.infinite = true;
+    let before = geo.tile_origin(3, 4);
+    // Growing the storage must not shift existing content.
+    geo.rows = 500;
+    geo.columns = 500;
+    assert_eq!(geo.tile_origin(3, 4), before);
+}
+
+#[test]
+fn infinite_map_grows_and_round_trips_chunks() {
+    let mut map = TileMap::new_infinite(16, 16, Orientation::Orthogonal);
+    assert!(map.infinite);
+    let img = solid_image(16, 16, 255, 0, 0);
+    let ts = map.add_tileset("t", "assets/t.png", 16, 16, 16, 16, 0, 0).unwrap();
+    map.set_tileset_pixels(ts, &img);
+
+    // Paint at negative and positive world coordinates.
+    assert!(map.set_tile(0, -5, -3, 1));
+    assert!(map.set_tile(0, 10, 12, 1));
+    assert_eq!(map.get_tile(0, -5, -3), 1);
+    assert_eq!(map.get_tile(0, 10, 12), 1);
+    assert_eq!(map.get_tile(0, 100, 100), 0);
+    assert_eq!(map.content_cell_bounds(), Some((-5, -3, 10, 12)));
+
+    // Region composite renders the painted tile at its world position.
+    let out = map.composite_region(10 * 16, 12 * 16, 16, 16);
+    assert_eq!(out.len(), 16 * 16 * 4);
+    assert_eq!((out[0], out[1], out[2], out[3]), (255, 0, 0, 255));
+
+    // Serialized as a Tiled infinite map with chunks.
+    let text = map.to_tiled_json().unwrap();
+    let value: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["infinite"], true);
+    assert_eq!(value["width"], 0);
+    assert_eq!(value["height"], 0);
+    assert!(value["layers"][0]["chunks"].is_array());
+
+    // Round-trips world coordinates through the chunked format.
+    let back = TileMap::from_tiled_json(&text).unwrap();
+    assert!(back.infinite);
+    assert_eq!(back.get_tile(0, -5, -3), 1);
+    assert_eq!(back.get_tile(0, 10, 12), 1);
+    assert_eq!(back.content_cell_bounds(), Some((-5, -3, 10, 12)));
 }

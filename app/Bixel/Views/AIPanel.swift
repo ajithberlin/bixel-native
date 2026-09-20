@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct AIPanel: View {
     @ObservedObject var model: EditorModel
     @ObservedObject var session: AssistantSession
+    @ObservedObject var store: ProjectStore
     var onClose: () -> Void
     var expanded: Bool
     var onExpand: () -> Void
@@ -14,10 +15,23 @@ struct AIPanel: View {
     @State private var archived: AssistantConversation?
     @State private var historySearch = ""
     @State private var commandIndex = 0
+    @State private var pickerSearch = ""
+
+    private var activeQuery: String {
+        (session.query ?? pickerSearch).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private var commands: [AssistantCommand] {
-        let query = (session.query ?? "").lowercased()
-        return session.commands.filter { query.isEmpty || $0.id.contains(query) || $0.title.lowercased().contains(query) }
+        let q = activeQuery
+        if q.isEmpty {
+            return session.commands
+        }
+        return session.commands.compactMap { cmd -> (AssistantCommand, Int)? in
+            guard let score = cmd.matchScore(for: q) else { return nil }
+            return (cmd, score)
+        }
+        .sorted { $0.1 > $1.1 }
+        .map { $0.0 }
     }
     private var commandMenuVisible: Bool { showCommands || session.query != nil }
 
@@ -67,7 +81,26 @@ struct AIPanel: View {
                     .overlay(Label("Drop files to attach", systemImage: "paperclip")).padding(8).allowsHitTesting(false)
             }
         }
-        .background(AppSettingsOpener(openOnAppear: !session.status.connected))
+        .background(AppSettingsOpener(openOnAppear: needsProviderSettings))
+        .onAppear {
+            if session.commands.isEmpty {
+                session.refreshCommands()
+            }
+            #if os(iOS)
+            RemoteClientAIBridge.shared.refreshStatus()
+            #endif
+        }
+    }
+
+    /// Prompt for provider settings only when there is no usable connection at
+    /// all. On iPad with a Mac connected, the Mac owns the provider, so opening
+    /// the local settings here would be misleading.
+    private var needsProviderSettings: Bool {
+        if session.status.connected { return false }
+        #if os(iOS)
+        if RemoteClientAIBridge.shared.isConnected { return false }
+        #endif
+        return true
     }
 
     private func roleDot(_ role: String) -> Color {
@@ -85,6 +118,7 @@ struct AIPanel: View {
             iconButton("Recent chats", "clock.arrow.circlepath") { showHistory.toggle() }
             iconButton("New chat", "square.and.pencil") { session.newChat(); showHistory = false; archived = nil }.disabled(session.busy)
             iconButton(expanded ? "Reduce sidebar" : "Expand sidebar", expanded ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: onExpand)
+            iconButton("AI Settings", "gearshape") { AppSettings.requestOpen() }
             iconButton("Close assistant", "xmark", action: onClose)
         }
         .padding(.horizontal, 16)
@@ -112,7 +146,7 @@ struct AIPanel: View {
         LazyVStack(alignment: .leading, spacing: 25) {
             if session.messages.isEmpty { welcome.id("welcome") }
             ForEach(session.messages) { message in
-                AssistantMessageView(message: message, commands: session.commands, model: model)
+                AssistantMessageView(message: message, commands: session.commands, model: model, store: store)
             }
             Color.clear.frame(height: 1).id("bottom")
         }.padding(18)
@@ -134,7 +168,7 @@ struct AIPanel: View {
                 Text(archived.title).font(.system(size: 13, weight: .semibold))
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
-                        ForEach(archived.messages) { AssistantMessageView(message: $0, commands: session.commands, model: model) }
+                        ForEach(archived.messages) { AssistantMessageView(message: $0, commands: session.commands, model: model, store: store) }
                     }
                 }
             } else {
@@ -171,7 +205,7 @@ struct AIPanel: View {
             }, onSubmit: submitComposer, onMove: { offset in
                 guard commandMenuVisible, !commands.isEmpty else { return false }
                 commandIndex = (commandIndex + offset + commands.count) % commands.count; return true
-            }, onEscape: { session.query = nil; showCommands = false })
+            }, onEscape: { session.query = nil; showCommands = false; pickerSearch = "" })
                 .frame(height: session.attachments.isEmpty ? 90 : 70)
             HStack(spacing: 8) {
                 Menu {
@@ -232,13 +266,51 @@ struct AIPanel: View {
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(StudioTheme.hairlineStrong, lineWidth: 1))
     }
 
+    private var pickerTitle: String {
+        let q = activeQuery
+        if commands.isEmpty {
+            return q.isEmpty ? "No skills installed" : "No matching skills for \"\(q)\""
+        }
+        if !q.isEmpty {
+            return "Skills matching \"\(q)\""
+        }
+        return "Add a skill"
+    }
+
     private var commandPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(commands.isEmpty ? "No matching skills" : "Add a skill").font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary)
+                Text(pickerTitle).font(.system(size: 11)).foregroundColor(StudioTheme.textSecondary)
                 Spacer()
-                iconButton("Close skill menu", "xmark") { showCommands = false; session.query = nil }
+                iconButton("Close skill menu", "xmark") {
+                    showCommands = false
+                    session.query = nil
+                    pickerSearch = ""
+                }
             }.padding(.horizontal, 8)
+            if session.query == nil {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textSecondary)
+                    TextField("Search skills…", text: $pickerSearch)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(StudioTheme.textPrimary)
+                    if !pickerSearch.isEmpty {
+                        Button { pickerSearch = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(StudioTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(StudioTheme.panel, in: RoundedRectangle(cornerRadius: 7))
+                .padding(.horizontal, 4)
+            }
             if !commands.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -248,7 +320,14 @@ struct AIPanel: View {
                                     HStack(spacing: 10) {
                                         Image(systemName: "shippingbox").foregroundColor(StudioTheme.accent)
                                         VStack(alignment: .leading, spacing: 3) {
-                                            Text(command.title).font(.system(size: 12, weight: .medium))
+                                            HStack(spacing: 6) {
+                                                Text(command.title).font(.system(size: 12, weight: .medium))
+                                                if command.origin == .agent {
+                                                    Text("/\(command.id)")
+                                                        .font(.system(size: 10, design: .monospaced))
+                                                        .foregroundColor(StudioTheme.accent.opacity(0.8))
+                                                }
+                                            }
                                             Text(command.detail).font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary).lineLimit(2)
                                         }
                                         Spacer(minLength: 0)
@@ -266,11 +345,15 @@ struct AIPanel: View {
     }
     private func insert(_ command: AssistantCommand) {
         NotificationCenter.default.post(name: .assistantInsertCommand, object: command)
-        showCommands = false; session.query = nil
+        showCommands = false; session.query = nil; pickerSearch = ""
     }
     private func submitComposer() {
-        if commandMenuVisible, !commands.isEmpty { insert(commands[min(commandIndex, commands.count - 1)]) }
-        else { send() }
+        if commandMenuVisible, !commands.isEmpty {
+            let index = max(0, min(commandIndex, commands.count - 1))
+            insert(commands[index])
+        } else {
+            send()
+        }
     }
     private func send() { showHistory = false; session.send(model: model) }
     private func iconButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
@@ -287,7 +370,7 @@ struct AssistantAttachmentThumbnail: View {
             ZStack(alignment: .topTrailing) {
                 Group {
                     if let image = file.image {
-                        Image(nsImage: image).resizable().interpolation(.none).scaledToFill()
+                        Image(platformImage: image).resizable().interpolation(.none).scaledToFill()
                     } else {
                         VStack(spacing: 6) {
                             Image(systemName: "doc.text").font(.system(size: 22))
@@ -309,6 +392,7 @@ private struct AssistantMessageView: View {
     let message: AssistantMessage
     let commands: [AssistantCommand]
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if message.isUser {
@@ -319,11 +403,10 @@ private struct AssistantMessageView: View {
                 }
                 Text(inlineText).font(.system(size: 13)).lineSpacing(5).textSelection(.enabled)
             } else {
-                ForEach(message.blocks) { block in AssistantActivityNode(block: block, commands: commands, model: model) }
+                ForEach(message.blocks) { block in AssistantActivityNode(block: block, commands: commands, model: model, store: store) }
                 if !message.blocks.isEmpty && !message.blocks.contains(where: \.running) {
                     Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(message.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n"), forType: .string)
+                        PlatformPasteboard.copy(string: message.blocks.filter { $0.kind == .text }.map(\.text).joined(separator: "\n\n"))
                     } label: { Image(systemName: "doc.on.doc").font(.system(size: 10)).foregroundColor(StudioTheme.textSecondary) }
                         .buttonStyle(.plain).help("Copy response")
                 }
@@ -346,6 +429,7 @@ private struct AssistantActivityNode: View {
     let block: AssistantBlock
     let commands: [AssistantCommand]
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     @State private var expanded = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -375,7 +459,7 @@ private struct AssistantActivityNode: View {
                     }.padding(.leading, 20).overlay(alignment: .leading) { Rectangle().fill(StudioTheme.hairlineStrong).frame(width: 1).padding(.leading, 5) }
                 }
             }
-            ForEach(block.artifacts) { artifact in AssistantArtifactCard(artifact: artifact, model: model) }
+            ForEach(block.artifacts) { artifact in AssistantArtifactCard(artifact: artifact, model: model, store: store) }
         }
     }
     private var title: String {
@@ -394,6 +478,7 @@ private struct AssistantActivityNode: View {
 private struct AssistantArtifactCard: View {
     let artifact: AssistantArtifact
     @ObservedObject var model: EditorModel
+    @ObservedObject var store: ProjectStore
     @State private var showImage = false
     @State private var applied = false
 
@@ -408,9 +493,9 @@ private struct AssistantArtifactCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let image = NSImage(data: artifact.data) {
+            if let image = makePlatformImage(data: artifact.data) {
                 Button { showImage = true } label: {
-                    Image(nsImage: image).resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 230)
+                    Image(platformImage: image).resizable().interpolation(.none).scaledToFit().frame(maxWidth: .infinity, maxHeight: 230)
                         .padding(8).background(StudioTheme.background, in: RoundedRectangle(cornerRadius: 10))
                 }.buttonStyle(.plain).help("View image or drag onto the canvas")
                 .onDrag { imageProvider(artifact.data) }
@@ -430,6 +515,14 @@ private struct AssistantArtifactCard: View {
                     .background((artifact.isSource ? StudioTheme.accentSoft : StudioTheme.panelElevated), in: Capsule())
 
                 Button("View") { showImage = true }.buttonStyle(.plain).font(.system(size: 10))
+
+                if store.isMapActive {
+                    Button("Add as tileset") {
+                        store.requestTileset(name: artifact.name, data: artifact.data)
+                    }
+                    .font(.system(size: 10))
+                    .help("Slice this image into a tileset you can paint with on the map")
+                }
 
                 if isSpriteSheet {
                     Button(applied ? "Added" : "Add as animation") {
@@ -457,7 +550,7 @@ private struct AssistantArtifactCard: View {
         .sheet(isPresented: $showImage) {
             VStack(spacing: 12) {
                 HStack { Text(artifact.name).font(.headline); Spacer(); Button("Done") { showImage = false } }
-                if let image = NSImage(data: artifact.data) { Image(nsImage: image).resizable().interpolation(.none).scaledToFit() }
+                if let image = makePlatformImage(data: artifact.data) { Image(platformImage: image).resizable().interpolation(.none).scaledToFit() }
             }.padding(20).frame(minWidth: 500, idealWidth: 700, minHeight: 400, idealHeight: 600).background(StudioTheme.background)
         }
     }

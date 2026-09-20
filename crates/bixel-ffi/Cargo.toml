@@ -8,7 +8,7 @@ description = "C ABI bindings for the bixel-core engine (consumed by Swift via c
 
 [lib]
 name = "bixel"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 
 [dependencies]
 bixel-core = { path = "../bixel-core" }

@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 
 struct AIGeneratedImageReviewView: View {
     let draft: AIGeneratedImageDraft
@@ -22,10 +24,10 @@ struct AIGeneratedImageReviewView: View {
                     .foregroundColor(StudioTheme.bixelGreen)
             }
 
-            if let image = NSImage(data: draft.data) {
+            if let image = makePlatformImage(data: draft.data) {
                 ZStack {
                     CheckerboardView(cell: 12)
-                    Image(nsImage: image)
+                    Image(platformImage: image)
                         .resizable()
                         .interpolation(.none)
                         .scaledToFit()
@@ -130,8 +132,8 @@ private struct AIGalleryCard: View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack {
                 CheckerboardView(cell: 7)
-                if let image = NSImage(data: item.data) {
-                    Image(nsImage: image)
+                if let image = makePlatformImage(data: item.data) {
+                    Image(platformImage: image)
                         .resizable()
                         .interpolation(.none)
                         .scaledToFit()
@@ -179,10 +181,10 @@ struct AIGalleryImagePreview: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            if let image = NSImage(data: item.data) {
+            if let image = makePlatformImage(data: item.data) {
                 ZStack {
                     CheckerboardView(cell: 12)
-                    Image(nsImage: image)
+                    Image(platformImage: image)
                         .resizable()
                         .interpolation(.none)
                         .scaledToFit()

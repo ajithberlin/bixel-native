@@ -9,6 +9,7 @@
 // disabled, allowing the GPU / WindowServer to handle rendering at 120 FPS
 // with zero CPU overhead.
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import QuartzCore
@@ -24,7 +25,7 @@ struct CanvasView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> PixelCanvas {
         let view = PixelCanvas()
-        view.registerForDraggedTypes([.png])
+        view.registerForDraggedTypes([.png, NSPasteboard.PasteboardType(ColorDropPayload.typeIdentifier)])
         view.coordinator = context.coordinator
         context.coordinator.connect(view)
         return view
@@ -216,14 +217,16 @@ final class PixelCanvas: NSView {
     private let artboardShadowLayer = CALayer()
     private let artboardLayer = CALayer()
     private let checkerboardLayer = CALayer()
-    private let onionLayer2 = CALayer()
-    private let onionLayer1 = CALayer()
+    private static let maxOnionLayers = 5
+    private let onionLayers: [CALayer] = (0..<5).map { _ in CALayer() }
     private let canvasImageLayer = CALayer()
     private let pixelGridLayer = CAShapeLayer()
     private let selectionLayer = CAShapeLayer()
     private let selectionHandlesLayer = CAShapeLayer()
     private let rotationHandleLayer = CAShapeLayer()
     private let borderLayer = CALayer()
+    /// Procreate-style outline shown while a palette color is dragged in.
+    private let colorDropHighlightLayer = CAShapeLayer()
     /// Dark veil over the workspace; an even-odd hole lets the artboard shine.
     private let workspaceDimLayer = CAShapeLayer()
     /// Pending imports deliberately live at the workspace root rather than in
@@ -324,15 +327,13 @@ final class PixelCanvas: NSView {
         artboardLayer.addSublayer(checkerboardLayer)
 
         // Onion skin layers (nearest-neighbour)
-        onionLayer2.magnificationFilter = .nearest
-        onionLayer2.minificationFilter = .nearest
-        onionLayer2.isHidden = true
-        artboardLayer.addSublayer(onionLayer2)
-
-        onionLayer1.magnificationFilter = .nearest
-        onionLayer1.minificationFilter = .nearest
-        onionLayer1.isHidden = true
-        artboardLayer.addSublayer(onionLayer1)
+        // Added in reverse so closest frame (distance 1) is above older frames
+        for layer in onionLayers.reversed() {
+            layer.magnificationFilter = .nearest
+            layer.minificationFilter = .nearest
+            layer.isHidden = true
+            artboardLayer.addSublayer(layer)
+        }
 
         // Main artwork layer (nearest-neighbour)
         canvasImageLayer.magnificationFilter = .nearest
@@ -375,6 +376,13 @@ final class PixelCanvas: NSView {
         borderLayer.borderColor = NSColor(white: 1.0, alpha: 0.20).cgColor
         borderLayer.borderWidth = 1.0
         artboardLayer.addSublayer(borderLayer)
+
+        colorDropHighlightLayer.fillColor = NSColor(red: 0.15, green: 0.55, blue: 1.0, alpha: 0.12).cgColor
+        colorDropHighlightLayer.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        colorDropHighlightLayer.lineWidth = 2.0
+        colorDropHighlightLayer.lineDashPattern = [7, 5]
+        colorDropHighlightLayer.isHidden = true
+        artboardLayer.addSublayer(colorDropHighlightLayer)
 
         // Workspace dim: darkens everything except the artboard, so the work
         // area "pops" (Photoshop/Procreate focus mode). Hole punches in the
@@ -459,9 +467,12 @@ final class PixelCanvas: NSView {
 
         artboardLayer.frame = artboardFrame
         borderLayer.frame = artboardBounds
+        colorDropHighlightLayer.frame = artboardBounds
+        colorDropHighlightLayer.path = CGPath(rect: artboardBounds.insetBy(dx: 1, dy: 1), transform: nil)
         checkerboardLayer.frame = artboardBounds
-        onionLayer2.frame = artboardBounds
-        onionLayer1.frame = artboardBounds
+        for layer in onionLayers {
+            layer.frame = artboardBounds
+        }
         canvasImageLayer.frame = artboardBounds
         pixelGridLayer.frame = artboardBounds
         selectionLayer.frame = artboardBounds
@@ -654,24 +665,31 @@ final class PixelCanvas: NSView {
 
         // Onion skinning content
         if needOnion {
-            if viewport.onionSkin && model.frame > 0 {
-                let p1 = model.compositeFrame(model.frame - 1)
-                onionLayer1.contents = makeCGImage(pixels: p1, width: model.width, height: model.height)
-                onionLayer1.opacity = Float(viewport.onionOpacity)
-                onionLayer1.isHidden = false
-            } else {
-                onionLayer1.isHidden = true
-                onionLayer1.contents = nil
-            }
-
-            if viewport.onionSkin && viewport.onionFrames >= 2 && model.frame > 1 {
-                let p2 = model.compositeFrame(model.frame - 2)
-                onionLayer2.contents = makeCGImage(pixels: p2, width: model.width, height: model.height)
-                onionLayer2.opacity = Float(viewport.onionOpacity * 0.5)
-                onionLayer2.isHidden = false
-            } else {
-                onionLayer2.isHidden = true
-                onionLayer2.contents = nil
+            let state = OnionSkinRenderState(
+                currentFrame: model.frame,
+                frameCount: model.frameCount,
+                enabled: viewport.onionSkin,
+                frameCountToShow: viewport.onionFrames,
+                opacity: viewport.onionOpacity,
+                colorize: viewport.onionColorize
+            )
+            let specs = state.layers
+            for i in 0..<onionLayers.count {
+                let layer = onionLayers[i]
+                if i < specs.count {
+                    let spec = specs[i]
+                    let pixels = model.compositeFrame(spec.frameIndex)
+                    if let tint = spec.tintColor {
+                        layer.contents = makeTintedCGImage(pixels: pixels, width: model.width, height: model.height, tint: tint)
+                    } else {
+                        layer.contents = makeCGImage(pixels: pixels, width: model.width, height: model.height)
+                    }
+                    layer.opacity = Float(spec.opacity)
+                    layer.isHidden = false
+                } else {
+                    layer.isHidden = true
+                    layer.contents = nil
+                }
             }
         }
 
@@ -687,7 +705,9 @@ final class PixelCanvas: NSView {
         signature = signature &* 131_071
         signature = signature ^ (coordinator?.viewport.onionSkin == true ? 1 : 0)
         signature = signature &* 31
-        signature = signature ^ ((coordinator?.viewport.onionFrames ?? 1) & 3)
+        signature = signature ^ ((coordinator?.viewport.onionFrames ?? 1) & 7)
+        signature = signature &* 31
+        signature = signature ^ (coordinator?.viewport.onionColorize == true ? 1 : 0)
         signature = signature &* 31
         signature = signature ^ Int(((coordinator?.viewport.onionOpacity ?? 0) * 1000).rounded())
         return signature
@@ -712,11 +732,56 @@ final class PixelCanvas: NSView {
 
     // MARK: - Drag & Drop
 
+    private static let colorDropPasteboardType = NSPasteboard.PasteboardType(ColorDropPayload.typeIdentifier)
+
+    private func colorDropPayload(from sender: NSDraggingInfo) -> ColorDropPayload? {
+        guard let data = sender.draggingPasteboard.data(forType: Self.colorDropPasteboardType) else { return nil }
+        return ColorDropPayload(jsonData: data)
+    }
+
+    private func setColorDropHighlight(_ visible: Bool) {
+        guard colorDropHighlightLayer.isHidden == visible else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        colorDropHighlightLayer.isHidden = !visible
+        CATransaction.commit()
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.availableType(from: [.png]) != nil ? .copy : []
+        if colorDropPayload(from: sender) != nil {
+            setColorDropHighlight(true)
+            return .copy
+        }
+        return sender.draggingPasteboard.availableType(from: [.png]) != nil ? .copy : []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if colorDropPayload(from: sender) != nil { return .copy }
+        return sender.draggingPasteboard.availableType(from: [.png]) != nil ? .copy : []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        setColorDropHighlight(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        setColorDropHighlight(false)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setColorDropHighlight(false)
+        if let payload = colorDropPayload(from: sender) {
+            guard let coordinator else { return false }
+            let point = convert(sender.draggingLocation, from: nil)
+            guard let pixel = coordinator.viewport.viewToDoc(
+                point,
+                viewSize: bounds.size,
+                width: coordinator.model.width,
+                height: coordinator.model.height
+            ) else { return false }
+            coordinator.model.dropFill(payload.color, at: pixel)
+            return coordinator.model.operationError == nil
+        }
         guard let coordinator, let data = sender.draggingPasteboard.data(forType: .png),
               data.count <= 32_000_000 else { return false }
         let point = convert(sender.draggingLocation, from: nil)
@@ -821,6 +886,7 @@ final class PixelCanvas: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
         if spaceDown {
             panning = true
             lastPanPoint = convert(event.locationInWindow, from: nil)
@@ -1161,6 +1227,10 @@ final class PixelCanvas: NSView {
         let viewport = coordinator.viewport
         let model = coordinator.model
 
+        if event.keyCode == 53 {
+            NotificationCenter.default.post(name: .studioDismissPopovers, object: nil)
+        }
+
         if model.floatingImport != nil {
             switch event.keyCode {
             case 123: model.nudgeFloatingImport(dx: -1, dy: 0); return
@@ -1248,3 +1318,4 @@ final class PixelCanvas: NSView {
         }
     }
 }
+#endif
