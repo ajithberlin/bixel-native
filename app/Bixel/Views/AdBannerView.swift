@@ -24,7 +24,7 @@ struct AdBannerView: View {
     }
 
     var body: some View {
-        if adManager.shouldShowAds, let ad = adManager.currentAd {
+        if !subscriptionManager.isAdFree && adManager.shouldShowAds, let ad = adManager.currentAd {
             bannerContainer(for: ad)
                 .transition(.asymmetric(
                     insertion: .opacity.combined(with: .move(edge: .bottom)),

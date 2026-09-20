@@ -147,6 +147,7 @@ final class AdManager: ObservableObject {
                 guard let self = self else { return }
                 if isAdFree {
                     self.shouldShowAds = false
+                    self.ads = []
                     self.stopRotation()
                     self.stopRemoteFeedRefresh()
                     self.remoteLoadTask?.cancel()
@@ -178,16 +179,25 @@ final class AdManager: ObservableObject {
     }
 
     private func loadRemoteAds() {
-        guard !subscriptionManager.isAdFree else { return }
+        guard !subscriptionManager.isAdFree else {
+            self.shouldShowAds = false
+            self.ads = []
+            return
+        }
 
         remoteLoadTask?.cancel()
         remoteLoadTask = Task { [weak self] in
             guard let self else { return }
+            guard !self.subscriptionManager.isAdFree else { return }
 
             do {
                 let creatives = try await RemoteAdFeedLoader(endpoint: Self.remoteFeedURL).load()
                 let remoteAds = Self.makeAdItems(from: creatives)
                 guard !remoteAds.isEmpty, !Task.isCancelled, !self.subscriptionManager.isAdFree else {
+                    if self.subscriptionManager.isAdFree {
+                        self.ads = []
+                        self.shouldShowAds = false
+                    }
                     return
                 }
 
@@ -198,9 +208,8 @@ final class AdManager: ObservableObject {
             } catch is CancellationError {
                 // A purchase or a newer refresh cancelled this request.
             } catch {
-                // Keep a previously loaded remote inventory if one exists. On
-                // first launch, the empty inventory keeps ad UI hidden.
-                if self.ads.isEmpty {
+                // Keep a previously loaded remote inventory if one exists and user is not ad-free.
+                if self.subscriptionManager.isAdFree || self.ads.isEmpty {
                     self.shouldShowAds = false
                     self.stopRotation()
                 }

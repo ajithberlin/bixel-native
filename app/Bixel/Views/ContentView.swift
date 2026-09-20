@@ -154,7 +154,7 @@ struct ContentView: View {
                 } message: { Text(projects.error ?? "") }
 
             // Interstitial Loading Ad Overlay (when opening / launching a project)
-            if showLoadingAd, let project = loadingProject {
+            if showLoadingAd && !subscriptionManager.isAdFree, let project = loadingProject {
                 ProjectLoadingAdView(
                     project: project,
                     onFinish: {
@@ -235,7 +235,7 @@ struct ContentView: View {
     }
 
     private func handleOpenProject(_ project: StudioProject, postAction: (() -> Void)? = nil) {
-        if AdManager.shared.shouldShowAds {
+        if !subscriptionManager.isAdFree && AdManager.shared.shouldShowAds {
             loadingProject = project
             pendingPostAction = postAction
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -601,8 +601,10 @@ struct ContentView: View {
                     .zIndex(1)
             }
 
-            AdBannerView(onPresentPaywall: { showPaywall = true })
-                .fixedSize(horizontal: false, vertical: true)
+            if !subscriptionManager.isAdFree {
+                AdBannerView(onPresentPaywall: { showPaywall = true })
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 8)
@@ -696,9 +698,11 @@ struct ContentView: View {
             Spacer()
             MapWorkspaceFeedback(model: mapModel)
                 .padding(.bottom, 8)
-            AdBannerView(onPresentPaywall: { showPaywall = true })
-                .padding(.horizontal, 20)
-                .padding(.bottom, 6)
+            if !subscriptionManager.isAdFree {
+                AdBannerView(onPresentPaywall: { showPaywall = true })
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 6)
+            }
             HStack(alignment: .bottom) {
                 Spacer()
                 MiniMapOverlay(model: mapModel, viewport: viewport)

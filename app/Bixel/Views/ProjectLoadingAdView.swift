@@ -12,6 +12,7 @@ struct ProjectLoadingAdView: View {
     var onDismiss: (() -> Void)? = nil
     let onPresentPaywall: () -> Void
 
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     @ObservedObject private var adManager = AdManager.shared
     @State private var progress: Double = 0.0
     @State private var canContinue: Bool = false
@@ -32,10 +33,19 @@ struct ProjectLoadingAdView: View {
             }
         }
         .onAppear {
+            if subscriptionManager.isAdFree {
+                finish()
+                return
+            }
             if adManager.currentAd != nil {
                 adManager.recordImpression()
             }
             startLoading()
+        }
+        .onChange(of: subscriptionManager.isAdFree) { isAdFree in
+            if isAdFree {
+                finish()
+            }
         }
         .onDisappear {
             timer?.invalidate()

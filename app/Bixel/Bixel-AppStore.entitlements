@@ -17,9 +17,5 @@
 	<!-- Projects, sources and exports chosen through NSOpenPanel/NSSavePanel. -->
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
-
-	<!-- Read/write the user's Downloads folder for exports. -->
-	<key>com.apple.security.files.downloads.read-write</key>
-	<true/>
 </dict>
 </plist>

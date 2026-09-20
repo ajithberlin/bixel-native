@@ -28,6 +28,7 @@ struct TopBar: View {
 
     @State private var showActions = false
     @State private var showSelectPopover = false
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     #if os(iOS)
     /// Observing the client lets the AI entry point appear on iPad once a Mac
     /// is connected (the assistant runs on the Mac).
@@ -634,6 +635,7 @@ struct ActionsPopover: View {
     var mapModel: TileMapModel? = nil
     var onImportTiledMap: (() -> Void)? = nil
     var onShowHelp: (() -> Void)? = nil
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
 
     @State private var tab: ActionTab = .canvas
 
@@ -922,13 +924,15 @@ struct ActionsPopover: View {
 
             Divider().overlay(StudioTheme.hairline)
 
-            Button {
-                post(.studioUnlockLifetime)
-            } label: {
-                Label("Unlock Lifetime Ad-Free…", systemImage: "crown")
+            if !subscriptionManager.isAdFree {
+                Button {
+                    post(.studioUnlockLifetime)
+                } label: {
+                    Label("Unlock Lifetime Ad-Free…", systemImage: "crown")
+                }
+                .buttonStyle(.plain)
+                .help("Unlock lifetime ad-free")
             }
-            .buttonStyle(.plain)
-            .help("Unlock lifetime ad-free")
 
             Button {
                 post(.studioCustomerCenter)

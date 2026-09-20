@@ -7,6 +7,7 @@
 import Foundation
 import SwiftUI
 import Combine
+import StoreKit
 
 #if canImport(RevenueCat)
 import RevenueCat
@@ -22,7 +23,10 @@ final class SubscriptionManager: NSObject, ObservableObject {
     // MARK: - Configuration Constants
 
     /// Info.plist key populated by the build scripts from the selected dotenv file.
-    static let apiKeyInfoPlistKey = "RevenueCatAPIKey"
+    nonisolated static let apiKeyInfoPlistKey = "RevenueCatAPIKey"
+
+    /// UserDefaults key for persisting ad-free state locally across sessions.
+    nonisolated static let userDefaultsAdFreeKey = "bixel_is_ad_free"
 
     /// Public RevenueCat API key for the current build, if configured.
     static var apiKey: String? {
@@ -36,10 +40,10 @@ final class SubscriptionManager: NSObject, ObservableObject {
     }
 
     /// Entitlement identifier in RevenueCat dashboard.
-    static let entitlementID = "ad_free"
+    nonisolated static let entitlementID = "ad_free"
 
     /// Product identifier configured in App Store Connect and RevenueCat.
-    static let lifetimeProductID = "bixel_ad_free"
+    nonisolated static let lifetimeProductID = "bixel_ad_free"
 
     // MARK: - Published State
 
@@ -68,6 +72,7 @@ final class SubscriptionManager: NSObject, ObservableObject {
     @Published private(set) var lifetimePackage: Package? = nil
     #endif
 
+    private var transactionUpdatesTask: Task<Void, Never>?
     private var hasConfigured = false
 
     /// Whether RevenueCat has been initialized for this build.
@@ -75,6 +80,13 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
     override private init() {
         super.init()
+        // Restore cached purchase state immediately so ad views never show at startup for paid users.
+        self.isAdFree = UserDefaults.standard.bool(forKey: Self.userDefaultsAdFreeKey)
+        startStoreKitTransactionListener()
+    }
+
+    deinit {
+        transactionUpdatesTask?.cancel()
     }
 
     // MARK: - SDK Initialization
@@ -83,10 +95,15 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// Call this once during application startup in `BixelApp.init()`.
     func configure() {
         guard !hasConfigured else { return }
+        hasConfigured = true
+
+        Task {
+            await checkStoreKitEntitlements()
+        }
 
         #if canImport(RevenueCat)
         guard let apiKey = Self.apiKey else {
-            print("[SubscriptionManager] RevenueCat API key is not configured for this build.")
+            print("[SubscriptionManager] RevenueCat API key is not configured for this build. Using StoreKit 2.")
             return
         }
 
@@ -98,7 +115,6 @@ final class SubscriptionManager: NSObject, ObservableObject {
 
         Purchases.configure(withAPIKey: apiKey)
         Purchases.shared.delegate = self
-        hasConfigured = true
         isConfigured = true
 
         Task {
@@ -106,9 +122,51 @@ final class SubscriptionManager: NSObject, ObservableObject {
             await fetchOfferings()
         }
         #else
-        hasConfigured = true
-        print("[SubscriptionManager] RevenueCat SDK is not linked in this build target. Using mock fallback.")
+        print("[SubscriptionManager] RevenueCat SDK is not linked in this build target. Using StoreKit 2.")
         #endif
+    }
+
+    // MARK: - StoreKit 2 Integration
+
+    /// Listen for background App Store transactions (purchases, renewals, revocations).
+    private func startStoreKitTransactionListener() {
+        transactionUpdatesTask?.cancel()
+        transactionUpdatesTask = Task.detached { [weak self] in
+            for await result in Transaction.updates {
+                guard let self = self else { return }
+                switch result {
+                case .verified(let transaction):
+                    if transaction.productID == Self.lifetimeProductID {
+                        let isActive = transaction.revocationDate == nil
+                        await MainActor.run {
+                            self.applyAdFreeEntitlement(isActive: isActive)
+                        }
+                    }
+                    await transaction.finish()
+                case .unverified(let transaction, _):
+                    await transaction.finish()
+                }
+            }
+        }
+    }
+
+    /// Checks active StoreKit 2 entitlements directly with Apple's local daemon.
+    @discardableResult
+    func checkStoreKitEntitlements() async -> Bool {
+        var hasLifetime = false
+        for await result in Transaction.currentEntitlements {
+            if case .verified(let transaction) = result {
+                if transaction.productID == Self.lifetimeProductID && transaction.revocationDate == nil {
+                    hasLifetime = true
+                    break
+                }
+            }
+        }
+        if hasLifetime {
+            applyAdFreeEntitlement(isActive: true)
+            return true
+        }
+        return false
     }
 
     // MARK: - Entitlement & Customer Info
@@ -117,6 +175,10 @@ final class SubscriptionManager: NSObject, ObservableObject {
     @discardableResult
     func refreshCustomerInfo() async -> Bool {
         #if canImport(RevenueCat)
+        guard isConfigured else {
+            return await checkStoreKitEntitlements()
+        }
+
         isLoading = true
         defer { isLoading = false }
 
@@ -127,27 +189,44 @@ final class SubscriptionManager: NSObject, ObservableObject {
             return true
         } catch {
             print("[SubscriptionManager] Failed to fetch customer info: \(error.localizedDescription)")
-            self.errorMessage = "Unable to verify purchase status: \(error.localizedDescription)"
-            return false
+            let skResult = await checkStoreKitEntitlements()
+            if !skResult {
+                self.errorMessage = "Unable to verify purchase status: \(error.localizedDescription)"
+            }
+            return skResult
         }
         #else
-        return false
+        return await checkStoreKitEntitlements()
         #endif
     }
 
     #if canImport(RevenueCat)
     private func updateEntitlements(from info: CustomerInfo) {
-        applyAdFreeEntitlement(isActive: info.entitlements[Self.entitlementID]?.isActive == true)
+        let hasEntitlement = info.entitlements[Self.entitlementID]?.isActive == true
+        let hasLifetimeProduct = info.allPurchasedProductIdentifiers.contains(Self.lifetimeProductID)
+            || info.nonSubscriptions.contains(where: { $0.productIdentifier == Self.lifetimeProductID })
+        let hasAnyActiveEntitlement = !info.entitlements.active.isEmpty
+
+        if hasEntitlement || hasLifetimeProduct || hasAnyActiveEntitlement {
+            applyAdFreeEntitlement(isActive: true)
+        } else {
+            // Also check StoreKit 2 before revoking
+            Task {
+                let skVerified = await checkStoreKitEntitlements()
+                if !skVerified {
+                    applyAdFreeEntitlement(isActive: false)
+                }
+            }
+        }
     }
     #endif
 
-    /// Apply a freshly verified entitlement to the shared UI state.
+    /// Apply a freshly verified entitlement to the shared UI state and persist locally.
     ///
-    /// RevenueCatUI reports the updated customer info directly to its paywall
-    /// completion handlers. Keeping this update separate from the SDK delegate
-    /// means the ad banner disappears immediately after a successful purchase,
-    /// even when the delegate callback is delayed or omitted.
+    /// Keeping this update decoupled from the network callbacks ensures the ad
+    /// banner disappears immediately upon purchase confirmation.
     func applyAdFreeEntitlement(isActive: Bool) {
+        UserDefaults.standard.set(isActive, forKey: Self.userDefaultsAdFreeKey)
         guard isAdFree != isActive else { return }
         isAdFree = isActive
         print("[SubscriptionManager] 'ad_free' entitlement updated: \(isActive)")
@@ -197,16 +276,26 @@ final class SubscriptionManager: NSObject, ObservableObject {
             self.customerInfo = result.customerInfo
             self.updateEntitlements(from: result.customerInfo)
 
-            if isAdFree {
+            let isUnlocked = isAdFree
+                || result.customerInfo.entitlements[Self.entitlementID]?.isActive == true
+                || result.customerInfo.allPurchasedProductIdentifiers.contains(Self.lifetimeProductID)
+                || result.customerInfo.nonSubscriptions.contains(where: { $0.productIdentifier == Self.lifetimeProductID })
+                || !result.customerInfo.entitlements.active.isEmpty
+
+            if isUnlocked {
+                applyAdFreeEntitlement(isActive: true)
                 statusNotice = "Thank you! Lifetime ad-free access has been unlocked."
                 return true
             } else {
+                if await checkStoreKitEntitlements() {
+                    statusNotice = "Thank you! Lifetime ad-free access has been unlocked."
+                    return true
+                }
                 errorMessage = "Purchase was completed, but 'ad_free' entitlement was not granted. Please contact support."
                 return false
             }
         } catch let error as RevenueCat.ErrorCode {
             if error == .purchaseCancelledError {
-                // User intentionally pressed cancel in the Apple sheet
                 return false
             }
             let userMessage = Self.userFriendlyMessage(for: error)
@@ -222,30 +311,73 @@ final class SubscriptionManager: NSObject, ObservableObject {
     #endif
 
     /// Convenience method to purchase the configured Lifetime package.
+    /// Falls back to native StoreKit 2 if RevenueCat is unavailable.
     @discardableResult
     func purchaseLifetime() async -> Bool {
         #if canImport(RevenueCat)
-        guard isConfigured else {
-            errorMessage = "In-App Purchases are not configured for this build."
+        if isConfigured {
+            if let package = lifetimePackage ?? currentOffering?.lifetime {
+                let success = await purchase(package: package)
+                if success { return true }
+            } else {
+                await fetchOfferings()
+                if let package = lifetimePackage ?? currentOffering?.lifetime {
+                    let success = await purchase(package: package)
+                    if success { return true }
+                }
+            }
+        }
+        #endif
+
+        // Native StoreKit 2 purchase fallback
+        return await purchaseViaStoreKit()
+    }
+
+    /// Purchase directly via Apple's native StoreKit 2 framework.
+    private func purchaseViaStoreKit() async -> Bool {
+        isPurchasing = true
+        errorMessage = nil
+        defer { isPurchasing = false }
+
+        do {
+            let products = try await Product.products(for: [Self.lifetimeProductID])
+            guard let product = products.first else {
+                errorMessage = "Lifetime product '\(Self.lifetimeProductID)' is currently unavailable in the App Store."
+                return false
+            }
+
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                switch verification {
+                case .verified(let transaction):
+                    let isActive = transaction.revocationDate == nil
+                    applyAdFreeEntitlement(isActive: isActive)
+                    await transaction.finish()
+                    if isActive {
+                        statusNotice = "Thank you! Lifetime ad-free access has been unlocked."
+                        return true
+                    } else {
+                        errorMessage = "Purchase was revoked."
+                        return false
+                    }
+                case .unverified(_, let error):
+                    errorMessage = "Purchase could not be verified by Apple: \(error.localizedDescription)"
+                    return false
+                }
+            case .userCancelled:
+                return false
+            case .pending:
+                statusNotice = "Purchase is pending approval."
+                return false
+            @unknown default:
+                return false
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            print("[SubscriptionManager] StoreKit purchase error: \(error.localizedDescription)")
             return false
         }
-
-        if let package = lifetimePackage ?? currentOffering?.lifetime {
-            return await purchase(package: package)
-        }
-
-        // If offerings are not yet loaded, try fetching them once
-        await fetchOfferings()
-        if let package = lifetimePackage ?? currentOffering?.lifetime {
-            return await purchase(package: package)
-        }
-
-        errorMessage = "Lifetime product is currently unavailable. Please check your internet connection or try again later."
-        return false
-        #else
-        errorMessage = "In-App Purchases are not available in this build."
-        return false
-        #endif
     }
 
     // MARK: - Restore Purchases
@@ -253,37 +385,46 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// Restores previous purchases (required by App Store Review for non-consumables).
     @discardableResult
     func restorePurchases() async -> Bool {
-        #if canImport(RevenueCat)
-        guard isConfigured else {
-            errorMessage = "In-App Purchases are not configured for this build."
-            return false
-        }
-
         isRestoring = true
         errorMessage = nil
         statusNotice = nil
         defer { isRestoring = false }
 
-        do {
-            let info = try await Purchases.shared.restorePurchases()
-            self.customerInfo = info
-            self.updateEntitlements(from: info)
+        var restored = false
 
-            if isAdFree {
-                statusNotice = "Purchases successfully restored! Lifetime ad-free is active."
-                return true
-            } else {
-                statusNotice = "No prior Lifetime purchase found for this Apple Account."
-                return false
+        #if canImport(RevenueCat)
+        if isConfigured {
+            do {
+                let info = try await Purchases.shared.restorePurchases()
+                self.customerInfo = info
+                self.updateEntitlements(from: info)
+                if isAdFree || info.allPurchasedProductIdentifiers.contains(Self.lifetimeProductID) {
+                    applyAdFreeEntitlement(isActive: true)
+                    restored = true
+                }
+            } catch {
+                print("[SubscriptionManager] RevenueCat restore error: \(error.localizedDescription)")
+            }
+        }
+        #endif
+
+        // Also sync StoreKit 2 directly with Apple
+        do {
+            try await AppStore.sync()
+            if await checkStoreKitEntitlements() {
+                restored = true
             }
         } catch {
-            self.errorMessage = "Failed to restore purchases: \(error.localizedDescription)"
+            print("[SubscriptionManager] AppStore.sync error: \(error.localizedDescription)")
+        }
+
+        if restored || isAdFree {
+            statusNotice = "Purchases successfully restored! Lifetime ad-free is active."
+            return true
+        } else {
+            statusNotice = "No prior Lifetime purchase found for this Apple Account."
             return false
         }
-        #else
-        errorMessage = "Restore purchases is not available in this build."
-        return false
-        #endif
     }
 
     // MARK: - Testing / Debug Helpers
@@ -291,9 +432,15 @@ final class SubscriptionManager: NSObject, ObservableObject {
     /// For local UI testing: toggles ad-free state in DEBUG builds.
     func debugToggleAdFree() {
         #if DEBUG
-        isAdFree.toggle()
+        applyAdFreeEntitlement(isActive: !isAdFree)
         print("[SubscriptionManager] Debug toggle: isAdFree = \(isAdFree)")
         #endif
+    }
+
+    /// Reset state for unit tests.
+    func resetForTesting() {
+        UserDefaults.standard.removeObject(forKey: Self.userDefaultsAdFreeKey)
+        isAdFree = false
     }
 
     // MARK: - Error Handling Helpers
